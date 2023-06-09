@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+
+<robot name="obstacle_course">
+
+  <link name="table">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="1.2 0.9 0.9" />
+      </geometry>
+      <material name='copper'>
+        <color rgba="0.78 0.49 0.36 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0.0 0" />
+      <geometry>
+        <box size="1.2 0.9 0.9" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="wam_base">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.4 0.2" />
+      </geometry>
+      <material name='steel'>
+        <color rgba="0.933 0.886 0.874 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0.0 0" />
+      <geometry>
+        <box size="0.3 0.4 0.2" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="wam_base_fixed" type="fixed">
+    <parent link="table" />
+    <child link="wam_base" />
+    <origin xyz="0.0 -0.25 0.55"/>
+  </joint>
+
+  <link name="obstacle_1">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0.0 0" />
+      <geometry>
+        <box size="0.4 0.5 1.8" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0.0 0" />
+      <geometry>
+        <box size="0.4 0.5 1.8" />
+      </geometry>
+    </collision>
+  </link>
+
+</robot>

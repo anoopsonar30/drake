@@ -1,0 +1,143 @@
+<?xml version="1.0"?>
+
+<robot name="car">
+
+  <link name="car_link">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.6 0.4 0.2" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='light_brown'>
+        <color rgba="0.48 0.42 0.36 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.6 0.4 0.2" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0.2 0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0.2 0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="-0.2 0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="-0.2 0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0.2 -0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0.2 -0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="-0.2 -0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="-0.2 -0.225 -0.07" rpy="1.57 0 0"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+  </link>
+
+  <!--
+    It seems like Drake doesn't support a standard floating base,
+    so we need to emulate the floating base for each body using two
+    prismatic joints and one continuous revolute joint, as mentioned
+    in Issue #3089 on Drake's GitHub.
+
+    To support these various joints, we need dummy massless bodies to
+    serve as intermediates
+   -->
+  <link name="dummy_1"></link>
+  <link name="dummy_2"></link>
+
+  <joint name="x" type="prismatic">
+    <parent link="world" />
+    <child link="dummy_1" />
+    <origin xyz="0 0 0.15" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <joint name="y" type="prismatic">
+    <parent link="dummy_1" />
+    <child link="dummy_2" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 1 0" />
+  </joint>
+  <joint name="theta" type="continuous">
+    <parent link="dummy_2" />
+    <child link="car_link" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+
+</robot>

@@ -1,0 +1,53 @@
+load(
+    "@drake//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
+load("//tools/lint:lint.bzl", "add_lint_tests")
+
+
+drake_cc_library(
+    name = "ccopt",
+    srcs = [
+        "geometry_set_tester.h",
+        "chance_constraints.cpp",
+        "chance_constraints.h",
+        "joint_chance_constraints.cpp",
+        "joint_chance_constraints.h",
+        "bullet_world_manager.cpp",
+        "bullet_world_manager.h",
+        "utils.h",
+        "utils.cpp",
+        "bezier_min_dist_constraint.cc"
+    ],
+    hdrs = [
+        "chance_constraints.h",
+        "bezier_min_dist_constraint.h",
+        "joint_chance_constraints.h",
+        "bullet_world_manager.h",
+        "utils.h",
+    ],
+    deps = [
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//multibody/inverse_kinematics",
+        "//multibody/plant",
+        "//multibody/parsing",
+        "@eigen",
+        "@fmt",
+        "@bullet",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+drake_cc_binary(
+    name = "cc_opt_runner",
+    srcs = ["cc_opt_runner.cpp"],
+    deps = [
+        ":ccopt",
+        "@gflags",
+        "@nlohmann_json",
+    ],
+)
+
+add_lint_tests()

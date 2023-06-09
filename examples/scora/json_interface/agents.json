@@ -1,0 +1,44 @@
+{
+    "agents": [
+        {
+            "name": "agent_1",
+            "urdf": "models/rs010n.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [0.0, 0.0, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, -1.5708],
+            "colllides_with_agents": false,
+            "trajectory": [
+                {"t": 0.0, "state": [-1.0, 0.4, -2.0, 0.0, 0.0, 0.0]},
+                {"t": 4.0, "state": [1.0, 0.4, -2.0, 0.0, 0.0, 0.0]}
+                {"t": 4.0,
+                    "frame": "agent_1::tool0"}
+            ],
+            "joint_speed_limit": 2.0
+        }
+    ],
+    "collision_chance_constraint": 0.2,
+    "risk_precision": 0.000001
+}
+// {
+//     "agents": [
+//         {
+//             "name": "agent_1",
+//             "urdf": "models/rs010n.urdf",
+//             "root_link_name": "base_link",
+//             "root_link_position": [0.0, 0.0, 0.0],
+//             "root_link_orientation": [0.0, 0.0, 1.0, -1.5708],
+//             "colllides_with_agents": false,
+//             "start_state": [-1.0, 0.4, -2.0, 0.0, 0.0, 0.0],
+//             "end_state": [1.0, 0.4, -2.0, 0.0, 0.0, 0.0],
+//             "joint_speed_limit": 2.0,
+//             "joint_covariance": [[0.0001, 0.0, 0.0, 0.0, 0.0, 0.0],
+//                                  [0.0, 0.0001, 0.0, 0.0, 0.0, 0.0],
+//                                  [0.0, 0.0, 0.0001, 0.0, 0.0, 0.0],
+//                                  [0.0, 0.0, 0.0, 0.0001, 0.0, 0.0],
+//                                  [0.0, 0.0, 0.0, 0.0, 0.0001, 0.0],
+//                                  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0001]]
+//         }
+//     ],
+//     "collision_chance_constraint": 0.2,
+//     "risk_precision": 0.000001
+// }

@@ -1,0 +1,118 @@
+load(
+    "@drake//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
+load("//tools/lint:lint.bzl", "add_lint_tests")
+
+drake_cc_binary(
+    name = "ufo_obstacle",
+    testonly = 1,
+    srcs = ["ufo_obstacle.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "@gflags"
+    ],
+)
+
+drake_cc_binary(
+    name = "ufo_obstacle_simplified",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "@gflags"
+    ],
+)
+
+drake_cc_binary(
+    name = "ufo_obstacle_simplified_bezier",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified_bezier.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "@gflags"
+    ],
+)
+
+drake_cc_binary(
+    name = "ufo_obstacle_simplified_kintrajopt",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified_kintrajopt.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "@gflags"
+    ],
+)
+
+
+add_lint_tests()

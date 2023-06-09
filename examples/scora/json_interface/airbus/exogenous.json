@@ -1,0 +1,9 @@
+{
+    "static_obstacles": {
+        "urdf": "/models/bolt_frame.urdf",
+        "root_link_name": "root",
+        "root_link_position": [-0.2, 0.0, 0.2],
+        "root_link_orientation": [0.0, 0.0, 1.0, 0.0]
+    },
+    "dynamic_obstacles": []
+}

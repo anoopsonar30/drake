@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+
+<robot name="box">
+
+  <link name="box_link">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.15 0.1" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+      <material name='light_brown'>
+        <color rgba="0.48 0.42 0.36 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.15 0.1" />
+        <!-- <cylinder radius="0.075" length="0.1" /> -->
+        <!-- <sphere radius="0.075" /> -->
+      </geometry>
+    </collision>
+  </link>
+
+</robot>

@@ -1,0 +1,36 @@
+load(
+    "@drake//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
+load("//tools/lint:lint.bzl", "add_lint_tests")
+
+drake_cc_library(
+    name = "proximity_alert",
+    hdrs = glob(["*.h"]),  # or list the specific header files if not all are needed
+    deps = [
+        # "@drake//drake:drake",
+        # "@eigen",
+        # "@bullet",
+    ],
+    # includes = [
+    #     ".",
+    #     "$(location @bullet)",
+    # ],
+    visibility = ["//visibility:public"],
+)
+
+drake_cc_binary(
+    name = "shadows",
+    srcs = ["shadows.cpp"],
+    deps = [
+        ":proximity_alert",
+        # "@drake//drake:drake",
+        # "@eigen",
+        # "@bullet",
+    ],
+)
+
+
+add_lint_tests()

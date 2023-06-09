@@ -1,0 +1,166 @@
+<?xml version="1.0"?>
+
+<robot name="obstacle_course">
+
+  <link name="floor">
+    <visual>
+      <origin xyz="0 0 -0.05" />
+      <geometry>
+        <box size="8.0 8.0 0.1" />
+      </geometry>
+      <material name='light_green'>
+        <color rgba="0.7 0.9 0.7 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="obstacle_1">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.8 0.4" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.8 0.6" />
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0.2 0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="-0.2 0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0.2 -0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="-0.2 -0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+  </link>
+
+  <!-- <joint name="obstacle_1_fixed" type="fixed">
+    <parent link="floor" />
+    <child link="obstacle_1" />
+    <origin xyz="-0.5 -0.75 1.0"/>
+  </joint> -->
+
+  <link name="obstacle_2">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.8 0.4" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.8 0.6" />
+      </geometry>
+    </collision>
+
+    <visual>
+      <origin xyz="0.2 0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="-0.2 0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0.2 -0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="-0.2 -0.225 -0.2" rpy="1.57 0 1.57"/>
+      <geometry>
+        <cylinder radius="0.1" length="0.05" />
+      </geometry>
+      <material name='dark_grey'>
+        <color rgba="0.15 0.15 0.18 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="wall">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.5 1.5 0.2" />
+      </geometry>
+      <material name='dark_sand'>
+        <color rgba="0.71 0.61 0.54 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.5 1.5 0.2" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="wall_fixed" type="fixed">
+    <parent link="floor" />
+    <child link="wall" />
+    <origin xyz="1.1 0.0 0.1"/>
+  </joint>
+
+</robot>

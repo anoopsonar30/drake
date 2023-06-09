@@ -1,0 +1,149 @@
+<?xml version="1.0"?>
+
+<robot name="bolt_frame">
+
+  <link name="root">
+    <!-- bottom bolt frame -->
+    <visual>
+      <origin xyz="-0.58 0 0.45" rpy="0 -0.6 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.7" />
+      </geometry>
+      <material name='steel'>
+        <color rgba="1.0 0.95 0.8 1" />
+      </material>
+    </visual>
+
+    <!-- <collision>
+      <origin xyz="-0.58 0 0.45" rpy="0 -0.6 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.7" />
+      </geometry>
+    </collision> -->
+
+    <!-- Middle bolt frame -->
+    <visual>
+      <origin xyz="-0.78 0 1.0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.6" />
+      </geometry>
+      <material name='steel'>
+        <color rgba="1.0 0.95 0.8 1" />
+      </material>
+    </visual>
+
+    <!-- <collision>
+      <origin xyz="-0.78 0 1.0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.6" />
+      </geometry>
+    </collision> -->
+
+    <!-- Top bolt frame -->
+    <visual>
+      <origin xyz="-0.63 0 1.5" rpy="0 0.6 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.6" />
+      </geometry>
+      <material name='steel'>
+        <color rgba="1.0 0.95 0.8 1" />
+      </material>
+    </visual>
+
+    <!-- <collision>
+      <origin xyz="-0.63 0 1.5" rpy="0 0.6 0"/>
+      <geometry>
+        <box size="0.05 3.5 0.6" />
+      </geometry>
+    </collision> -->
+
+    <!-- Top bolt pattern -->
+    <visual>
+      <origin xyz="-0.61 -0.35 1.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.61 0 1.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.61 0.35 1.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+
+    <!-- Middle bolt pattern -->
+    <visual>
+      <origin xyz="-0.76 -0.35 1.0" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.76 0 1.0" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.76 0.35 1.0" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+
+    <!-- Bottom bolt pattern -->
+    <!-- <visual>
+      <origin xyz="-0.69 -0.35 0.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.69 0 0.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin xyz="-0.69 0.35 0.5" rpy="0 0.6 0"/>
+      <geometry>
+        <sphere radius="0.02" />
+      </geometry>
+      <material name='bolt_mark'>
+        <color rgba="0.3 0.3 0.3 1" />
+      </material>
+    </visual> -->
+
+  </link>
+
+</robot>

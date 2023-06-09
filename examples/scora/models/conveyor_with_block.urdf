@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+
+<robot name="conveyor">
+
+  <link name="conveyor_block">
+    <visual>
+      <origin xyz="0.0 0.0 0.14" />
+      <geometry>
+        <box size="0.35 2.5 0.28" />
+      </geometry>
+      <material name='light_green'>
+        <color rgba="0.7 0.9 0.7 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0.0 0.0 0.14" />
+      <geometry>
+        <box size="0.35 2.5 0.28" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="fixed_uncertain_block">
+    <visual>
+      <origin xyz="0.0 0.0 0.0" />
+      <geometry>
+        <box size="0.35 0.5 0.28" />
+      </geometry>
+      <material name='blue'>
+        <color rgba="0.3 0.3 0.7 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0.0 0.0 0.0" />
+      <geometry>
+        <box size="0.35 0.5 0.28" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="conveyor_to_fixed_uncertain_block" type="fixed">
+    <parent link="conveyor_block" />
+    <child link="fixed_uncertain_block" />
+    <origin xyz="0.5 0 0.5"/>
+  </joint>
+
+</robot>

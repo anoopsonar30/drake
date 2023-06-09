@@ -1,0 +1,57 @@
+load(
+    "@drake//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
+load("//tools/lint:lint.bzl", "add_lint_tests")
+
+drake_cc_binary(
+    name = "unit_box_example",
+    testonly = 1,
+    srcs = ["unit_box_example.cc"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//solvers:gurobi_solver",
+        "//solvers:mosek_solver",
+    ],
+)
+
+drake_cc_binary(
+    name = "diamond_example",
+    testonly = 1,
+    srcs = ["diamond_example.cc"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//solvers:gurobi_solver",
+        "//solvers:mosek_solver",
+    ],
+)
+
+drake_cc_binary(
+    name = "square_example",
+    testonly = 1,
+    srcs = ["square_example.cc"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//solvers:gurobi_solver",
+        "//solvers:mosek_solver",
+    ],
+)
+
+add_lint_tests()

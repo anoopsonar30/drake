@@ -1,0 +1,21 @@
+{
+    "static_obstacles": {
+        "urdf": "models/conveyor.urdf",
+        "root_link_name": "conveyor_block",
+        "root_link_position": [0.0, 0.0, 0.0],
+        "root_link_orientation": [0.0, 0.0, 1.0, 0.0]
+    },
+    "dynamic_obstacles": [
+        {
+            "name": "agent_4",
+            "urdf": "models/rs010n.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [1.2, 0.0, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, 1.5708],
+            "trajectory": [
+                {"t": 0.0, "state": [-1.0, 0.4, -2.0, 0.0, 0.0, 0.0]},
+                {"t": 4.0, "state": [1.0, 0.4, -2.0, 0.0, 0.0, 0.0]}
+            ]
+        }
+    ]
+}

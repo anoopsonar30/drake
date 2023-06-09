@@ -1,0 +1,23 @@
+{
+    "trajectory_time": 4.0,
+    "trajectory_steps": 4,
+    "agents": [
+        {
+            "name": "melo",
+            "urdf": "models/melo.urdf",
+            "root_link_name": "track",
+            "root_link_position": [0.0, 0.0, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, 0.0],
+            "colllides_with_agents": false,
+            "trajectory": [
+                {"t": 0.0, "frame": "J6", "axis_angle": [0, 1, 0, -1.0], "margin": 0.0},
+                {"t": 0.0, "frame": "J6", "x": -0.55, "y": -0.35, "z": 1.5, "margin": 0.0},
+                {"t": 2.0, "frame": "J6", "axis_angle": [0, 1, 0, -1.0], "margin": 0.0},
+                {"t": 2.0, "frame": "J6", "x": -0.55, "y": 0.0, "z": 1.5, "margin": 0.0},
+                {"t": 4.0, "frame": "J6", "axis_angle": [0, 1, 0, -1.5707], "margin": 0.0},
+                {"t": 4.0, "frame": "J6", "x": -0.65, "y": 0.35, "z": 1.15, "margin": 0.0}
+            ],
+            "joint_speed_limit": 1.0
+        }
+    ]
+}

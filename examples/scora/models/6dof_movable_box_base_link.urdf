@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+
+<robot name="box">
+
+  <link name="base_link">
+  </link>
+
+  <link name="moving_box_link">
+
+    <inertial>
+      <origin xyz="0 0 0"/>
+      <mass value="1" />
+      <inertia ixx="1"  ixy="0"  ixz="0" iyy="1" iyz="0" izz="1" />
+    </inertial>
+
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.1 0.2 0.1" />
+      </geometry>
+      <material>
+        <color rgba="0 0 1 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.1 0.2 0.1" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!--
+    It seems like Drake doesn't support a standard floating base,
+    so we need to emulate the floating base for each body using two
+    prismatic joints and one continuous revolute joint, as mentioned
+    in Issue #3089 on Drake's GitHub.
+
+    To support these various joints, we need dummy massless bodies to
+    serve as intermediates
+   -->
+  <link name="dummy_1"></link>
+  <link name="dummy_2"></link>
+  <link name="dummy_3"></link>
+  <link name="dummy_4"></link>
+  <link name="dummy_5"></link>
+
+  <joint name="x" type="prismatic">
+    <parent link="base_link" />
+    <child link="dummy_1" />
+    <origin xyz="0 0 0" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <joint name="y" type="prismatic">
+    <parent link="dummy_1" />
+    <child link="dummy_2" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 1 0" />
+  </joint>
+  <joint name="z" type="prismatic">
+    <parent link="dummy_2" />
+    <child link="dummy_3" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+  <joint name="r1" type="revolute">
+    <parent link="dummy_3" />
+    <child link="dummy_4" />
+    <origin xyz="0 0 0" />
+    <axis xyz="1 0 0" />
+  </joint>
+  <joint name="r2" type="revolute">
+    <parent link="dummy_4" />
+    <child link="dummy_5" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 1 0" />
+  </joint>
+  <joint name="r3" type="revolute">
+    <parent link="dummy_5" />
+    <child link="moving_box_link" />
+    <origin xyz="0 0 0" />
+    <axis xyz="0 0 1" />
+  </joint>
+
+</robot>

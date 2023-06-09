@@ -1,0 +1,433 @@
+<?xml version="1.0"?>
+
+<robot name="workstation">
+
+  <link name="table">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="1.8 1.2 1.3" />
+      </geometry>
+      <material name='light_brown'>
+        <color rgba="0.48 0.42 0.36 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="1.8 1.2 1.3" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="ground">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="10 10 0.1" />
+      </geometry>
+      <material name='white'>
+        <color rgba="1 1 1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint name="ground" type="fixed">
+    <parent link="table" />
+    <child link="ground" />
+    <origin xyz="0 0 -0.65"/>
+  </joint>
+
+  <link name="human_work_area">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.9 0.6 0.01" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.9 0.6 0.01" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_work_area_fixed" type="fixed">
+    <parent link="table" />
+    <child link="human_work_area" />
+    <origin xyz="0 -0.3 0.65"/>
+  </joint>
+
+  <link name="part_dropoff">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.3 0.01" />
+      </geometry>
+      <material name='green'>
+        <color rgba="0.21 1.0 0.41 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.3 0.01" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="part_dropoff_fixed" type="fixed">
+    <parent link="table" />
+    <child link="part_dropoff" />
+    <origin xyz="0.65 0.0 0.65"/>
+  </joint>
+
+  <link name="part_pickup">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.3 0.01" />
+      </geometry>
+      <material name='dark_blue'>
+        <color rgba="0.0 0.31 0.39 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.3 0.01" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="part_pickup_fixed" type="fixed">
+    <parent link="table" />
+    <child link="part_pickup" />
+    <origin xyz="-0.65 0.0 0.65"/>
+  </joint>
+
+  <!-- <link name="in_ramp">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.75 0.1" />
+      </geometry>
+      <material name='green'>
+        <color rgba="0.21 1.0 0.41 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.75 0.1" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="in_ramp_fixed" type="fixed">
+    <parent link="table" />
+    <child link="in_ramp" />
+    <origin xyz="0.3 1.1 0.75" rpy="0.174533 0 0"/>
+  </joint>
+
+  <link name="in_ramp_stop">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.05 0.05" />
+      </geometry>
+      <material name='green'>
+        <color rgba="0.21 1.0 0.41 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.05 0.05" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="in_ramp_stop_fixed" type="fixed">
+    <parent link="in_ramp" />
+    <child link="in_ramp_stop" />
+    <origin xyz="0.0 -0.35 0.075"/>
+  </joint>
+
+  <link name="out_ramp">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.75 0.1" />
+      </geometry>
+      <material name='dark_blue'>
+        <color rgba="0.0 0.31 0.39 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.75 0.1" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="out_ramp_fixed" type="fixed">
+    <parent link="table" />
+    <child link="out_ramp" />
+    <origin xyz="-0.3 1.1 0.6" rpy="0.174533 0 3.141592"/>
+  </joint>
+
+  <link name="out_ramp_stop">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.05 0.05" />
+      </geometry>
+      <material name='dark_blue'>
+        <color rgba="0.0 0.31 0.39 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.05 0.05" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="out_ramp_stop_fixed" type="fixed">
+    <parent link="out_ramp" />
+    <child link="out_ramp_stop" />
+    <origin xyz="0.0 -0.35 0.075"/>
+  </joint> -->
+
+
+  <link name="human_legs">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.25 1.0" />
+      </geometry>
+      <material name='charcoal'>
+        <color rgba="0.24 0.31 0.31 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.25 1.0" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_legs_fixed" type="fixed">
+    <parent link="table" />
+    <child link="human_legs" />
+    <origin xyz="-0.1 -0.8 -0.15"/>
+  </joint>
+
+  <link name="human_torso">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.5 0.3 0.9" />
+      </geometry>
+      <material name='dark_red'>
+        <color rgba="0.49 0.07 0.16 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.5 0.3 0.9" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_torso_fixed" type="fixed">
+    <parent link="human_legs" />
+    <child link="human_torso" />
+    <origin xyz="0.0 0 0.95"/>
+  </joint>
+
+  <link name="human_r_arm">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.1 0.8" />
+      </geometry>
+      <material name='dark_red'>
+        <color rgba="0.49 0.07 0.16 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.1 0.8" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_r_arm_fixed" type="fixed">
+    <parent link="human_torso" />
+    <child link="human_r_arm" />
+    <origin xyz="0.325 0.3 0.13" rpy="1 0 0"/>
+  </joint>
+
+  <link name="human_l_arm">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.1 0.8" />
+      </geometry>
+      <material name='dark_red'>
+        <color rgba="0.49 0.07 0.16 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.15 0.1 0.8" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_l_arm_fixed" type="fixed">
+    <parent link="human_torso" />
+    <child link="human_l_arm" />
+    <origin xyz="-0.325 0.0 0.03"/>
+  </joint>
+
+  <link name="human_head">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.25 0.25 0.25" />
+      </geometry>
+      <material name='charcoal'>
+        <color rgba="0.24 0.31 0.31 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <!-- <sphere radius="0.25"/> -->
+        <box size="0.25 0.25 0.25" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="human_head_fixed" type="fixed">
+    <parent link="human_torso" />
+    <child link="human_head" />
+    <origin xyz="0.0 0.0 0.55"/>
+  </joint>
+
+  <link name="robot_podium">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.4 1.3" />
+      </geometry>
+      <material name='light_brown'>
+        <color rgba="0.48 0.42 0.36 1" />
+      </material>
+    </visual>
+
+    <!-- Comment out the collision tag, since we don't want the robot to collide
+    with this. -->
+    <!-- <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.4 0.01" />
+      </geometry>
+    </collision> -->
+  </link>
+
+  <joint name="robot_podium_fixed" type="fixed">
+    <parent link="table" />
+    <child link="robot_podium" />
+    <origin xyz="0.0 0.45 0" rpy="0.0 0.0 0.0"/>
+  </joint>
+
+  <link name="robot_pad">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.3 0.3 0.01" />
+      </geometry>
+      <material name='charcoal'>
+        <color rgba="0.24 0.31 0.31 1" />
+      </material>
+    </visual>
+
+    <!-- Comment out the collision tag, since we don't want the robot to collide
+    with this. -->
+    <!-- <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.4 0.4 0.01" />
+      </geometry>
+    </collision> -->
+  </link>
+
+  <joint name="robot_pad_fixed" type="fixed">
+    <parent link="robot_podium" />
+    <child link="robot_pad" />
+    <origin xyz="0.0 0.0 0.655" rpy="0.0 0.0 -1.570796"/>
+  </joint>
+
+  <!-- <link name="marker">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.05"/>
+      </geometry>
+      <material name='charcoal'>
+        <color rgba="0.24 0.31 0.31 1" />
+      </material>
+    </visual>
+  </link>
+
+  <joint name="marker_fixed" type="fixed">
+    <parent link="table" />
+    <child link="marker" />
+    <origin xyz="0.0739796 -0.406269   1.48302"/>
+  </joint>
+
+  <link name="pointer">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <sphere radius="0.05"/>
+      </geometry>
+      <material name='dark_red'>
+        <color rgba="0.49 0.07 0.16 1" />
+      </material>
+    </visual>
+  </link>
+
+  <joint name="pointer_fixed" type="fixed">
+    <parent link="marker" />
+    <child link="pointer" />
+    <origin xyz=" -0.795855  0.327844  0.509051"/>
+  </joint> -->
+
+</robot>

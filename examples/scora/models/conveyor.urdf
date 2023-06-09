@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+
+<robot name="conveyor">
+
+  <link name="conveyor_block">
+    <visual>
+      <origin xyz="0.6 0.6 0.14" />
+      <geometry>
+        <box size="0.35 2.5 0.28" />
+      </geometry>
+      <material name='light_green'>
+        <color rgba="0.7 0.9 0.7 1" />
+      </material>
+    </visual>
+
+    <!-- <visual>
+      <origin xyz="0.6 0.0 0.3" />
+      <geometry>
+        <box size="0.2 0.4 0.05" />
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0.6 0.1 0.3" />
+      <geometry>
+        <cylinder radius="0.02" length="0.15" />
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0.605 0.105 0.32" />
+      <geometry>
+        <mesh filename="./component_meshes/gear.stl" scale="0.001"/>
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0.6 -0.1 0.3" />
+      <geometry>
+        <cylinder radius="0.02" length="0.15" />
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual> -->
+
+    <collision>
+      <origin xyz="0.6 0.6 0.14" />
+      <geometry>
+        <box size="0.35 2.5 0.28" />
+      </geometry>
+    </collision>
+  </link>
+
+</robot>

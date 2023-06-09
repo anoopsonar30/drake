@@ -1,0 +1,123 @@
+<?xml version="1.0"?>
+
+<robot name="obstacle_course">
+
+  <link name="floor">
+    <visual>
+      <origin xyz="0 0 -0.05" />
+      <geometry>
+        <box size="7.0 7.0 0.1" />
+      </geometry>
+      <material name='light_green'>
+        <color rgba="0.7 0.9 0.7 1" />
+      </material>
+    </visual>
+
+    <visual>
+      <origin xyz="0 0 -0.15" />
+      <geometry>
+        <box size="70.0 70.0 0.1" />
+      </geometry>
+      <material name='white'>
+        <color rgba="1.0 1.0 1.0 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="7.0 7.0 0.1" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="wall">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.1 7.0 2.0" />
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <origin xyz="0 0 0" rpy="0 0.0 0" />
+      <geometry>
+        <box size="0.1 7.0 2.0" />
+      </geometry>
+    </collision> -->
+
+    <visual>
+      <origin xyz="3.5 3.5 0"  rpy="0 0.0 1.571"/>
+      <geometry>
+        <box size="0.1 7.0 2.0" />
+      </geometry>
+      <material name="kawasaki_white">
+        <color rgba="0.8392 0.8666 0.847 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <origin xyz="3.5 3.5 0" rpy="0 0.0 1.571" />
+      <geometry>
+        <box size="0.1 7.0 2.0" />
+      </geometry>
+    </collision> -->
+  </link>
+  <joint name="wall_fixed" type="fixed">
+    <parent link="floor" />
+    <child link="wall" />
+    <origin xyz="-3.5 0.0 1.0"/>
+  </joint>
+
+  <link name="obstacle_1">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.2 1.5 2.0" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.2 1.5 2.0" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- <joint name="obstacle_1_fixed" type="fixed">
+    <parent link="floor" />
+    <child link="obstacle_1" />
+    <origin xyz="-0.5 -0.75 1.0"/>
+  </joint> -->
+
+  <link name="obstacle_2">
+    <visual>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.2 1.5 2.0" />
+      </geometry>
+      <material name='sand'>
+        <color rgba="0.91 0.81 0.74 1" />
+      </material>
+    </visual>
+
+    <collision>
+      <origin xyz="0 0 0" />
+      <geometry>
+        <box size="0.2 1.5 2.0" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- <joint name="obstacle_2_fixed" type="fixed">
+    <parent link="floor" />
+    <child link="obstacle_2" />
+    <origin xyz="0.5 0.75 1.0"/>
+  </joint> -->
+
+</robot>

@@ -1,0 +1,34 @@
+{
+    "agents": [
+        {
+            "name": "agent_1",
+            "urdf": "models/rs010n.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [0.0, 0.0, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, -1.5708],
+            "colllides_with_agents": false,
+            "start_state": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "end_state": [0.0, 0.6, -2.0, 0.0, 0.0, 0.0]
+        },
+        {
+            "name": "agent_2",
+            "urdf": "models/rs010n.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [0.0, 0.8, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, -1.5708],
+            "colllides_with_agents": false,
+            "start_state": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "end_state": [0.0, 0.6, -2.0, 0.0, 0.0, 0.0]
+        },
+        {
+            "name": "agent_3",
+            "urdf": "models/rs010n.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [1.2, 0.4, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, 1.5708],
+            "colllides_with_agents": false,
+            "start_state": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "end_state": [0.0, 0.6, -2.0, 0.0, 0.0, 0.0]
+        }
+    ]
+}

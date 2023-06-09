@@ -1,0 +1,32 @@
+{
+    "static_obstacles": {  // all non-moving obstacles should be in a single URDF file
+        "urdf": "models/conveyor_with_block.urdf",
+        "root_link_name": "conveyor_block",
+        "root_link_position": [0.8, 0.0, 0.0],
+        "root_link_orientation": [0.0, 0.0, 1.0, 0.0]
+    },
+    "dynamic_obstacles": [ // all moving obstacles should be in their own individual URDFs
+        {
+            "name": "moving_box",
+            "urdf": "models/movable_box_base_link.urdf",
+            "root_link_name": "base_link",
+            "root_link_position": [0.0, 0.0, 0.0],
+            "root_link_orientation": [0.0, 0.0, 1.0, 0.0],
+            "trajectory": [  // Specified in the same way as in the agents JSON
+                {"t": 0.0, "state": [0.8, 1.0, 0.45]},
+                {"t": 2.0, "state": [0.8, 0.5, 0.45]},
+                {"t": 4.0, "state": [0.8, -1.0, 0.45]}
+            ]
+        }
+    ],
+    "uncertain_obstacles": [
+        // If any obstacles (moving or non-moving) have uncertainty
+        // in their position, specify that here
+        {
+            "link_name": "fixed_uncertain_block",  // should match the link name in the URDF
+            "location_covariance": [[0.05, 0.0, 0.0],
+                                    [0.0, 0.05, 0.0],
+                                    [0.0, 0.0, 0.05]]
+        }
+    ]
+}

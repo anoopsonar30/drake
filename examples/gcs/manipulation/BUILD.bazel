@@ -1,0 +1,244 @@
+load(
+    "@drake//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+load(
+    "@drake//tools/skylark:drake_py.bzl",
+    "drake_py_unittest",
+)
+# load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "CppLink")
+load("//tools/lint:lint.bzl", "add_lint_tests")
+
+package(
+    default_visibility = [":__subpackages__"],
+)
+
+drake_cc_library(
+    name = "iiwa_common",
+    srcs = [
+        "iiwa_common.cc",
+    ],
+    hdrs = [
+        "iiwa_common.h",
+        "ThreadPool.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manipulation/kuka_iiwa:iiwa_constants",
+    ],
+)
+
+drake_cc_library(
+    name = "iiwa_lcm",
+    srcs = ["iiwa_lcm.cc"],
+    hdrs = ["iiwa_lcm.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//manipulation/kuka_iiwa",
+    ],
+)
+
+drake_cc_library(
+    name = "lcm_plan_interpolator",
+    srcs = ["lcm_plan_interpolator.cc"],
+    hdrs = [
+        "lcm_plan_interpolator.h",
+    ],
+    # TODO(hongkai.dai): move this package to manipulation folder.
+    visibility = ["//visibility:public"],
+    deps = [
+        ":iiwa_common",
+        ":iiwa_lcm",
+        "//manipulation/util:robot_plan_interpolator",
+        "//systems/framework:diagram_builder",
+        "//systems/primitives:demultiplexer",
+    ],
+)
+
+drake_cc_library(
+    name = "kuka_torque_controller",
+    srcs = ["kuka_torque_controller.cc"],
+    hdrs = ["kuka_torque_controller.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//multibody/plant",
+        "//systems/controllers:inverse_dynamics",
+        "//systems/controllers:pid_controller",
+        "//systems/controllers:state_feedback_controller_interface",
+        "//systems/framework:diagram_builder",
+        "//systems/framework:leaf_system",
+        "//systems/primitives:adder",
+        "//systems/primitives:pass_through",
+    ],
+)
+
+drake_cc_binary(
+    name = "iiwa_controller",
+    srcs = ["iiwa_controller.cc"],
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+    ],
+    deps = [
+        ":iiwa_common",
+        ":lcm_plan_interpolator",
+        "//common:add_text_logging_gflags",
+        "//lcm:drake_lcm",
+        "//systems/analysis:simulator",
+    ],
+)
+
+drake_cc_binary(
+    name = "kuka_simulation",
+    srcs = ["kuka_simulation.cc"],
+    add_test_rule = 1,
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+    ],
+    test_rule_args = ["--simulation_sec=0.1 --target_realtime_rate=0.0"],
+    # TODO(kyle.edwards@kitware.com): Re-enable this test when it no longer
+    # causes timeouts in kcov.
+    test_rule_tags = ["no_kcov"],
+    deps = [
+        ":iiwa_common",
+        ":iiwa_lcm",
+        ":kuka_torque_controller",
+        "//common:add_text_logging_gflags",
+        "//geometry:drake_visualizer",
+        "//lcm",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/controllers:inverse_dynamics_controller",
+        "//systems/controllers:state_feedback_controller_interface",
+        "//systems/primitives:constant_vector_source",
+        "//systems/primitives:demultiplexer",
+        "//systems/primitives:discrete_derivative",
+    ],
+)
+
+drake_cc_binary(
+    name = "single_arm",
+    srcs = ["single_arm.cc"],
+    add_test_rule = 1,
+    copts = ["-fopenmp"],
+    linkopts = ["-fopenmp"],
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+        "//manipulation/models/wsg_50_description:models",
+    ],
+    test_rule_args = ["--simulation_sec=0.1 --target_realtime_rate=0.0"],
+    # TODO(kyle.edwards@kitware.com): Re-enable this test when it no longer
+    # causes timeouts in kcov.
+    test_rule_tags = ["no_kcov"],
+    deps = [
+        ":iiwa_common",
+        ":iiwa_lcm",
+        ":kuka_torque_controller",
+        "//common:add_text_logging_gflags",
+        "//geometry:drake_visualizer",
+        "//lcm",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//geometry/optimization",
+        "//systems/analysis:simulator",
+        "//systems/controllers:inverse_dynamics_controller",
+        "//systems/controllers:state_feedback_controller_interface",
+        "//systems/primitives:constant_vector_source",
+        "//systems/primitives:demultiplexer",
+        "//systems/primitives:discrete_derivative",
+    ],
+)
+
+drake_cc_binary(
+    name = "kuka_plan_runner",
+    srcs = ["kuka_plan_runner.cc"],
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+    ],
+    deps = [
+        "//common/trajectories:piecewise_polynomial",
+        "//lcmtypes:iiwa",
+        "//lcmtypes:robot_plan",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "@lcm",
+    ],
+)
+
+drake_cc_binary(
+    name = "move_iiwa_ee",
+    srcs = ["move_iiwa_ee.cc"],
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+    ],
+    deps = [
+        ":iiwa_common",
+        "//common:add_text_logging_gflags",
+        "//lcmtypes:iiwa",
+        "//manipulation/util:move_ik_demo_base",
+        "//math:geometric_transform",
+        "@lcm",
+    ],
+)
+
+# alias(
+#     name = "models",
+#     actual = "//examples/gcs/manipulation:models",
+#     visibility = ["//visibility:public"],
+# )
+
+# === test/ ===
+
+drake_cc_googletest(
+    name = "kuka_torque_controller_test",
+    data = [
+        "//manipulation/models/iiwa_description:models",
+    ],
+    deps = [
+        ":iiwa_common",
+        ":kuka_torque_controller",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//multibody/parsing",
+    ],
+)
+
+# drake_cc_googletest(
+#     name = "optitrack_test",
+#     deps = [
+#         "@optitrack_driver//lcmtypes:optitrack_lcmtypes",
+#     ],
+# )
+
+# alias(
+#     name = "dual_iiwa14_polytope_collision.urdf",
+#     actual = "//manipulation/models/iiwa_description:urdf/dual_iiwa14_polytope_collision.urdf",  # noqa
+# )
+
+# Test that kuka_simulation can load the dual arm urdf
+# sh_test(
+#     name = "dual_kuka_simulation_test",
+#     size = "small",
+#     srcs = ["kuka_simulation"],
+#     args = [
+#         "$(location :kuka_simulation)",
+#         "--urdf",
+#         "$(location :dual_iiwa14_polytope_collision.urdf)",
+#         "--simulation_sec=0.01",
+#     ],
+#     data = [
+#         ":dual_iiwa14_polytope_collision.urdf",
+#     ],
+#     # TODO(kyle.edwards@kitware.com): Re-enable this test when it no longer
+#     # causes timeouts in kcov.
+#     tags = ["no_kcov"],
+# )
+
+add_lint_tests()
