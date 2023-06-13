@@ -50,6 +50,7 @@
 #include "drake/geometry/optimization/point.h"
 #include "drake/geometry/optimization/vpolytope.h"
 #include "drake/planning/trajectory_optimization/gcs_trajectory_optimization.h"
+#include <drake/planning/trajectory_optimization/kinematic_trajectory_optimization.h>
 
 #include "drake/examples/scora/ccopt/chance_constraints.h"
 #include "drake/examples/scora/ccopt/bezier_min_dist_constraint.h"
@@ -60,6 +61,8 @@ namespace scora {
 
 using drake::multibody::MultibodyPlant;
 using solvers::MathematicalProgram;
+using solvers::Binding;
+using solvers::Constraint;
 using symbolic::Expression;
 using symbolic::MakeMatrixContinuousVariable;
 using symbolic::MakeVectorContinuousVariable;
@@ -67,6 +70,7 @@ using solvers::VectorXDecisionVariable;
 using trajectories::BezierCurve;
 using trajectories::CompositeTrajectory;
 using trajectories::Trajectory;
+using planning::trajectory_optimization::KinematicTrajectoryOptimization;
 
 DEFINE_double(function_precision, 0.0001,
               "SNOPT option.");
@@ -199,6 +203,62 @@ void visualize_result(
     simulator.AdvanceTo(T * timestep);
 }
 
+void visualize_result(
+        drake::trajectories::BsplineTrajectory< double> traj) {
+
+    // Make a new diagram builder and scene graph for visualizing
+    systems::DiagramBuilder<double> viz_builder;
+    geometry::SceneGraph<double>& viz_scene_graph =
+      *viz_builder.AddSystem<geometry::SceneGraph>();
+    viz_scene_graph.set_name("scene_graph");
+
+    // Also make a new plant (annoying that we have to do this)
+    MultibodyPlant<double> viz_plant = MultibodyPlant<double>(FLAGS_max_time_step);
+    drake::geometry::SourceId viz_plant_source_id = viz_plant.RegisterAsSourceForSceneGraph(&viz_scene_graph);
+    load_plant_components(viz_plant, true);
+    viz_plant.Finalize();
+
+    // Define the trajectory as a piecewise linear
+    std::vector<double> t_solution;
+    std::vector<Eigen::MatrixXd> q_solution;
+    int T = FLAGS_T;
+    double timestep = FLAGS_traj_duration / T;
+
+    for (int t = 0; t < T; t++) {
+        double tStep= static_cast<double>(t) / T;
+
+        t_solution.push_back(tStep * 5);
+        q_solution.push_back(traj.value(tStep));
+    }
+    drake::trajectories::PiecewisePolynomial<double> trajectory_solution = 
+        drake::trajectories::PiecewisePolynomial<double>::FirstOrderHold(t_solution, q_solution);
+
+    const auto traj_source = viz_builder.AddSystem<drake::systems::TrajectorySource<double>>(
+        trajectory_solution);
+
+    // Connect the trajectory source directly to the geometry poses
+    auto q_to_pose = 
+        viz_builder.AddSystem<drake::systems::rendering::MultibodyPositionToGeometryPose<double>>(
+            viz_plant);
+    viz_builder.Connect(traj_source->get_output_port(),
+                        q_to_pose->get_input_port());
+    viz_builder.Connect(q_to_pose->get_output_port(),
+                        viz_scene_graph.get_source_pose_port(viz_plant_source_id));
+
+    // Create the visualizer
+    auto lcm = viz_builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
+    geometry::DrakeVisualizerd::AddToBuilder(&viz_builder, viz_scene_graph, lcm);
+    std::unique_ptr<systems::Diagram<double>> viz_diagram = viz_builder.Build();
+
+    drake::log()->debug("Visualizer built");
+
+    // Set up simulator.
+    systems::Simulator<double> simulator(*viz_diagram);
+    simulator.set_publish_every_time_step(true);
+    simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
+    simulator.Initialize();
+    simulator.AdvanceTo(T * timestep);
+}
 
 double validate_result(
         drake::solvers::MathematicalProgramResult result,
@@ -271,73 +331,59 @@ void DoMain() {
     drake::systems::Context<double>* plant_context =
         &diagram->GetMutableSubsystemContext(plant, diagram_context.get());
 
-    // The first step is to find a simple collision-free trajectory for the cube through
-    // the scene. We'll use a mathematical program for this.
-    std::unique_ptr<drake::solvers::MathematicalProgram> prog =
-        std::make_unique<drake::solvers::MathematicalProgram>();
-
     const int order = 2;
-
-    // Let's define some number of timesteps and assume a fixed time step
-    int T = FLAGS_T;
-    // double timestep = FLAGS_traj_duration / T;
-
-    // To define the trajectory, we need a decision variable for the x, y, z coordinates
-    // at each timestep. We'll do a row for each timestep and a column for each joint
     int num_positions = plant.num_positions();
-    drake::solvers::MatrixXDecisionVariable segment_control= prog->NewContinuousVariables(
-        num_positions, order + 1, "xu");
-    auto segment_trajectory = BezierCurve<Expression>(0, 1, segment_control.cast<Expression>());
 
-    // We want to constrain the start and end positions. The start position should be strict
-    // equality, but we can make do with a bounding box on the goal position.
-    //
+    // int T = FLAGS_T;
+    // double timestep = FLAGS_traj_duration / T;
+    
+    KinematicTrajectoryOptimization kintrajopt(num_positions, order + 1, order, 1.0);
+
     // We want the cube to start below the obstacle course and navigate to the other side.
-    Eigen::MatrixXd start = VectorX<double>::Zero(num_positions);
+    Eigen::VectorXd start(num_positions);
     start(0) = 0.0;
     start(1) = -2.0;
     start(2) = 1.0;
-    // We make this constraint a strict equality since we don't usually have the luxury of
-    // changing the start position.
     
-    Eigen::MatrixXd end = VectorX<double>::Zero(num_positions);
+    Eigen::VectorXd end(num_positions);
     end(0) = 0.0;
     end(1) = 2.0;
     end(2) = 1.0;
 
-    prog->AddLinearEqualityConstraint(segment_control.col(0) == start);
-    prog->AddLinearEqualityConstraint(segment_control.col(order) == end);
+    kintrajopt.AddPathPositionConstraint(start, start, 0);
+    kintrajopt.AddPathPositionConstraint(end, end, 1);
+    kintrajopt.AddPathLengthCost();
 
-    // prog->AddBoundingBoxConstraint(start, start, segment_control.col(0));
-    // prog->AddBoundingBoxConstraint(end, end, segment_control.col(order));
+    auto min_dist_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
+        &plant,
+        FLAGS_min_distance,
+        plant_context
+    );
+
+    auto& prog = kintrajopt.get_mutable_prog();
+    prog.AddConstraint(min_dist_constraint, kintrajopt.control_points());
 
     // To avoid collisions with obstacles, we need to add a constraint ensuring that
     // the distance between the cube and all other geometries remains above some margin
     // Add a no-collision constraint at each timestep
-    for (int t = 0; t < T; t++) {
-        // auto no_collision_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
-        //     &plant,
-        //     FLAGS_min_distance,
-        //     plant_context
-        // );
-        double tStep= static_cast<double>(t) / T;
-        auto no_collision_constraint = std::make_shared<ccopt::BezierCurveMinimalDistanceConstraint>(
-            segment_trajectory,
-            num_positions * (order + 1),
-            tStep,
-            FLAGS_min_distance,
-            &plant,
-            plant_context
-        );
+    // for (int t = 0; t < T; t++) {
+    //     // auto no_collision_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
+    //     //     &plant,
+    //     //     FLAGS_min_distance,
+    //     //     plant_context
+    //     // );
+    //     double tStep= static_cast<double>(t) / T;
+    //     auto no_collision_constraint = std::make_shared<ccopt::BezierCurveMinimalDistanceConstraint>(
+    //         segment_trajectory,
+    //         num_positions * (order + 1),
+    //         tStep,
+    //         FLAGS_min_distance,
+    //         &plant,
+    //         plant_context
+    //     );
 
-        prog->AddConstraint(no_collision_constraint, segment_control);
-    }
-
-    Eigen::MatrixXd guess = VectorX<double>::Zero(num_positions);
-    guess(0) = 0.1;
-    guess(1) = 0.0;
-    guess(2) = 1.0;
-    prog->SetInitialGuess(segment_control.col(1), guess);
+    //     prog->AddConstraint(no_collision_constraint, segment_control);
+    // }
 
     // That completes our setup for this mathematical program
     drake::log()->debug("Deterministic program definition complete");
@@ -345,16 +391,24 @@ void DoMain() {
     // We can solve the collision-free problem to provide a seed for the chance-constrained
     // problem.
     drake::solvers::SnoptSolver solver;
-    drake::solvers::SolverOptions options_;
-    prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 100000);
+    // drake::solvers::SolverOptions options_;
+    // prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 100000);
 
     drake::log()->debug("Solving deterministic program...");
-    drake::solvers::MathematicalProgramResult collision_free_result = solver.Solve(*prog);
+    drake::solvers::MathematicalProgramResult collision_free_result = solver.Solve(prog);
     drake::log()->debug("Deterministic program solved");
+
+    auto traj = kintrajopt.ReconstructTrajectory(collision_free_result);
+    for (double t = 0; t < 1.01; t += 0.01) {
+        auto point = traj.value(t);
+        std::cout << "t: " << t << ", point: " << point.transpose() << std::endl;
+    }
 
     // We'll eventually run a second optimization problem to deal with risk, but let's start
     // with a simple sanity check on the collision-free solution
-    visualize_result(collision_free_result, segment_control);
+    // visualize_result(collision_free_result, traj);
+    visualize_result(traj);
+
 
     // To check the probability of collision between the robot and the environment,
     // we need to define the list of bodies that make up the "robot", which we save

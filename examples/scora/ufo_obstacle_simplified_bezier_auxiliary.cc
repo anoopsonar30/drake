@@ -83,9 +83,9 @@ DEFINE_int32(num_benchmark_runs, 1,
              "The number of times which the optimization problem should be solved to measure its runtime.");
 DEFINE_bool(use_max, false,
              "If true, only the maximum waypoint risk over the entire trajectory is constrained.");
-DEFINE_int32(T, 100,
+DEFINE_int32(T, 10,
              "The number of timesteps used to define the trajectory.");
-DEFINE_int32(T_check, 1000,
+DEFINE_int32(T_check, 100,
              "The number of timesteps used to check the trajectory.");
 DEFINE_int32(N_check, 1000,
              "The number of random trials used to check the trajectory.");
@@ -139,6 +139,8 @@ void visualize_result(
         drake::solvers::MathematicalProgramResult result, MatrixX<symbolic::Variable> segment_control) {
 
     if (!result.is_success()){
+
+        std::cout << "Solver failed..." << std::endl;
         return;
     }
 
@@ -165,6 +167,8 @@ void visualize_result(
 
     for (int t = 0; t < T; t++) {
         double tStep= static_cast<double>(t) / T;
+
+        std::cout << "t: " << t << ", point: " << optimal_trajectory.value(tStep).transpose() << std::endl;
 
         t_solution.push_back(tStep * 5);
         q_solution.push_back(optimal_trajectory.value(tStep));
@@ -305,37 +309,41 @@ void DoMain() {
     end(1) = 2.0;
     end(2) = 1.0;
 
-    prog->AddLinearEqualityConstraint(segment_control.col(0) == start);
-    prog->AddLinearEqualityConstraint(segment_control.col(order) == end);
+    Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions);
 
-    // prog->AddBoundingBoxConstraint(start, start, segment_control.col(0));
+    // prog->AddLinearEqualityConstraint(segment_control.col(0) == start);
+    // prog->AddLinearEqualityConstraint(segment_control.col(order) == end);
     // prog->AddBoundingBoxConstraint(end, end, segment_control.col(order));
 
-    // To avoid collisions with obstacles, we need to add a constraint ensuring that
-    // the distance between the cube and all other geometries remains above some margin
-    // Add a no-collision constraint at each timestep
+    auto xvars = prog->NewContinuousVariables(T, num_positions, "xvars");
+    
+    // prog->AddBoundingBoxConstraint(end - goal_margin, end + goal_margin, segment_control.col(order));
+    prog->AddBoundingBoxConstraint(start.transpose(), start.transpose(), xvars.row(0));
+    prog->AddBoundingBoxConstraint((end - goal_margin).transpose(), (end + goal_margin).transpose(), xvars.row(T-1));
+
+    for (int t = 1; t < T; t++) {
+        prog->AddQuadraticCost(0.5 * (xvars.row(t) - xvars.row(t-1)).dot(xvars.row(t) - xvars.row(t-1)));
+    }
+
     for (int t = 0; t < T; t++) {
-        // auto no_collision_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
-        //     &plant,
-        //     FLAGS_min_distance,
-        //     plant_context
-        // );
-        double tStep= static_cast<double>(t) / T;
-        auto no_collision_constraint = std::make_shared<ccopt::BezierCurveMinimalDistanceConstraint>(
-            segment_trajectory,
-            num_positions * (order + 1),
-            tStep,
-            FLAGS_min_distance,
+        prog->AddBoundingBoxConstraint(start(2), start(2), xvars(t, 2));
+    }
+
+    for (int t = 0; t < T; t++) {
+        auto no_collision_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
             &plant,
+            FLAGS_min_distance,
             plant_context
         );
 
-        prog->AddConstraint(no_collision_constraint, segment_control);
+        double tStep= static_cast<double>(t) / T;
+        prog->AddLinearEqualityConstraint(xvars.row(t) == segment_trajectory.value(tStep).transpose());
+        prog->AddConstraint(no_collision_constraint, xvars.row(t));
     }
 
     Eigen::MatrixXd guess = VectorX<double>::Zero(num_positions);
     guess(0) = 0.1;
-    guess(1) = 0.0;
+    guess(1) = 0.1;
     guess(2) = 1.0;
     prog->SetInitialGuess(segment_control.col(1), guess);
 
@@ -346,7 +354,7 @@ void DoMain() {
     // problem.
     drake::solvers::SnoptSolver solver;
     drake::solvers::SolverOptions options_;
-    prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 100000);
+    prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 1000000);
 
     drake::log()->debug("Solving deterministic program...");
     drake::solvers::MathematicalProgramResult collision_free_result = solver.Solve(*prog);

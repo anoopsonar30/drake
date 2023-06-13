@@ -110,9 +110,99 @@ drake_cc_binary(
         "//common/trajectories:composite_trajectory",
         "//geometry/optimization:graph_of_convex_sets",
         "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//planning/trajectory_optimization:kinematic_trajectory_optimization",
         "@gflags"
     ],
 )
 
+drake_cc_binary(
+    name = "ufo_obstacle_simplified_bezier_auxiliary",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified_bezier_auxiliary.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//planning/trajectory_optimization:kinematic_trajectory_optimization",
+        "@gflags"
+    ],
+)
+
+drake_cc_binary(
+    name = "ufo_obstacle_simplified_bezier_auxiliary_chance",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified_bezier_auxiliary_chance.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//planning/trajectory_optimization:kinematic_trajectory_optimization",
+        "@gflags"
+    ],
+)
+
+drake_cc_binary(
+    name = "ufo_obstacle_simplified_bezier_auxiliary_chance_multiple",
+    testonly = 1,
+    srcs = ["ufo_obstacle_simplified_bezier_auxiliary_chance_multiple.cc"],
+    data = ["models"],
+    deps = [
+        "//common/proto:call_python",
+        "//common",
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
+        "//geometry",
+        "//systems/analysis:simulator",
+        "//systems/framework",
+        "//systems/lcm",
+        "//systems/rendering",
+        "//systems/primitives",
+        "//lcm",
+        "//geometry:drake_visualizer",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//multibody/inverse_kinematics",
+        "//common/trajectories:bezier_curve",
+        "//common/trajectories:composite_trajectory",
+        "//geometry/optimization:graph_of_convex_sets",
+        "//planning/trajectory_optimization:gcs_trajectory_optimization",
+        "//planning/trajectory_optimization:kinematic_trajectory_optimization",
+        "@gflags"
+    ],
+)
 
 add_lint_tests()
