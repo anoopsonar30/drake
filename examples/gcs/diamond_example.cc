@@ -114,7 +114,9 @@ void GCSDiamondExample(){
   GraphOfConvexSetsOptions options;
   options.max_rounded_paths = 3;
 
- auto [traj, result] = gcs.SolvePath(source, target, options);
+  auto [traj, result] = gcs.SolvePath(source, target, options);
+
+  std::cout << "Result is Success : " << result.is_success() << std::endl;
 
   std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
 
@@ -153,6 +155,83 @@ void GCSDiamondExample(){
   PlotResults(x_data, y_data);
   return;
 }
+
+// void GCSDiamond3DExample(){
+//   const int kDimension = 3;
+//   GcsTrajectoryOptimization gcs(kDimension);
+
+//   Vector2d start(0.0, -2.0, 1.0), goal(0.0, 2.0, 1.0);
+
+//   Eigen::Matrix<double, 3, 3> A_bl;
+//   A_bl << -1, 0, 0, 0, -1, 0, 1, 1, 0;
+//   Eigen::Matrix<double, 3, 3> A_br;
+//   A_br << 1, 0, 0, 0, -1, 0, -1, 1, 0;
+//   Eigen::Matrix<double, 3, 3> A_tl;
+//   A_tl << -1, 0, 0, 0, 1, 0, 1, -1, 0;
+//   Eigen::Matrix<double, 3, 3> A_tr;
+//   A_tr << 1, 0, 0, 0, 1, 0, -1, -1, 0;
+//   Eigen::Vector3d b(3, 3, -1);
+
+//   HPolyhedron region_1(A_bl, b);
+//   HPolyhedron region_2(A_br, b);
+//   HPolyhedron region_3(A_tl, b);
+//   HPolyhedron region_4(A_tr, b);
+
+//   ConvexSets regions_ = MakeConvexSets(region_1, region_2, region_3, region_4);
+//   // ConvexSets regions_ = MakeConvexSets(region_1, region_3);
+
+//   auto& regions = gcs.AddRegions(regions_, 1);
+//   auto& source = gcs.AddRegions(MakeConvexSets(Point(start)), 0);
+//   auto& target = gcs.AddRegions(MakeConvexSets(Point(goal)), 0);
+
+//   gcs.AddEdges(source, regions);
+//   gcs.AddEdges(regions, target);
+
+//   gcs.AddPathLengthCost(1.0);
+//   gcs.AddTimeCost(1.0);
+
+//   GraphOfConvexSetsOptions options;
+//   options.max_rounded_paths = 3;
+
+//  auto [traj, result] = gcs.SolvePath(source, target, options);
+
+//   std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
+
+//   //////////////////////////////////////////////////////
+//   /////// PLOTTING CODE 
+//   //////////////////////////////////////////////////////
+
+//   // Remove the first and last segments, i.e. the source and target segment since those are trivial.
+//   int numberOfSegments = traj.get_number_of_segments() - 2;
+
+//   Eigen::Matrix<double, 1, Eigen::Dynamic> x_data;
+//   Eigen::Matrix<double, 1, Eigen::Dynamic> y_data;
+
+//   int numPoints = 50;
+//   int numIntervals = numPoints - 1;
+
+//   x_data.resize(1, numPoints * numberOfSegments);
+//   y_data.resize(1, numPoints * numberOfSegments);
+
+//   for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
+//   {
+//     double start_time = traj.segment(segmentID + 1).start_time();
+//     double end_time = traj.segment(segmentID + 1).end_time();
+//     double timeStepSize = (end_time - start_time) / numIntervals;
+
+//     for (int i = 0; i < numPoints; i++)
+//     {
+//       double timeStep = start_time + timeStepSize * i;
+//       auto coords = traj.segment(segmentID + 1).value(timeStep);
+
+//       x_data(1, segmentID * numPoints + i) = coords(0);
+//       y_data(1, segmentID * numPoints + i) = coords(1);
+//     }
+//   }
+
+//   PlotResults(x_data, y_data);
+//   return;
+// }
 
 void DiamondWithSingleBezierSegment(const int order=2, const double minimum_distance=1.5){
   const int kDimension = 2;
@@ -338,7 +417,7 @@ void do_main() {
     return;
   }
 
-  std::string exampleToRun = "DiamondWithSingleBezierSegment";
+  std::string exampleToRun = "GCSDiamond";
 
   // Decide which example to run based on input
   if (exampleToRun == "GCSDiamond")
@@ -347,6 +426,12 @@ void do_main() {
     // Uses path length cost and time cost. No chance or distance constraints.
     GCSDiamondExample();
   }
+  // if (exampleToRun == "GCSDiamond3D")
+  // {
+  //   // Generates two non-trivial segments using GCS.
+  //   // Uses path length cost and time cost. No chance or distance constraints.
+  //   GCSDiamond3DExample();
+  // }
   else if (exampleToRun == "DiamondWithSingleBezierSegment")
   {
     // Generates single segment that follows a distance constraint.

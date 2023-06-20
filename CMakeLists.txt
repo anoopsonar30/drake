@@ -478,11 +478,11 @@ set(WITH_SNOPT OFF CACHE BOOL
   "Build with support for SNOPT using a SNOPT source archive at SNOPT_PATH"
 )
 
-if(WITH_ROBOTLOCOMOTION_SNOPT AND WITH_SNOPT)
-  message(FATAL_ERROR
-    "WITH_ROBOTLOCOMOTION_SNOPT and WITH_SNOPT options are mutually exclusive"
-  )
-endif()
+# if(WITH_ROBOTLOCOMOTION_SNOPT AND WITH_SNOPT)
+#   message(FATAL_ERROR
+#     "WITH_ROBOTLOCOMOTION_SNOPT and WITH_SNOPT options are mutually exclusive"
+#   )
+# endif()
 
 if(WITH_ROBOTLOCOMOTION_SNOPT OR WITH_SNOPT)
   enable_language(Fortran)

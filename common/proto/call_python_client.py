@@ -184,6 +184,7 @@ def default_globals():
     import numpy as np
     from mpl_toolkits.mplot3d import Axes3D
     import matplotlib
+    matplotlib.use('TkAgg')
     # On Ubuntu the Debian package python3-tk is a recommended (but not
     # required) dependency of python3-matplotlib; help users understand that
     # by providing a nicer message upon a failure to import.
