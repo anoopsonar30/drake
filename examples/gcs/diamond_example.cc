@@ -79,6 +79,7 @@ bool GurobiOrMosekSolverAvailable() {
 
 void GCSDiamondExample(){
   const int kDimension = 2;
+  const double kMinimumDuration = 1.0;
   GcsTrajectoryOptimization gcs(kDimension);
 
   Vector2d start(0.0, -2.0), goal(0.0, 2.0);
@@ -101,7 +102,7 @@ void GCSDiamondExample(){
   ConvexSets regions_ = MakeConvexSets(region_1, region_2, region_3, region_4);
   // ConvexSets regions_ = MakeConvexSets(region_1, region_3);
 
-  auto& regions = gcs.AddRegions(regions_, 1);
+  auto& regions = gcs.AddRegions(regions_, 1, kMinimumDuration);
   auto& source = gcs.AddRegions(MakeConvexSets(Point(start)), 0);
   auto& target = gcs.AddRegions(MakeConvexSets(Point(goal)), 0);
 
@@ -125,7 +126,7 @@ void GCSDiamondExample(){
   //////////////////////////////////////////////////////
 
   // Remove the first and last segments, i.e. the source and target segment since those are trivial.
-  int numberOfSegments = traj.get_number_of_segments() - 2;
+  int numberOfSegments = traj.get_number_of_segments();
 
   Eigen::Matrix<double, 1, Eigen::Dynamic> x_data;
   Eigen::Matrix<double, 1, Eigen::Dynamic> y_data;
@@ -138,14 +139,16 @@ void GCSDiamondExample(){
 
   for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
   {
-    double start_time = traj.segment(segmentID + 1).start_time();
-    double end_time = traj.segment(segmentID + 1).end_time();
+    double start_time = traj.segment(segmentID).start_time();
+    double end_time = traj.segment(segmentID).end_time();
     double timeStepSize = (end_time - start_time) / numIntervals;
 
     for (int i = 0; i < numPoints; i++)
     {
       double timeStep = start_time + timeStepSize * i;
-      auto coords = traj.segment(segmentID + 1).value(timeStep);
+      auto coords = traj.segment(segmentID).value(timeStep);
+
+      std::cout << "X : " << coords(0) << ", Y : " << coords(1) << std::endl;
 
       x_data(1, segmentID * numPoints + i) = coords(0);
       y_data(1, segmentID * numPoints + i) = coords(1);
