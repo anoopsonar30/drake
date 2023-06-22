@@ -192,6 +192,18 @@ GTEST_TEST(TriangularBlockSparseMatrixTest, ZeroRowsAndColumns) {
                               ".* out of range.*42 is given.*");
 }
 
+GTEST_TEST(TriangularBlockSparseMatrixTest, MakeDenseBottomRightCorner) {
+  BlockSparseLowerTriangularMatrix A_triangular = MakeLowerTriangularMatrix();
+  MatrixXd expected = MakeDenseMatrix(false).bottomRightCorner(7, 7);
+  EXPECT_EQ(expected, A_triangular.MakeDenseBottomRightCorner(2));
+  EXPECT_EQ(MatrixXd::Zero(0, 0), A_triangular.MakeDenseBottomRightCorner(0));
+
+  BlockSparseSymmetricMatrix A_symmetric = MakeSymmetricMatrix();
+  expected = MakeDenseMatrix(true).bottomRightCorner(7, 7);
+  EXPECT_EQ(expected, A_symmetric.MakeDenseBottomRightCorner(2));
+  EXPECT_EQ(MatrixXd::Zero(0, 0), A_symmetric.MakeDenseBottomRightCorner(0));
+}
+
 GTEST_TEST(TriangularBlockSparseMatrixTest, InvalidOperations) {
   if (kDrakeAssertIsArmed) {
     BlockSparseLowerTriangularMatrix A_triangular = MakeLowerTriangularMatrix();
@@ -229,7 +241,9 @@ GTEST_TEST(TriangularBlockSparseMatrixTest, InvalidOperations) {
     /* Non-symmetric diagonal block. */
     DRAKE_ASSERT_THROWS_MESSAGE_IF_ARMED(
         A_symmetric.AddToBlock(2, 2, non_symmetric_matrix),
-        ".*must be symmetric.*");
+        ".*must be symmetric[^]*");
+    /* No false error when zero matrix is added to the diagonal block. */
+    EXPECT_NO_THROW(A_symmetric.AddToBlock(2, 2, MatrixXd::Zero(4, 4)));
 
     /* Evidence that other functions do the same checks. */
     ASSERT_THROW(A_triangular.block(0, 1), std::exception);
