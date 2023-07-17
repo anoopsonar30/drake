@@ -78,6 +78,7 @@ drake_cc_library_ubuntu_only(
         ":internal_shape_meshes",
         ":internal_texture_library",
         ":render_engine_gl_params",
+        "//common:diagnostic_policy",
         "//geometry/render:render_engine",
         "//geometry/render:render_mesh",
         "//systems/sensors:image",
@@ -241,21 +242,6 @@ drake_cc_googletest(
     }),
     deps = [
         ":factory",
-        "//common/test_utilities:expect_throws_message",
-    ],
-)
-
-# TODO(zachfang): Remove this along with deprecation on 2023-07-01.
-drake_cc_googletest(
-    name = "deprecation_test",
-    copts = [
-        "-Wno-cpp",
-        "-Wno-deprecated-declarations",
-    ],
-    tags = vtk_test_tags(),
-    deps = [
-        ":factory",
-        ":render_engine_gl_params",
         "//common/test_utilities:expect_throws_message",
     ],
 )

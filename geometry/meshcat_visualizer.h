@@ -73,7 +73,7 @@ class MeshcatVisualizer final : public systems::LeafSystem<T> {
    periodic publish event. This is useful for correcting the realtime rate after
    simulation is resumed from a paused state, etc. */
   void ResetRealtimeRateCalculator() const {
-      realtime_rate_calculator_.Reset();
+    realtime_rate_calculator_.Reset();
   }
 
   /** Calls Meshcat::Delete(std::string path), with the path set to
@@ -166,10 +166,6 @@ class MeshcatVisualizer final : public systems::LeafSystem<T> {
   template <typename>
   friend class MeshcatVisualizer;
 
-  /* Friend declaration so that internal states can be checked in unit
-  tests. */
-  friend class MeshcatVisualizerTester;
-
   /* The periodic event handler. It tests to see if the last scene description
    is valid (if not, sends the objects) and then sends the transforms.  */
   systems::EventStatus UpdateMeshcat(const systems::Context<T>& context) const;
@@ -225,16 +221,6 @@ class MeshcatVisualizer final : public systems::LeafSystem<T> {
 
   /* The parameters for the visualizer.  */
   MeshcatVisualizerParams params_;
-
-  /* TODO(russt): Consider moving the MeshcatAnimation into the Context.
-  Full-fledged support for multi-threaded recording requires some additional
-  design thinking and may require either moving the prefix into the Context as
-  well (e.g. multiple copies of the MeshcatVisualizer publish to the same
-  Meshcat, but on different prefixes) or support for SetObject in
-  MeshcatAnimation (each animation keeps track of the objects, instead of the
-  shared Meshcat instance keeping track).  We may also want to allow users to
-  disable the default publishing behavior (to record without visualizing
-  immediately). */
 
   /* TODO(#16486): ideally this mutable state will go away once it is safe to
   run Meshcat multithreaded */

@@ -29,19 +29,19 @@ struct GraphOfConvexSetsOptions {
   paper, we know that this relaxation cannot solve the original NP-hard problem
   for all instances, but there are also many instances for which the convex
   relaxation is tight. */
-  bool convex_relaxation{true};
+  std::optional<bool> convex_relaxation{std::nullopt};
+
+  /** Maximum number of distinct paths to compare during random rounding; only
+  the lowest cost path is returned. If convex_relaxation is false or this is
+  less than or equal to zero, rounding is not performed. */
+  std::optional<int> max_rounded_paths{std::nullopt};
 
   /** Performs a preprocessing step to remove edges that cannot lie on the
   path from source to target. In most cases, preprocessing causes a net
   reduction in computation by reducing the size of the optimization solved.
   Note that this preprocessing is not exact. There may be edges that cannot
   lie on the path from source to target that this does not detect. */
-  bool preprocessing{false};
-
-  /** Maximum number of distinct paths to compare during random rounding; only
-  the lowest cost path is returned. If convex_relaxation is false or this is
-  less than or equal to zero, rounding is not performed. */
-  int max_rounded_paths{0};
+  std::optional<bool> preprocessing{std::nullopt};
 
   /** Maximum number of trials to find a novel path during random rounding. If
   convex_relaxation is false or max_rounded_paths is less than or equal to zero,
@@ -64,7 +64,7 @@ struct GraphOfConvexSetsOptions {
   const solvers::SolverInterface* solver{nullptr};
 
   /** Options passed to the solver when solving the generated problem.*/
-  solvers::SolverOptions solver_options;
+  solvers::SolverOptions solver_options{};
 
   /** Optional solver options for the rounded problems.
   If not set, solver_options is used.
@@ -75,8 +75,8 @@ struct GraphOfConvexSetsOptions {
 };
 
 /**
-GraphOfConvexSets implements the design pattern and optimization problems first
-introduced in the paper "Shortest Paths in Graphs of Convex Sets".
+GraphOfConvexSets (GCS) implements the design pattern and optimization problems
+first introduced in the paper "Shortest Paths in Graphs of Convex Sets".
 
 "Shortest Paths in Graphs of Convex Sets" by Tobia Marcucci, Jack Umenberger,
 Pablo A. Parrilo, Russ Tedrake. https://arxiv.org/abs/2101.11565
@@ -87,9 +87,9 @@ Each vertex in the graph is associated with a convex set over continuous
 variables, edges in the graph contain convex costs and constraints on these
 continuous variables.  We can then formulate optimization problems over this
 graph, such as the shortest path problem where each visit to a vertex also
-corresponds to selecting an element from the convex set subject to the costs and
-constraints.  Behind the scenes, we construct efficient mixed-integer convex
-transcriptions of the graph problem using MathematicalProgram.
+corresponds to selecting an element from the convex set subject to the costs
+and constraints.  Behind the scenes, we construct efficient mixed-integer
+convex transcriptions of the graph problem using MathematicalProgram.
 
 Design note: This class avoids providing any direct access to the
 MathematicalProgram that it constructs nor to the decision variables /
@@ -474,20 +474,24 @@ class GraphOfConvexSets {
   /** Formulates and solves the mixed-integer convex formulation of the
   shortest path problem on the graph, as discussed in detail in
 
-  "Shortest Paths in Graphs of Convex Sets" by Tobia Marcucci, Jack
-  Umenberger, Pablo A. Parrilo, Russ Tedrake. https://arxiv.org/abs/2101.11565
+  "Shortest Paths in Graphs of Convex Sets" by Tobia Marcucci, Jack Umenberger,
+  Pablo A. Parrilo, Russ Tedrake. https://arxiv.org/abs/2101.11565
 
   @param source specifies the source set.  The solver will choose any point in
   that set; to start at a particular continuous state consider adding a Point
   set to the graph and using that as the source.
   @param target specifies the target set.  The solver will choose any point in
   that set.
-  @param options include all settings for solving the shortest path problem. See
-  `GraphOfConvexSetsOptions` for further details.
+  @param options include all settings for solving the shortest path problem.
+  See `GraphOfConvexSetsOptions` for further details. The following default
+  options will be used if they are not provided in `options`:
+  - `options.convex_relaxation = false`,
+  - `options.max_rounded_paths = 0`,
+  - `options.preprocessing = false`.
 
   @throws std::exception if any of the costs or constraints in the graph are
-  incompatible with the shortest path formulation or otherwise unsupported.
-  All costs must be non-negative for all values of the continuous variables.
+  incompatible with the shortest path formulation or otherwise unsupported. All
+  costs must be non-negative for all values of the continuous variables.
 
   @pydrake_mkdoc_identifier{by_id}
   */
@@ -505,8 +509,21 @@ class GraphOfConvexSets {
       const GraphOfConvexSetsOptions& options =
           GraphOfConvexSetsOptions());
 
-  solvers::MathematicalProgram final_prog_;
- 
+  /** The non-convexity in a GCS problem comes from the binary variables (phi)
+  associated with the edges being active or inactive in the solution. If those
+  binary variables are fixed, then the problem is convex -- this is a so-called
+  "convex restriction" of the original problem.
+
+  The convex restriction can often be solved much more efficiently than solving
+  the full GCS problem with additional constraints to fix the binaries; it can
+  be written using less decision variables, and needs only to include the
+  vertices associated with at least one of the active edges. Decision variables
+  for all other convex sets will be set to NaN. */
+  solvers::MathematicalProgramResult SolveConvexRestriction(
+      const std::set<EdgeId>& active_edge_ids,
+      const GraphOfConvexSetsOptions& options =
+          GraphOfConvexSetsOptions()) const;
+
  private:
   /* Facilitates testing. */
   friend class PreprocessShortestPathTest;

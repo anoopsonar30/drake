@@ -114,6 +114,7 @@ drake_cc_library(
         "//systems/framework",
         "//multibody/inverse_kinematics",
         "//systems/primitives",
+        "//solvers:solve",
     ],
 )
 
