@@ -494,7 +494,7 @@ class GraphOfConvexSets {
   solvers::MathematicalProgramResult SolveShortestPath(
       VertexId source_id, VertexId target_id,
       const GraphOfConvexSetsOptions& options =
-          GraphOfConvexSetsOptions()) const;
+          GraphOfConvexSetsOptions());
 
   /** Convenience overload that takes const reference arguments for source and
   target.
@@ -503,8 +503,10 @@ class GraphOfConvexSets {
   solvers::MathematicalProgramResult SolveShortestPath(
       const Vertex& source, const Vertex& target,
       const GraphOfConvexSetsOptions& options =
-          GraphOfConvexSetsOptions()) const;
+          GraphOfConvexSetsOptions());
 
+  solvers::MathematicalProgram final_prog_;
+ 
  private:
   /* Facilitates testing. */
   friend class PreprocessShortestPathTest;

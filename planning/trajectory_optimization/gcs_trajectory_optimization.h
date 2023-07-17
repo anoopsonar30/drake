@@ -12,6 +12,12 @@
 #include "drake/geometry/optimization/convex_set.h"
 #include "drake/geometry/optimization/graph_of_convex_sets.h"
 
+#include "drake/common/drake_assert.h"
+#include "drake/common/text_logging.h"
+#include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/inverse_kinematics/minimum_distance_constraint.h"
+#include "drake/systems/framework/context.h"
+
 namespace drake {
 namespace planning {
 namespace trajectory_optimization {
@@ -123,6 +129,8 @@ class GcsTrajectoryOptimization final {
     */
     void AddVelocityBounds(const Eigen::Ref<const Eigen::VectorXd>& lb,
                            const Eigen::Ref<const Eigen::VectorXd>& ub);
+
+    void AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps);
 
    private:
     /* Constructs a new subgraph and copies the regions. */
@@ -358,6 +366,8 @@ class GcsTrajectoryOptimization final {
   void AddVelocityBounds(const Eigen::Ref<const Eigen::VectorXd>& lb,
                          const Eigen::Ref<const Eigen::VectorXd>& ub);
 
+  void AddMinDistanceConstraint(multibody::MultibodyPlant<double>& plant, systems::Context<double>* plant_context, double min_distance, double timesteps);
+
   /** Formulates and solves the mixed-integer convex formulation of the
   shortest path problem on the whole graph. @see
   `geometry::optimization::GraphOfConvexSets::SolveShortestPath()` for further
@@ -378,7 +388,7 @@ class GcsTrajectoryOptimization final {
   @param options include all settings for solving the shortest path problem.
   @see `geometry::optimization::GraphOfConvexSetsOptions` for further details.
   */
-  std::pair<trajectories::CompositeTrajectory<double>,
+  std::tuple<trajectories::CompositeTrajectory<double>, std::vector<MatrixX<double>>,
             solvers::MathematicalProgramResult>
   SolvePath(
       const Subgraph& source, const Subgraph& target,

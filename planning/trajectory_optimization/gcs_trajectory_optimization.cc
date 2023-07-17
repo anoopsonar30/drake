@@ -4,6 +4,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <iostream>
 
 #include "drake/common/pointer_cast.h"
 #include "drake/common/scope_exit.h"
@@ -318,6 +319,30 @@ void Subgraph::AddVelocityBounds(const Eigen::Ref<const VectorXd>& lb,
     }
   }
 }
+
+void Subgraph::AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps)
+{
+  (void) min_dist_constraint;
+  std::cout << "Adding min dist constraint timestep.. " << timesteps << std::endl;
+
+  auto xvars = traj_opt_.gcs_.final_prog_.NewContinuousVariables(timesteps, num_positions(), "xvars");
+  std::cout << "WHOAAAA" << std::endl;
+
+  // Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions());
+
+  std::cout << "Start time : " << u_r_trajectory_.start_time() << ", End time : " << u_r_trajectory_.end_time() << std::endl;
+
+  // auto segment_trajectory = BezierCurve<Expression>(0, 1, segment_control.cast<Expression>());
+  for (int t = 0; t < timesteps; t++) {
+
+    double tStep= static_cast<double>(t) / timesteps;
+  //   traj_opt_.gcs_.final_prog_.AddLinearEqualityConstraint(xvars.row(t) == u_r_trajectory_.value(tStep).transpose());
+  //   traj_opt_.gcs_.final_prog_.AddConstraint(min_dist_constraint, xvars.row(t));
+
+    std::cout << u_r_trajectory_.value(tStep).transpose() << std::endl;
+  }
+}
+
 
 EdgesBetweenSubgraphs::EdgesBetweenSubgraphs(
     const Subgraph& from_subgraph, const Subgraph& to_subgraph,
@@ -646,7 +671,33 @@ void GcsTrajectoryOptimization::AddVelocityBounds(
   global_velocity_bounds_.push_back({lb, ub});
 }
 
-std::pair<CompositeTrajectory<double>, solvers::MathematicalProgramResult>
+
+void GcsTrajectoryOptimization::AddMinDistanceConstraint(multibody::MultibodyPlant<double>& plant, systems::Context<double>* plant_context, double min_distance, double timesteps){
+  std::cout << "Adding the minimum distance constraint..." << std::endl;
+
+  auto min_dist_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
+      &plant,
+      min_distance,
+      plant_context
+  );
+
+  // Iterate over each subgraph
+    // Call subgraph::AddMinDistanceConstraint()
+      // Generate the trajectory
+      // Introduce auxiliary variables and Add LinearEquality constraint to uniformly spaced points along the trajectory.
+      // Add minimum distance constraint to those auxiliary variables.
+      // Somehow add the auxiliary variables to the mathematical program.
+
+  for (std::unique_ptr<Subgraph>& subgraph : subgraphs_) {
+    if (subgraph->order() > 0) {
+      subgraph->AddMinDistanceConstraint(min_dist_constraint, timesteps);
+    }
+  }
+
+
+}
+
+std::tuple<CompositeTrajectory<double>, std::vector<MatrixX<double>>, solvers::MathematicalProgramResult>
 GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
                                      const Subgraph& target,
                                      const GraphOfConvexSetsOptions& options) {
@@ -689,7 +740,7 @@ GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
   solvers::MathematicalProgramResult result =
       gcs_.SolveShortestPath(source_id, target_id, options);
   if (!result.is_success()) {
-    return {CompositeTrajectory<double>({}), result};
+    return {CompositeTrajectory<double>({}), std::vector<MatrixX<double>>(), result};
   }
 
   // Extract the flow from the solution.
@@ -750,6 +801,8 @@ GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
 
   // Extract the path from the edges.
   std::vector<copyable_unique_ptr<Trajectory<double>>> bezier_curves;
+  std::vector<MatrixX<double>> control_points_return;
+
   for (Edge* edge : path_edges) {
     // Extract phi from the solution to rescale the control points and duration
     // in case we get the relaxed solution.
@@ -774,6 +827,7 @@ GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
           vertex_to_subgraph_[&edge->u()]->h_min_ == 0)) {
       bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
           start_time, start_time + h, edge_path_points));
+      control_points_return.emplace_back(edge_path_points);
     }
   }
 
@@ -797,9 +851,10 @@ GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
         vertex_to_subgraph_[&path_edges.back()->v()]->h_min_ == 0)) {
     bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
         start_time, start_time + h, edge_path_points));
+    control_points_return.emplace_back(edge_path_points);
   }
 
-  return {CompositeTrajectory<double>(bezier_curves), result};
+  return {CompositeTrajectory<double>(bezier_curves), control_points_return, result};
 }
 
 Edge* GcsTrajectoryOptimization::AddEdge(const Vertex& u, const Vertex& v) {

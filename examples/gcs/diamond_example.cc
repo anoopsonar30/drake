@@ -10,10 +10,10 @@
 #include "drake/common/symbolic/decompose.h"
 
 #include "drake/common/trajectories/bezier_curve.h"
-#include "drake/solvers/mosek_solver.h"
-#include "drake/solvers/gurobi_solver.h"
+// #include "drake/solvers/mosek_solver.h"
+// #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/snopt_solver.h"
-#include "drake/solvers/ipopt_solver.h"
+// #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/solve.h"
 #include "drake/solvers/solver_options.h"
 #include "drake/solvers/decision_variable.h"
@@ -70,12 +70,12 @@ void PlotResults(const Eigen::Matrix<double, 1, Eigen::Dynamic> xData, const Eig
 }
 
 
-bool GurobiOrMosekSolverAvailable() {
-  return (solvers::MosekSolver::is_available() &&
-          solvers::MosekSolver::is_enabled()) ||
-         (solvers::GurobiSolver::is_available() &&
-          solvers::GurobiSolver::is_enabled());
-}
+// bool GurobiOrMosekSolverAvailable() {
+//   return (solvers::MosekSolver::is_available() &&
+//           solvers::MosekSolver::is_enabled()) ||
+//          (solvers::GurobiSolver::is_available() &&
+//           solvers::GurobiSolver::is_enabled());
+// }
 
 void GCSDiamondExample(){
   const int kDimension = 2;
@@ -114,7 +114,18 @@ void GCSDiamondExample(){
 
   GraphOfConvexSetsOptions options;
   options.max_rounded_paths = 3;
+  drake::solvers::SnoptSolver sn_solver;
+  options.solver = &sn_solver;
 
+  double risk_precision = 0.0000001;
+  double function_precision = 0.0001;
+  drake::solvers::SolverOptions solver_options_;
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 1000000);
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major optimality tolerance", sqrt(function_precision));
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major feasibility tolerance", sqrt(10 * risk_precision));
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Function precision", function_precision);
+  options.solver_options = solver_options_;
+  
   auto [traj, result] = gcs.SolvePath(source, target, options);
 
   std::cout << "Result is Success : " << result.is_success() << std::endl;
@@ -159,82 +170,96 @@ void GCSDiamondExample(){
   return;
 }
 
-// void GCSDiamond3DExample(){
-//   const int kDimension = 3;
-//   GcsTrajectoryOptimization gcs(kDimension);
+void GCSDiamond3DExample(){
+  const int kDimension = 3;
+  const double kMinimumDuration = 1.0;
+  GcsTrajectoryOptimization gcs(kDimension);
 
-//   Vector2d start(0.0, -2.0, 1.0), goal(0.0, 2.0, 1.0);
+  Eigen::Vector3d start(0.0, -2.0, 1.0), goal(0.0, 2.0, 1.0);
 
-//   Eigen::Matrix<double, 3, 3> A_bl;
-//   A_bl << -1, 0, 0, 0, -1, 0, 1, 1, 0;
-//   Eigen::Matrix<double, 3, 3> A_br;
-//   A_br << 1, 0, 0, 0, -1, 0, -1, 1, 0;
-//   Eigen::Matrix<double, 3, 3> A_tl;
-//   A_tl << -1, 0, 0, 0, 1, 0, 1, -1, 0;
-//   Eigen::Matrix<double, 3, 3> A_tr;
-//   A_tr << 1, 0, 0, 0, 1, 0, -1, -1, 0;
-//   Eigen::Vector3d b(3, 3, -1);
+  Eigen::Matrix<double, 3, 3> A_bl;
+  A_bl << -1, 0, 0, 0, -1, 0, 1, 1, 0;
+  Eigen::Matrix<double, 3, 3> A_br;
+  A_br << 1, 0, 0, 0, -1, 0, -1, 1, 0;
+  Eigen::Matrix<double, 3, 3> A_tl;
+  A_tl << -1, 0, 0, 0, 1, 0, 1, -1, 0;
+  Eigen::Matrix<double, 3, 3> A_tr;
+  A_tr << 1, 0, 0, 0, 1, 0, -1, -1, 0;
+  Eigen::Vector3d b(3, 3, -1);
 
-//   HPolyhedron region_1(A_bl, b);
-//   HPolyhedron region_2(A_br, b);
-//   HPolyhedron region_3(A_tl, b);
-//   HPolyhedron region_4(A_tr, b);
+  HPolyhedron region_1(A_bl, b);
+  HPolyhedron region_2(A_br, b);
+  HPolyhedron region_3(A_tl, b);
+  HPolyhedron region_4(A_tr, b);
 
-//   ConvexSets regions_ = MakeConvexSets(region_1, region_2, region_3, region_4);
-//   // ConvexSets regions_ = MakeConvexSets(region_1, region_3);
+  ConvexSets regions_ = MakeConvexSets(region_1, region_2, region_3, region_4);
+  // ConvexSets regions_ = MakeConvexSets(region_1, region_3);
 
-//   auto& regions = gcs.AddRegions(regions_, 1);
-//   auto& source = gcs.AddRegions(MakeConvexSets(Point(start)), 0);
-//   auto& target = gcs.AddRegions(MakeConvexSets(Point(goal)), 0);
+  auto& regions = gcs.AddRegions(regions_, 1, kMinimumDuration);
+  auto& source = gcs.AddRegions(MakeConvexSets(Point(start)), 0);
+  auto& target = gcs.AddRegions(MakeConvexSets(Point(goal)), 0);
 
-//   gcs.AddEdges(source, regions);
-//   gcs.AddEdges(regions, target);
+  gcs.AddEdges(source, regions);
+  gcs.AddEdges(regions, target);
 
-//   gcs.AddPathLengthCost(1.0);
-//   gcs.AddTimeCost(1.0);
+  gcs.AddPathLengthCost(1.0);
+  gcs.AddTimeCost(1.0);
 
-//   GraphOfConvexSetsOptions options;
-//   options.max_rounded_paths = 3;
+  GraphOfConvexSetsOptions options;
+  options.max_rounded_paths = 3;
+  drake::solvers::SnoptSolver sn_solver;
+  options.solver = &sn_solver;
 
-//  auto [traj, result] = gcs.SolvePath(source, target, options);
+  double risk_precision = 0.0000001;
+  double function_precision = 0.0001;
+  drake::solvers::SolverOptions solver_options_;
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 1000000);
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major optimality tolerance", sqrt(function_precision));
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Major feasibility tolerance", sqrt(10 * risk_precision));
+  solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Function precision", function_precision);
+  options.solver_options = solver_options_;
 
-//   std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
+ auto [traj, result] = gcs.SolvePath(source, target, options);
 
-//   //////////////////////////////////////////////////////
-//   /////// PLOTTING CODE 
-//   //////////////////////////////////////////////////////
+  std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
 
-//   // Remove the first and last segments, i.e. the source and target segment since those are trivial.
-//   int numberOfSegments = traj.get_number_of_segments() - 2;
+  //////////////////////////////////////////////////////
+  /////// PLOTTING CODE 
+  //////////////////////////////////////////////////////
 
-//   Eigen::Matrix<double, 1, Eigen::Dynamic> x_data;
-//   Eigen::Matrix<double, 1, Eigen::Dynamic> y_data;
+  // Remove the first and last segments, i.e. the source and target segment since those are trivial.
+  int numberOfSegments = traj.get_number_of_segments();
 
-//   int numPoints = 50;
-//   int numIntervals = numPoints - 1;
+  Eigen::Matrix<double, 1, Eigen::Dynamic> x_data;
+  Eigen::Matrix<double, 1, Eigen::Dynamic> y_data;
 
-//   x_data.resize(1, numPoints * numberOfSegments);
-//   y_data.resize(1, numPoints * numberOfSegments);
+  int numPoints = 50;
+  int numIntervals = numPoints - 1;
 
-//   for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
-//   {
-//     double start_time = traj.segment(segmentID + 1).start_time();
-//     double end_time = traj.segment(segmentID + 1).end_time();
-//     double timeStepSize = (end_time - start_time) / numIntervals;
+  x_data.resize(1, numPoints * numberOfSegments);
+  y_data.resize(1, numPoints * numberOfSegments);
 
-//     for (int i = 0; i < numPoints; i++)
-//     {
-//       double timeStep = start_time + timeStepSize * i;
-//       auto coords = traj.segment(segmentID + 1).value(timeStep);
+  for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
+  {
+    double start_time = traj.segment(segmentID).start_time();
+    double end_time = traj.segment(segmentID).end_time();
+    double timeStepSize = (end_time - start_time) / numIntervals;
 
-//       x_data(1, segmentID * numPoints + i) = coords(0);
-//       y_data(1, segmentID * numPoints + i) = coords(1);
-//     }
-//   }
+    for (int i = 0; i < numPoints; i++)
+    {
+      double timeStep = start_time + timeStepSize * i;
+      auto coords = traj.segment(segmentID).value(timeStep);
 
-//   PlotResults(x_data, y_data);
-//   return;
-// }
+      std::cout << "X : " << coords(0) << ", Y : " << coords(1) << " Z : " << coords(2) << std::endl;
+
+      x_data(1, segmentID * numPoints + i) = coords(0);
+      y_data(1, segmentID * numPoints + i) = coords(1);
+    }
+  }
+
+  PlotResults(x_data, y_data);
+  return;
+}
 
 void DiamondWithSingleBezierSegment(const int order=2, const double minimum_distance=1.5){
   const int kDimension = 2;
@@ -415,12 +440,12 @@ void DiamondWithMultipleBezierSegments(const int numSegments = 2, const int orde
 
 
 void do_main() {
-  if (!GurobiOrMosekSolverAvailable()) {
-    drake::log()->info("Cannot find Gurobi or Mosek!, skipping execution...");
-    return;
-  }
+  // if (!GurobiOrMosekSolverAvailable()) {
+  //   drake::log()->info("Cannot find Gurobi or Mosek!, skipping execution...");
+  //   return;
+  // }
 
-  std::string exampleToRun = "GCSDiamond";
+  std::string exampleToRun = "GCSDiamond3D";
 
   // Decide which example to run based on input
   if (exampleToRun == "GCSDiamond")
@@ -429,12 +454,12 @@ void do_main() {
     // Uses path length cost and time cost. No chance or distance constraints.
     GCSDiamondExample();
   }
-  // if (exampleToRun == "GCSDiamond3D")
-  // {
-  //   // Generates two non-trivial segments using GCS.
-  //   // Uses path length cost and time cost. No chance or distance constraints.
-  //   GCSDiamond3DExample();
-  // }
+  else if (exampleToRun == "GCSDiamond3D")
+  {
+    // Generates two non-trivial segments using GCS.
+    // Uses path length cost and time cost. No chance or distance constraints.
+    GCSDiamond3DExample();
+  }
   else if (exampleToRun == "DiamondWithSingleBezierSegment")
   {
     // Generates single segment that follows a distance constraint.

@@ -33,8 +33,8 @@ drake_cc_binary(
         "//common/trajectories:composite_trajectory",
         "//geometry/optimization:graph_of_convex_sets",
         "//planning/trajectory_optimization:gcs_trajectory_optimization",
-        "//solvers:gurobi_solver",
-        "//solvers:mosek_solver",
+        # "//solvers:gurobi_solver",
+        # "//solvers:mosek_solver",
     ],
 )
 

@@ -3,9 +3,9 @@ build --jobs=8
 build --test_tag_filters=gurobi,mosek,snopt
 build --cxxopt=-std=c++17
 build --host_cxxopt=-std=c++17
-# build --config=mosek
+build --config=mosek
 build --config=snopt
-build --config=gurobi
+# build --config=gurobi
 
 # Options for explicitly using Clang.
 common:clang --repo_env=CC=clang-12
