@@ -16,6 +16,9 @@
 #include <chrono>
 #include <future>
 #include <fstream>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
 
 #include "drake/examples/gcs/manipulation/ThreadPool.h"
 
@@ -27,14 +30,17 @@
 #include "drake/examples/gcs/manipulation/iiwa_lcm.h"
 #include "drake/examples/gcs/manipulation/kuka_torque_controller.h"
 #include "drake/geometry/drake_visualizer.h"
+#include "drake/geometry/meshcat_visualizer_params.h"
+#include "drake/geometry/meshcat_visualizer.h"
+#include "drake/geometry/meshcat.h"
 #include "drake/geometry/scene_graph.h"
 #include "drake/lcmt_iiwa_command.hpp"
 #include "drake/lcmt_iiwa_status.hpp"
+#include "drake/systems/rendering/multibody_position_to_geometry_pose.h"
+#include "drake/systems/primitives/trajectory_source.h"
 
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/parsing/process_model_directives.h"
-// #include "drake/multibody/parsing/model_directives.h"
-// #include "drake/multibody/parsing/detail_urdf_parser.h"
 
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/controllers/inverse_dynamics_controller.h"
@@ -45,7 +51,7 @@
 #include "drake/systems/lcm/lcm_interface_system.h"
 #include "drake/systems/lcm/lcm_publisher_system.h"
 #include "drake/systems/lcm/lcm_subscriber_system.h"
-#include "drake/systems/primitives/demultiplexer.h"
+#include "drake/systems/primitives/multiplexer.h"
 #include "drake/systems/primitives/discrete_derivative.h"
 #include "drake/systems/primitives/constant_value_source.h"
 
@@ -56,8 +62,28 @@
 #include "drake/geometry/optimization/iris.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 
+#include <drake/solvers/mathematical_program_result.h>
+#include <drake/solvers/solver_options.h>
+#include "drake/solvers/snopt_solver.h"
+#include "drake/solvers/mosek_solver.h"
+#include "drake/solvers/gurobi_solver.h"
+#include "drake/solvers/ipopt_solver.h"
+#include "drake/solvers/decision_variable.h"
+
+#include "drake/common/trajectories/bezier_curve.h"
+#include "drake/geometry/optimization/graph_of_convex_sets.h"
+#include "drake/geometry/optimization/hpolyhedron.h"
+#include "drake/geometry/optimization/point.h"
+#include "drake/geometry/optimization/vpolytope.h"
+#include "drake/planning/trajectory_optimization/gcs_trajectory_optimization.h"
+
+#include "drake/common/yaml/yaml_io.h"
+#include "drake/common/copyable_unique_ptr.h"
+
 DEFINE_double(simulation_sec, std::numeric_limits<double>::infinity(),
               "Number of seconds to simulate.");
+DEFINE_double(traj_duration, 5,
+              "The total duration of the trajectory (in seconds).");
 DEFINE_string(urdf, "", "Name of urdf to load");
 DEFINE_double(target_realtime_rate, 1.0,
               "Playback speed.  See documentation for "
@@ -73,7 +99,6 @@ namespace kuka_iiwa_arm {
 namespace gcs{
 using multibody::MultibodyPlant;
 using systems::Context;
-using systems::Demultiplexer;
 using systems::StateInterpolatorWithDiscreteDerivative;
 using systems::Simulator;
 using systems::controllers::InverseDynamicsController;
@@ -87,39 +112,71 @@ using multibody::Parser;
 using solvers::Solve;
 using multibody::InverseKinematics;
 
+using geometry::MeshcatVisualizerParams;
+using geometry::MeshcatVisualizer;
+
 using geometry::optimization::IrisOptions;
 using geometry::optimization::IrisInConfigurationSpace;
+
+using solvers::MathematicalProgram;
+using symbolic::Expression;
+using symbolic::MakeMatrixContinuousVariable;
+using symbolic::MakeVectorContinuousVariable;
+using solvers::VectorXDecisionVariable;
+using trajectories::BezierCurve;
+using trajectories::CompositeTrajectory;
+using trajectories::Trajectory;
+
+using Eigen::Vector2d;
+using geometry::optimization::ConvexSet;
+using geometry::optimization::ConvexSets;
+using geometry::optimization::GraphOfConvexSetsOptions;
 using geometry::optimization::HPolyhedron;
+using geometry::optimization::MakeConvexSets;
+using geometry::optimization::Point;
+using geometry::optimization::VPolytope;
+using planning::trajectory_optimization::GcsTrajectoryOptimization;
 
 // Save the regions to a binary file
-void saveRegions(const std::string& filename,
-                 const std::unordered_map<std::string, HPolyhedron>& regions) {
-    std::ofstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file for writing: " + filename);
-    }
-    // Serialize each region as a binary string and write it to the file
+void saveRegions(const std::unordered_map<std::string, HPolyhedron>& regions) {
     for (const auto& entry : regions) {
-        const std::string& seed_name = entry.first;
-        const HPolyhedron& region = entry.second;
-        std::string region_data(region.SerializeAsString());
-        uint32_t name_size = seed_name.size();
-        uint32_t data_size = region_data.size();
-        file.write(reinterpret_cast<const char*>(&name_size), sizeof(name_size));
-        file.write(reinterpret_cast<const char*>(&data_size), sizeof(data_size));
-        file.write(seed_name.c_str(), seed_name.size());
-        file.write(region_data.c_str(), region_data.size());
+        std::string seed_name = entry.first;
+        const HPolyhedron region = entry.second;
+
+        // Replaces spaces with underscores
+        std::replace(seed_name.begin(), seed_name.end(), ' ', '_');
+
+        std::filesystem::path filePath = std::filesystem::path("/home/drparadox30/petersen_home") / (seed_name + ".yaml");
+
+        std::ofstream file(filePath, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open file for writing: " + seed_name);
+        }
+
+        drake::yaml::SaveYamlFile(filePath.string(), region);
+        std::cout << "Saving seed : " << filePath.string() << std::endl;
     }
 }
 
 // Load the regions from a binary file
-std::unordered_map<std::string, HPolyhedron> loadRegions(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        throw std::runtime_error("Failed to open file for reading: " + filename);
-    }
+std::unordered_map<std::string, HPolyhedron> loadRegions(const std::string& folderPath) {
     std::unordered_map<std::string, HPolyhedron> regions;
-    drake::math::DeserializeFromFile(file, &regions);
+
+    for (const auto& entry : std::filesystem::directory_iterator(folderPath)) {
+        const std::filesystem::path& filePath = entry.path();
+        if (filePath.extension() == ".yaml") {
+            std::ifstream file(filePath.string(), std::ios::binary);
+            if (!file.is_open()) {
+                throw std::runtime_error("Failed to open file for reading: " + filePath.string());
+            }
+
+            HPolyhedron region = drake::yaml::LoadYamlFile<HPolyhedron>(filePath.string());
+            std::string seedName = filePath.stem().string();
+            std::cout << "Loaded : " << seedName << std::endl;
+            regions.emplace(std::move(seedName), std::move(region));            
+        }
+    }
+
     return regions;
 }
 
@@ -244,149 +301,20 @@ std::unordered_map<std::string, HPolyhedron> generateRegions(
 }
 
 
+
+
 int RunExample() {
-  systems::DiagramBuilder<double> builder;
 
-  // Adds a plant.
-  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
-      &builder, FLAGS_sim_dt);
-  
-  auto parser = multibody::Parser(&plant, &scene_graph);
-  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
-  const ModelDirectives directives = LoadModelDirectives(directives_file);
-  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
-
-  const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
-                                                                    models[1].model_instance,
-                                                                    models[2].model_instance,
-                                                                    models[3].model_instance,
-                                                                    models[4].model_instance,
-                                                                    models[5].model_instance);
-
-  plant.Finalize();
-
-  // // Creates and adds LCM publisher for visualization.
-  auto lcm = builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
-  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph, lcm);
-
-  // // Since we welded the model to the world above, the only remaining joints
-  // // should be those in the arm.
-  const int num_joints = plant.num_positions();
-  std::cout << "Number of joints : " << num_joints << std::endl;
-  DRAKE_DEMAND(num_joints % kIiwaArmNumJoints == 0);
-  const int num_iiwa = num_joints / kIiwaArmNumJoints;
-
-  // // Adds a iiwa controller.
-  StateFeedbackControllerInterface<double>* controller = nullptr;
-  if (FLAGS_torque_control) {
-    VectorX<double> stiffness, damping_ratio;
-    SetTorqueControlledIiwaGains(&stiffness, &damping_ratio);
-    stiffness = stiffness.replicate(num_iiwa, 1).eval();
-    damping_ratio = damping_ratio.replicate(num_iiwa, 1).eval();
-    controller = builder.AddSystem<KukaTorqueController<double>>(
-        plant, stiffness, damping_ratio);
-  } else {
-    VectorX<double> iiwa_kp, iiwa_kd, iiwa_ki;
-    SetPositionControlledIiwaGains(&iiwa_kp, &iiwa_ki, &iiwa_kd);
-    iiwa_kp = iiwa_kp.replicate(num_iiwa, 1).eval();
-    iiwa_kd = iiwa_kd.replicate(num_iiwa, 1).eval();
-    iiwa_ki = iiwa_ki.replicate(num_iiwa, 1).eval();
-    controller = builder.AddSystem<InverseDynamicsController<double>>(
-        plant, iiwa_kp, iiwa_ki, iiwa_kd,
-        false /* without feedforward acceleration */);
-  }
-
-  // // Create the command subscriber and status publisher.
-  auto command_sub = builder.AddSystem(
-      systems::lcm::LcmSubscriberSystem::Make<drake::lcmt_iiwa_command>(
-          "IIWA_COMMAND", lcm));
-  command_sub->set_name("command_subscriber");
-  auto command_receiver =
-      builder.AddSystem<IiwaCommandReceiver>(num_joints);
-  command_receiver->set_name("command_receiver");
-  auto plant_state_demux = builder.AddSystem<Demultiplexer>(
-      2 * num_joints, num_joints);
-  plant_state_demux->set_name("plant_state_demux");
-  auto desired_state_from_position = builder.AddSystem<
-      StateInterpolatorWithDiscreteDerivative>(
-          num_joints, kIiwaLcmStatusPeriod,
-          true /* suppress_initial_transient */);
-  desired_state_from_position->set_name("desired_state_from_position");
-  auto status_pub = builder.AddSystem(
-      systems::lcm::LcmPublisherSystem::Make<lcmt_iiwa_status>(
-          "IIWA_STATUS", lcm, kIiwaLcmStatusPeriod /* publish period */));
-  status_pub->set_name("status_publisher");
-  auto status_sender = builder.AddSystem<IiwaStatusSender>(num_joints);
-  status_sender->set_name("status_sender");
-
-  builder.Connect(command_sub->get_output_port(),
-                  command_receiver->get_message_input_port());
-  builder.Connect(plant_state_demux->get_output_port(0),
-                  command_receiver->get_position_measured_input_port());
-  builder.Connect(command_receiver->get_commanded_position_output_port(),
-                  desired_state_from_position->get_input_port());
-  builder.Connect(desired_state_from_position->get_output_port(),
-                  controller->get_input_port_desired_state());
-  builder.Connect(plant.get_state_output_port(iiwa_instance),
-                  plant_state_demux->get_input_port(0));
-  builder.Connect(plant_state_demux->get_output_port(0),
-                  status_sender->get_position_measured_input_port());
-  builder.Connect(plant_state_demux->get_output_port(1),
-                  status_sender->get_velocity_estimated_input_port());
-  builder.Connect(command_receiver->get_commanded_position_output_port(),
-                  status_sender->get_position_commanded_input_port());
-  builder.Connect(plant.get_state_output_port(),
-                  controller->get_input_port_estimated_state());
-  builder.Connect(controller->get_output_port_control(),
-                  plant.get_actuation_input_port(iiwa_instance));
-  builder.Connect(controller->get_output_port_control(),
-                  status_sender->get_torque_commanded_input_port());
-  builder.Connect(controller->get_output_port_control(),
-                  status_sender->get_torque_measured_input_port());
-  // TODO(sammy-tri) Add a low-pass filter for simulated external torques.
-  // This would slow the simulation significantly, however.  (see #12631)
-  builder.Connect(
-      plant.get_generalized_contact_forces_output_port(iiwa_instance),
-      status_sender->get_torque_external_input_port());
-  builder.Connect(status_sender->get_output_port(),
-                  status_pub->get_input_port());
-  // Connect the torque input in torque control
-  if (FLAGS_torque_control) {
-    KukaTorqueController<double>* torque_controller =
-        dynamic_cast<KukaTorqueController<double>*>(controller);
-    DRAKE_DEMAND(torque_controller != nullptr);
-    builder.Connect(command_receiver->get_commanded_torque_output_port(),
-                    torque_controller->get_input_port_commanded_torque());
-  }
-
-  auto diagram = builder.Build();
-  auto context = diagram->CreateDefaultContext();
-  auto plant_context = &plant.GetMyMutableContextFromRoot(context.get());
-  
-  Eigen::VectorXd current_positions = plant.GetPositions(*plant_context);
-  std::cout << "Current positions: " << current_positions.transpose() << std::endl;
-  
   Eigen::VectorXd q0(7);
   q0 << 0, 0.3, 0, -1.8, 0, 1, 1.57;
-  plant.SetPositions(plant_context, q0);
-  current_positions = plant.GetPositions(*plant_context);
-  std::cout << "Current positions: " << current_positions.transpose() << std::endl;
-
-  Simulator<double> simulator(*diagram);
-
-  simulator.set_publish_every_time_step(false);
-  simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
-  simulator.Initialize();
-
-  // Simulate for a very long time.
-  // simulator.AdvanceTo(FLAGS_simulation_sec);
 
   std::map<std::string, std::vector<Eigen::Vector3d>> milestones = {
         {"Above Shelve", {{0.75, 0, 0.9}, {0, -M_PI, -M_PI / 2}}},
         {"Top Rack", {{0.75, 0, 0.67}, {0, -M_PI, -M_PI / 2}}},
         {"Middle Rack", {{0.75, 0, 0.41}, {0, -M_PI, -M_PI / 2}}},
         {"Left Bin", {{0.0, 0.6, 0.22}, {M_PI / 2, M_PI, 0}}},
-        {"Right Bin", {{0.0, -0.6, 0.22}, {M_PI / 2, M_PI, M_PI}}}};
+        {"Right Bin", {{0.0, -0.6, 0.22}, {M_PI / 2, M_PI, M_PI}}}
+        };
 
   std::map<std::string, Eigen::VectorXd> additional_seed_points = {
       {"Front to Shelve", Eigen::VectorXd::Zero(7)},
@@ -417,7 +345,157 @@ int RunExample() {
   iris_options.configuration_space_margin = 1e-02;
   iris_options.relative_termination_threshold = 0.005;
 
-  std::unordered_map<std::string, HPolyhedron> regions = generateRegions(seed_points, iris_options);
+  bool use_pregenerated_regions = true;
+  std::unordered_map<std::string, HPolyhedron> loaded_regions;
+  if (use_pregenerated_regions)
+  {
+      loaded_regions = loadRegions("/home/drparadox30/petersen_home");
+  }
+  else
+  {
+    loaded_regions = generateRegions(seed_points, iris_options);
+    saveRegions(loaded_regions);
+  }
+  
+  // Run GCS
+  std::unordered_map<std::string, std::vector<Eigen::Vector3d>> demonstration = {
+      {"Above Shelve", {{0.75, -0.12, 0.9}, {0, -M_PI, -M_PI/2}}},
+      {"Top Rack", {{0.75, 0.12, 0.67}, {0, -M_PI, -M_PI/2}}},
+      {"Middle Rack", {{0.75, 0.12, 0.41}, {0, -M_PI, -M_PI/2}}},
+      {"Left Bin", {{0.08, 0.6, 0.22}, {M_PI/2, M_PI, 0}}},
+      {"Right Bin", {{-0.08, -0.6, 0.22}, {M_PI/2, M_PI, M_PI}}}
+  };
+
+  std::unordered_map<std::string, Eigen::VectorXd> demonstration_configurations;
+  for (const auto& entry : demonstration)
+  {
+      const std::string& name = entry.first;
+      const std::vector<Eigen::Vector3d>& config = entry.second;
+      const Eigen::Vector3d& trans = config[0];
+      const Eigen::Vector3d& rot = config[1];
+      Eigen::VectorXd result = doInverseKinematics(q0, trans, rot);
+      demonstration_configurations[name] = result;
+  }
+
+  std::vector<Eigen::VectorXd> demo_a = {
+      demonstration_configurations["Right Bin"],
+      demonstration_configurations["Above Shelve"]
+  };
+
+  std::vector<Eigen::VectorXd> execute_demo = demo_a;
+
+  const int kDimension = 7;
+  const double kMinimumDuration = 1.0;
+  GcsTrajectoryOptimization gcs(kDimension);
+
+  std::vector<HPolyhedron> regionsArray;
+  for (auto& entry : loaded_regions){
+    std::string name = entry.first;
+    regionsArray.push_back(entry.second);
+  }
+
+  // Assuming ConvexSets is defined as a vector of unique pointers to ConvexSet objects
+  std::vector<copyable_unique_ptr<ConvexSet>> regions_;
+
+  // Then, when assigning the regionsArray to regions_:
+  regions_.clear();
+  regions_.reserve(regionsArray.size());
+  for (const auto& polyhedron : regionsArray) {
+    regions_.emplace_back(std::make_unique<HPolyhedron>(polyhedron));
+  }
+
+  auto& regions = gcs.AddRegions(regions_, 1, kMinimumDuration);
+
+  auto& source = gcs.AddRegions(MakeConvexSets(Point(demo_a[0])), 0);
+  auto& target = gcs.AddRegions(MakeConvexSets(Point(demo_a[1])), 0);
+
+  gcs.AddEdges(source, regions);
+  gcs.AddEdges(regions, target);
+
+  gcs.AddPathLengthCost(1.0);
+  gcs.AddTimeCost(1.0);
+
+  GraphOfConvexSetsOptions options;
+  options.max_rounded_paths = 10;
+  options.max_rounding_trials = 100;
+
+  auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
+
+  if (!result.is_success()){
+
+      std::cout << "Solver failed..." << std::endl;
+      return 0;
+  }
+
+  std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
+
+  std::vector<double> t_solution;
+  std::vector<Eigen::MatrixXd> q_solution;
+
+  int T = 2;
+  double timestep = FLAGS_traj_duration / T;
+  int numberOfSegments = traj.get_number_of_segments();
+  double multiplier = 5.0 / (1 * numberOfSegments);
+
+  for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
+  {
+      for (int t = 0; t < T; t++)
+      {
+          double tStep= segmentID * 1 + static_cast<double>(t) / T;
+          auto coords = traj.segment(segmentID).value(tStep);
+          std::cout << coords << std::endl;
+          std::cout << std::endl;
+          
+          t_solution.push_back(tStep * multiplier);
+          q_solution.push_back(traj.segment(segmentID).value(tStep));
+      }
+  }
+  // Add the last point.
+  t_solution.push_back(numberOfSegments * multiplier);
+  q_solution.push_back(traj.segment(numberOfSegments - 1).value(numberOfSegments));
+
+  drake::trajectories::PiecewisePolynomial<double> trajectory_solution = 
+        drake::trajectories::PiecewisePolynomial<double>::FirstOrderHold(t_solution, q_solution);
+
+  systems::DiagramBuilder<double> builder;
+  // Adds a plant.
+  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
+      &builder, FLAGS_sim_dt);
+  
+  auto parser = multibody::Parser(&plant, &scene_graph);
+  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
+  const ModelDirectives directives = LoadModelDirectives(directives_file);
+  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
+
+  // const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
+  //                                                                   models[1].model_instance,
+  //                                                                   models[2].model_instance,
+  //                                                                   models[3].model_instance,
+  //                                                                   models[4].model_instance,
+  //                                                                   models[5].model_instance);
+
+  plant.Finalize();
+
+  auto trajectory_source = builder.AddSystem<drake::systems::TrajectorySource<double>>(trajectory_solution);
+  builder.Connect(trajectory_source->get_output_port(), plant.get_actuation_input_port());
+
+  // Create the visualizer
+  auto lcm = builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
+  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph, lcm);
+
+  // Build the diagram.
+  auto diagram = builder.Build();
+
+  drake::log()->debug("Visualizer built");
+
+  Simulator<double> simulator(*diagram);
+  simulator.set_publish_every_time_step(true);
+  simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
+  simulator.Initialize();
+
+  std::cout << "Reached the end..." << std::endl;
+
+  simulator.AdvanceTo(T * timestep);
 
   return 0;
 }

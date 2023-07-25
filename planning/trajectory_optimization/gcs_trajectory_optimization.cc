@@ -320,28 +320,28 @@ void Subgraph::AddVelocityBounds(const Eigen::Ref<const VectorXd>& lb,
   }
 }
 
-void Subgraph::AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps)
-{
-  (void) min_dist_constraint;
-  std::cout << "Adding min dist constraint timestep.. " << timesteps << std::endl;
+// void Subgraph::AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps)
+// {
+//   (void) min_dist_constraint;
+//   std::cout << "Adding min dist constraint timestep.. " << timesteps << std::endl;
 
-  auto xvars = traj_opt_.gcs_.final_prog_.NewContinuousVariables(timesteps, num_positions(), "xvars");
-  std::cout << "WHOAAAA" << std::endl;
+//   auto xvars = traj_opt_.gcs_.final_prog_.NewContinuousVariables(timesteps, num_positions(), "xvars");
+//   std::cout << "WHOAAAA" << std::endl;
 
-  // Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions());
+//   // Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions());
 
-  std::cout << "Start time : " << u_r_trajectory_.start_time() << ", End time : " << u_r_trajectory_.end_time() << std::endl;
+//   std::cout << "Start time : " << u_r_trajectory_.start_time() << ", End time : " << u_r_trajectory_.end_time() << std::endl;
 
-  // auto segment_trajectory = BezierCurve<Expression>(0, 1, segment_control.cast<Expression>());
-  for (int t = 0; t < timesteps; t++) {
+//   // auto segment_trajectory = BezierCurve<Expression>(0, 1, segment_control.cast<Expression>());
+//   for (int t = 0; t < timesteps; t++) {
 
-    double tStep= static_cast<double>(t) / timesteps;
-  //   traj_opt_.gcs_.final_prog_.AddLinearEqualityConstraint(xvars.row(t) == u_r_trajectory_.value(tStep).transpose());
-  //   traj_opt_.gcs_.final_prog_.AddConstraint(min_dist_constraint, xvars.row(t));
+//     double tStep= static_cast<double>(t) / timesteps;
+//   //   traj_opt_.gcs_.final_prog_.AddLinearEqualityConstraint(xvars.row(t) == u_r_trajectory_.value(tStep).transpose());
+//   //   traj_opt_.gcs_.final_prog_.AddConstraint(min_dist_constraint, xvars.row(t));
 
-    std::cout << u_r_trajectory_.value(tStep).transpose() << std::endl;
-  }
-}
+//     std::cout << u_r_trajectory_.value(tStep).transpose() << std::endl;
+//   }
+// }
 
 
 EdgesBetweenSubgraphs::EdgesBetweenSubgraphs(
@@ -672,39 +672,33 @@ void GcsTrajectoryOptimization::AddVelocityBounds(
 }
 
 
-void GcsTrajectoryOptimization::AddMinDistanceConstraint(multibody::MultibodyPlant<double>& plant, systems::Context<double>* plant_context, double min_distance, double timesteps){
-  std::cout << "Adding the minimum distance constraint..." << std::endl;
+// void GcsTrajectoryOptimization::AddMinDistanceConstraint(multibody::MultibodyPlant<double>& plant, systems::Context<double>* plant_context, double min_distance, double timesteps){
+//   std::cout << "Adding the minimum distance constraint..." << std::endl;
 
-  auto min_dist_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
-      &plant,
-      min_distance,
-      plant_context
-  );
+//   auto min_dist_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
+//       &plant,
+//       min_distance,
+//       plant_context
+//   );
 
-  // Iterate over each subgraph
-    // Call subgraph::AddMinDistanceConstraint()
-      // Generate the trajectory
-      // Introduce auxiliary variables and Add LinearEquality constraint to uniformly spaced points along the trajectory.
-      // Add minimum distance constraint to those auxiliary variables.
-      // Somehow add the auxiliary variables to the mathematical program.
+//   // Iterate over each subgraph
+//     // Call subgraph::AddMinDistanceConstraint()
+//       // Generate the trajectory
+//       // Introduce auxiliary variables and Add LinearEquality constraint to uniformly spaced points along the trajectory.
+//       // Add minimum distance constraint to those auxiliary variables.
+//       // Somehow add the auxiliary variables to the mathematical program.
 
-  for (std::unique_ptr<Subgraph>& subgraph : subgraphs_) {
-    if (subgraph->order() > 0) {
-      subgraph->AddMinDistanceConstraint(min_dist_constraint, timesteps);
-    }
-  }
-
-
-}
+//   for (std::unique_ptr<Subgraph>& subgraph : subgraphs_) {
+//     if (subgraph->order() > 0) {
+//       subgraph->AddMinDistanceConstraint(min_dist_constraint, timesteps);
+//     }
+//   }
+// }
 
 std::tuple<CompositeTrajectory<double>, std::vector<MatrixX<double>>, solvers::MathematicalProgramResult>
 GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
                                      const Subgraph& target,
-                                     const GraphOfConvexSetsOptions& options) {
-std::pair<CompositeTrajectory<double>, solvers::MathematicalProgramResult>
-GcsTrajectoryOptimization::SolvePath(
-    const Subgraph& source, const Subgraph& target,
-    const GraphOfConvexSetsOptions& specified_options) {
+                                     const GraphOfConvexSetsOptions& specified_options) {
   // Fill in default options. Note: if these options change, they must also be
   // updated in the method documentation.
   GraphOfConvexSetsOptions options = specified_options;

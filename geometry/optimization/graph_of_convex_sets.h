@@ -498,7 +498,7 @@ class GraphOfConvexSets {
   solvers::MathematicalProgramResult SolveShortestPath(
       VertexId source_id, VertexId target_id,
       const GraphOfConvexSetsOptions& options =
-          GraphOfConvexSetsOptions());
+          GraphOfConvexSetsOptions()) const;
 
   /** Convenience overload that takes const reference arguments for source and
   target.
@@ -507,7 +507,7 @@ class GraphOfConvexSets {
   solvers::MathematicalProgramResult SolveShortestPath(
       const Vertex& source, const Vertex& target,
       const GraphOfConvexSetsOptions& options =
-          GraphOfConvexSetsOptions());
+          GraphOfConvexSetsOptions()) const;
 
   /** The non-convexity in a GCS problem comes from the binary variables (phi)
   associated with the edges being active or inactive in the solution. If those

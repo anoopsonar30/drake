@@ -127,8 +127,8 @@ Binding<Constraint> Vertex::AddConstraint(const symbolic::Formula& f) {
 
 Binding<Constraint> Vertex::AddConstraint(const Binding<Constraint>& binding) {
   DRAKE_THROW_UNLESS(ambient_dimension() > 0);
-  // DRAKE_THROW_UNLESS(
-  //     Variables(binding.variables()).IsSubsetOf(Variables(placeholder_x_)));
+  DRAKE_THROW_UNLESS(
+      Variables(binding.variables()).IsSubsetOf(Variables(placeholder_x_)));
   constraints_.emplace_back(binding);
   return binding;
 }
@@ -713,7 +713,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
     unusable_edges = PreprocessShortestPath(source_id, target_id, options);
   }
 
-  // MathematicalProgram prog;
+  MathematicalProgram prog;
 
   std::map<VertexId, std::vector<Edge*>> incoming_edges;
   std::map<VertexId, std::vector<Edge*>> outgoing_edges;
@@ -756,24 +756,24 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
       relaxed_phi.emplace(edge_id, phi);
     } else {
       phi = e->phi_;
-      final_prog_.AddDecisionVariables(Vector1<Variable>(phi));
+      prog.AddDecisionVariables(Vector1<Variable>(phi));
     }
     if (e->phi_value_.has_value()) {
       DRAKE_DEMAND(*e->phi_value_);
       double phi_value = *e->phi_value_ ? 1.0 : 0.0;
-      final_prog_.AddBoundingBoxConstraint(phi_value, phi_value, phi);
+      prog.AddBoundingBoxConstraint(phi_value, phi_value, phi);
     }
-    final_prog_.AddDecisionVariables(e->y_);
-    final_prog_.AddDecisionVariables(e->z_);
-    final_prog_.AddDecisionVariables(e->ell_);
-    final_prog_.AddLinearCost(VectorXd::Ones(e->ell_.size()), e->ell_);
+    prog.AddDecisionVariables(e->y_);
+    prog.AddDecisionVariables(e->z_);
+    prog.AddDecisionVariables(e->ell_);
+    prog.AddLinearCost(VectorXd::Ones(e->ell_.size()), e->ell_);
 
     // Spatial non-negativity: y ∈ ϕX, z ∈ ϕX.
     if (e->u().ambient_dimension() > 0) {
-      e->u().set().AddPointInNonnegativeScalingConstraints(&final_prog_, e->y_, phi);
+      e->u().set().AddPointInNonnegativeScalingConstraints(&prog, e->y_, phi);
     }
     if (e->v().ambient_dimension() > 0) {
-      e->v().set().AddPointInNonnegativeScalingConstraints(&final_prog_, e->z_, phi);
+      e->v().set().AddPointInNonnegativeScalingConstraints(&prog, e->z_, phi);
     }
 
     // Edge costs.
@@ -789,7 +789,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
         vars[j + 2] = e->x_to_yz_.at(old_vars[j]);
       }
 
-      AddPerspectiveCost(&final_prog_, b, vars);
+      AddPerspectiveCost(&prog, b, vars);
     }
 
     // Edge constraints.
@@ -806,7 +806,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
       // that the constraints describe a bounded set.  The boundedness is
       // ensured by the intersection of these constraints with the convex sets
       // (on the vertices).
-      AddPerspectiveConstraint(&final_prog_, b, vars);
+      AddPerspectiveConstraint(&prog, b, vars);
     }
   }
   if (!has_edges_out_of_source) {
@@ -852,7 +852,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
         vars[count++] =
             *options.convex_relaxation ? relaxed_phi.at(e->id()) : e->phi_;
       }
-      final_prog_.AddLinearEqualityConstraint(
+      prog.AddLinearEqualityConstraint(
           a, (is_source ? 1.0 : 0.0) - (is_target ? 1.0 : 0.0), vars);
 
       // Spatial conservation of flow: ∑ z_in = ∑ y_out.
@@ -865,7 +865,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
           for (const Edge* e : outgoing) {
             vars[count++] = e->y_[i];
           }
-          final_prog_.AddLinearEqualityConstraint(a, 0, vars);
+          prog.AddLinearEqualityConstraint(a, 0, vars);
         }
       }
     }
@@ -881,7 +881,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
         yz_out.segment(i * n_v, n_v) = outgoing[i]->y_;
       }
       // Degree constraint: ∑ ϕ_out <= 1- δ(is_target).
-      final_prog_.AddLinearConstraint(RowVectorXd::Ones(outgoing.size()), 0.0,
+      prog.AddLinearConstraint(RowVectorXd::Ones(outgoing.size()), 0.0,
                                is_target ? 0.0 : 1.0, phi_out);
 
       if (!is_source && !is_target) {
@@ -902,13 +902,13 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
                                ? relaxed_phi.at(e_in->id())
                                : e_in->phi_;
               // Two-cycle constraint: ∑ ϕ_u,out - ϕ_uv - ϕ_vu >= 0
-              final_prog_.AddLinearConstraint(a, 0.0, 1.0, phi_out);
+              prog.AddLinearConstraint(a, 0.0, 1.0, phi_out);
               A_yz.block(0, i * n_v, n_v, n_v) = -MatrixXd::Identity(n_v, n_v);
               yz_out.segment(i * n_v, n_v) = e_in->z_;
               // Two-cycle spatial constraint:
               // ∑ y_u - y_uv - z_vu ∈ (∑ ϕ_u,out - ϕ_uv - ϕ_vu) X_u
               v->set().AddPointInNonnegativeScalingConstraints(
-                  &final_prog_, A_yz, VectorXd::Zero(n_v), a, 0, yz_out, phi_out);
+                  &prog, A_yz, VectorXd::Zero(n_v), a, 0, yz_out, phi_out);
 
               a[i] = 1.0;
               phi_out[i] = *options.convex_relaxation
@@ -927,14 +927,14 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
     // Vertex costs.
     if (v->ell_.size() > 0) {
       vertex_edge_ell[v->id()] =
-          final_prog_.NewContinuousVariables(cost_edges.size(), v->ell_.size());
+          prog.NewContinuousVariables(cost_edges.size(), v->ell_.size());
       for (int ii = 0; ii < v->ell_.size(); ++ii) {
         const Binding<Cost>& b = v->costs_[ii];
         const VectorXDecisionVariable& old_vars = b.variables();
 
         VectorXDecisionVariable vertex_ell =
             vertex_edge_ell.at(v->id()).col(ii);
-        final_prog_.AddLinearCost(VectorXd::Ones(vertex_ell.size()), vertex_ell);
+        prog.AddLinearCost(VectorXd::Ones(vertex_ell.size()), vertex_ell);
 
         for (int jj = 0; jj < static_cast<int>(cost_edges.size()); ++jj) {
           const Edge* e = cost_edges[jj];
@@ -950,7 +950,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
             vars[kk + 2] = e->x_to_yz_.at(old_vars[kk]);
           }
 
-          AddPerspectiveCost(&final_prog_, b, vars);
+          AddPerspectiveCost(&prog, b, vars);
         }
       }
     }
@@ -975,7 +975,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
         // assume) that the constraints describe a bounded set.  The boundedness
         // is ensured by the intersection of these constraints with the convex
         // sets (on the vertices).
-        AddPerspectiveConstraint(&final_prog_, b, vars);
+        AddPerspectiveConstraint(&prog, b, vars);
       }
     }
   }
@@ -1067,20 +1067,20 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
         if (std::find(new_path.begin(), new_path.end(), e.get()) !=
             new_path.end()) {
           added_constraints.push_back(
-              final_prog_.AddBoundingBoxConstraint(1, 1, relaxed_phi.at(edge_id)));
+              prog.AddBoundingBoxConstraint(1, 1, relaxed_phi.at(edge_id)));
         } else {
           added_constraints.push_back(
-              final_prog_.AddBoundingBoxConstraint(0, 0, relaxed_phi.at(edge_id)));
-          added_constraints.push_back(final_prog_.AddLinearEqualityConstraint(
+              prog.AddBoundingBoxConstraint(0, 0, relaxed_phi.at(edge_id)));
+          added_constraints.push_back(prog.AddLinearEqualityConstraint(
               e->y_.cast<Expression>(), VectorXd::Zero(e->y_.size())));
-          added_constraints.push_back(final_prog_.AddLinearEqualityConstraint(
+          added_constraints.push_back(prog.AddLinearEqualityConstraint(
               e->z_.cast<Expression>(), VectorXd::Zero(e->z_.size())));
-          added_constraints.push_back(final_prog_.AddLinearEqualityConstraint(
+          added_constraints.push_back(prog.AddLinearEqualityConstraint(
               e->ell_.cast<Expression>(), VectorXd::Zero(e->ell_.size())));
         }
       }
 
-      MathematicalProgramResult rounded_result = Solve(final_prog_, options, true);
+      MathematicalProgramResult rounded_result = Solve(prog, options, true);
 
       // Check path quality.
       if (rounded_result.is_success() &&
@@ -1091,7 +1091,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
       }
 
       for (Binding<Constraint>& con : added_constraints) {
-        final_prog_.RemoveConstraint(con);
+        prog.RemoveConstraint(con);
       }
     }
     if (best_rounded_result.is_success()) {
@@ -1116,7 +1116,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
   }
   num_placeholder_vars += excluded_phi.size();
   std::unordered_map<symbolic::Variable::Id, int> decision_variable_index =
-      final_prog_.decision_variable_index();
+      prog.decision_variable_index();
   int count = result.get_x_val().size();
   Eigen::VectorXd x_val(count + num_placeholder_vars);
   x_val.head(count) = result.get_x_val();
@@ -1193,7 +1193,7 @@ MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
 
 MathematicalProgramResult GraphOfConvexSets::SolveShortestPath(
     const Vertex& source, const Vertex& target,
-    const GraphOfConvexSetsOptions& options) {
+    const GraphOfConvexSetsOptions& options) const {
   return SolveShortestPath(source.id(), target.id(), options);
 }
 

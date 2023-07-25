@@ -130,7 +130,7 @@ class GcsTrajectoryOptimization final {
     void AddVelocityBounds(const Eigen::Ref<const Eigen::VectorXd>& lb,
                            const Eigen::Ref<const Eigen::VectorXd>& ub);
 
-    void AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps);
+    // void AddMinDistanceConstraint(std::shared_ptr<multibody::MinimumDistanceConstraint> min_dist_constraint, double timesteps);
 
    private:
     /* Constructs a new subgraph and copies the regions. */
