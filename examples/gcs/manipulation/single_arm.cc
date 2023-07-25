@@ -300,8 +300,112 @@ std::unordered_map<std::string, HPolyhedron> generateRegions(
     return result;
 }
 
+void VisualizeTrajectory(CompositeTrajectory<double> traj, solvers::MathematicalProgramResult result, Eigen::VectorXd start_state){
 
+  if (!result.is_success()){
 
+      std::cout << "Solver failed..." << std::endl;
+      return;
+  }
+
+  std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
+
+  std::vector<double> t_solution;
+  std::vector<Eigen::MatrixXd> q_solution;
+
+  int T = 50;
+  double timestep = FLAGS_traj_duration / T;
+  int numberOfSegments = traj.get_number_of_segments();
+  double multiplier = FLAGS_traj_duration / (1 * numberOfSegments);
+
+  for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
+  {
+      for (int t = 0; t < T; t++)
+      {
+          double tStep= segmentID * 1 + static_cast<double>(t) / T;
+          auto coords = traj.segment(segmentID).value(tStep);
+          // std::cout << coords.transpose() << std::endl;
+          t_solution.push_back(tStep * multiplier);
+          q_solution.push_back(traj.segment(segmentID).value(tStep));
+      }
+  }
+
+  // Add the last point.
+  t_solution.push_back(numberOfSegments * multiplier);
+  q_solution.push_back(traj.segment(numberOfSegments - 1).value(numberOfSegments));
+  // std::cout << traj.segment(numberOfSegments - 1).value(numberOfSegments).transpose() << std::endl;
+
+  for (auto elem : t_solution)
+    std::cout << elem << " ";
+  std::cout << std::endl;
+ 
+  for (auto elem : q_solution) 
+    std::cout << elem.transpose() << " " << std::endl;
+  std::cout << std::endl;
+
+  drake::trajectories::PiecewisePolynomial<double> trajectory_solution = 
+        drake::trajectories::PiecewisePolynomial<double>::FirstOrderHold(t_solution, q_solution);
+
+  systems::DiagramBuilder<double> builder;
+  // Adds a plant.
+  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
+      &builder, FLAGS_sim_dt);
+  
+  auto parser = multibody::Parser(&plant, &scene_graph);
+  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
+  const ModelDirectives directives = LoadModelDirectives(directives_file);
+  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
+
+  // const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
+  //                                                                   models[1].model_instance,
+  //                                                                   models[2].model_instance,
+  //                                                                   models[3].model_instance,
+  //                                                                   models[4].model_instance,
+  //                                                                   models[5].model_instance);
+
+  plant.Finalize();
+
+  int num_iiwa = 1;
+  int num_joints = 7;
+  StateFeedbackControllerInterface<double>* controller = nullptr;
+  VectorX<double> iiwa_kp, iiwa_kd, iiwa_ki;
+  SetPositionControlledIiwaGains(&iiwa_kp, &iiwa_ki, &iiwa_kd);
+  iiwa_kp = iiwa_kp.replicate(num_iiwa, 1).eval();
+  iiwa_kd = iiwa_kd.replicate(num_iiwa, 1).eval();
+  iiwa_ki = iiwa_ki.replicate(num_iiwa, 1).eval();
+  controller = builder.AddSystem<InverseDynamicsController<double>>(
+      plant, iiwa_kp, iiwa_ki, iiwa_kd,
+      false /* without feedforward acceleration */);
+
+  auto desired_state_from_position = builder.AddSystem<
+      StateInterpolatorWithDiscreteDerivative>(
+          num_joints, kIiwaLcmStatusPeriod,
+          true /* suppress_initial_transient */);
+
+  auto trajectory_source = builder.AddSystem<drake::systems::TrajectorySource<double>>(trajectory_solution);
+  
+  builder.Connect(trajectory_source->get_output_port(), desired_state_from_position->get_input_port());
+  builder.Connect(desired_state_from_position->get_output_port(), controller->get_input_port_desired_state());
+  builder.Connect(plant.get_state_output_port(), controller->get_input_port_estimated_state());
+  builder.Connect(controller->get_output_port_control(), plant.get_actuation_input_port());
+
+  // Create the visualizer
+  auto lcm = builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
+  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph, lcm);
+
+  // Build the diagram.
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  auto plant_context = &plant.GetMyMutableContextFromRoot(context.get());
+
+  plant.SetPositions(plant_context, start_state);
+
+  Simulator<double> simulator(*diagram, std::move(context));
+  simulator.set_publish_every_time_step(true);
+  simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
+  simulator.Initialize();
+  simulator.AdvanceTo(T * timestep);
+}
 
 int RunExample() {
 
@@ -424,105 +528,7 @@ int RunExample() {
 
   auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
 
-  if (!result.is_success()){
-
-      std::cout << "Solver failed..." << std::endl;
-      return 0;
-  }
-
-  std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
-
-  std::vector<double> t_solution;
-  std::vector<Eigen::MatrixXd> q_solution;
-
-  int T = 50;
-  double timestep = FLAGS_traj_duration / T;
-  int numberOfSegments = traj.get_number_of_segments();
-  double multiplier = FLAGS_traj_duration / (1 * numberOfSegments);
-
-  for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
-  {
-      for (int t = 0; t < T; t++)
-      {
-          double tStep= segmentID * 1 + static_cast<double>(t) / T;
-          auto coords = traj.segment(segmentID).value(tStep);
-          std::cout << coords.transpose() << std::endl;
-          t_solution.push_back(tStep * multiplier);
-          q_solution.push_back(traj.segment(segmentID).value(tStep));
-      }
-  }
-  // Add the last point.
-  t_solution.push_back(numberOfSegments * multiplier);
-  q_solution.push_back(traj.segment(numberOfSegments - 1).value(numberOfSegments));
-  std::cout << traj.segment(numberOfSegments - 1).value(numberOfSegments).transpose() << std::endl;
-
-  drake::trajectories::PiecewisePolynomial<double> trajectory_solution = 
-        drake::trajectories::PiecewisePolynomial<double>::FirstOrderHold(t_solution, q_solution);
-
-  systems::DiagramBuilder<double> builder;
-  // Adds a plant.
-  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
-      &builder, FLAGS_sim_dt);
-  
-  auto parser = multibody::Parser(&plant, &scene_graph);
-  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
-  const ModelDirectives directives = LoadModelDirectives(directives_file);
-  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
-
-  // const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
-  //                                                                   models[1].model_instance,
-  //                                                                   models[2].model_instance,
-  //                                                                   models[3].model_instance,
-  //                                                                   models[4].model_instance,
-  //                                                                   models[5].model_instance);
-
-  plant.Finalize();
-
-  int num_iiwa = 1;
-  int num_joints = 7;
-  StateFeedbackControllerInterface<double>* controller = nullptr;
-  VectorX<double> iiwa_kp, iiwa_kd, iiwa_ki;
-  SetPositionControlledIiwaGains(&iiwa_kp, &iiwa_ki, &iiwa_kd);
-  iiwa_kp = iiwa_kp.replicate(num_iiwa, 1).eval();
-  iiwa_kd = iiwa_kd.replicate(num_iiwa, 1).eval();
-  iiwa_ki = iiwa_ki.replicate(num_iiwa, 1).eval();
-  controller = builder.AddSystem<InverseDynamicsController<double>>(
-      plant, iiwa_kp, iiwa_ki, iiwa_kd,
-      false /* without feedforward acceleration */);
-
-  auto desired_state_from_position = builder.AddSystem<
-      StateInterpolatorWithDiscreteDerivative>(
-          num_joints, kIiwaLcmStatusPeriod,
-          true /* suppress_initial_transient */);
-
-  auto trajectory_source = builder.AddSystem<drake::systems::TrajectorySource<double>>(trajectory_solution);
-  
-  builder.Connect(trajectory_source->get_output_port(), desired_state_from_position->get_input_port());
-  builder.Connect(desired_state_from_position->get_output_port(), controller->get_input_port_desired_state());
-  builder.Connect(plant.get_state_output_port(), controller->get_input_port_estimated_state());
-  builder.Connect(controller->get_output_port_control(), plant.get_actuation_input_port());
-
-  // builder.Connect(trajectory_source->get_output_port(), plant.get_actuation_input_port());
-
-  // Create the visualizer
-  auto lcm = builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
-  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph, lcm);
-
-  // Build the diagram.
-  auto diagram = builder.Build();
-  auto context = diagram->CreateDefaultContext();
-  auto plant_context = &plant.GetMyMutableContextFromRoot(context.get());
-
-  plant.SetPositions(plant_context, execute_demo[0]);
-
-  Simulator<double> simulator(*diagram, std::move(context));
-  simulator.set_publish_every_time_step(true);
-  simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
-  simulator.Initialize();
-
-  std::cout << "Reached the end..." << std::endl;
-
-  simulator.AdvanceTo(T * timestep);
+  VisualizeTrajectory(traj, result, execute_demo[0]);
 
   return 0;
 }
