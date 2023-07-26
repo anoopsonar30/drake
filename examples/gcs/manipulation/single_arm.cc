@@ -85,7 +85,7 @@
 
 DEFINE_double(simulation_sec, std::numeric_limits<double>::infinity(),
               "Number of seconds to simulate.");
-DEFINE_double(traj_duration, 2,
+DEFINE_double(traj_duration, 5,
               "The total duration of the trajectory (in seconds).");
 DEFINE_string(urdf, "", "Name of urdf to load");
 DEFINE_double(target_realtime_rate, 1.0,
@@ -95,7 +95,7 @@ DEFINE_bool(torque_control, false, "Simulate using torque control mode.");
 DEFINE_double(sim_dt, 3e-3,
               "The time step to use for MultibodyPlant model "
               "discretization.");
-DEFINE_int32(T, 10,
+DEFINE_int32(T, 50,
              "The number of timesteps used to define the trajectory.");
 DEFINE_double(min_distance, 0.05,
               "The minimum allowable distance between collision bodies during the trajectory.");
@@ -332,7 +332,7 @@ void VisualizeTrajectory(CompositeTrajectory<double> traj, solvers::Mathematical
   std::vector<double> t_solution;
   std::vector<Eigen::MatrixXd> q_solution;
 
-  int T = 50;
+  int T = FLAGS_T;
   double timestep = FLAGS_traj_duration / T;
   int numberOfSegments = traj.get_number_of_segments();
   double multiplier = FLAGS_traj_duration / (1 * numberOfSegments);
@@ -614,9 +614,14 @@ int RunExample() {
       demonstration_configurations[name] = result;
   }
 
+//   std::vector<Eigen::VectorXd> demo_a = {
+//       demonstration_configurations["Above Shelve"],
+//       demonstration_configurations["Left Bin"]
+//   };
+
   std::vector<Eigen::VectorXd> demo_a = {
-      demonstration_configurations["Above Shelve"],
-      demonstration_configurations["Left Bin"]
+      additional_seed_points["Left to Shelve"],
+      additional_seed_points["Right to Shelve"]
   };
 
   std::vector<Eigen::VectorXd> execute_demo = demo_a;
@@ -754,11 +759,11 @@ int RunExample() {
 
   drake::log()->debug("Deterministic program definition complete");
 
-  double risk_precision = 0.0001; // 10^-7
+  double risk_precision = 0.0000001; // 10^-7
 
   drake::solvers::SnoptSolver solver;
   drake::solvers::SolverOptions options_;
-  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 10000000);
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 1000000);
   prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Print file", "ufo_snopt.out");
   prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Verify level", 0);
   prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major optimality tolerance", sqrt(FLAGS_function_precision));
@@ -771,12 +776,30 @@ int RunExample() {
 
   VisualizeTrajectory(segment_controls, collision_free_result, execute_demo[0]);
 
+  // what():  GetBodyByName(): There is no Body named 'iiwa' anywhere in the model 
+  // (valid names are: base, bin_base, body, iiwa_link_0, iiwa_link_1, iiwa_link_2,
+  //  iiwa_link_3, iiwa_link_4, iiwa_link_5, iiwa_link_6, iiwa_link_7, iiwa_link_ee, 
+  // iiwa_link_ee_kuka, left_finger, right_finger, shelves_body, table_body, 
+  // top_and_bottom, world)
+
   // To check the probability of collision between the robot and the environment,
   // we need to define the list of bodies that make up the "robot", which we save
   // in the Bullet world manager
   ccopt::BulletWorldManager<double>* world_manager = new ccopt::BulletWorldManager<double>();
   std::vector<std::string> robot_body_names{
-      "base"
+    //   "base",
+    //   "iiwa_link_0",
+    //   "iiwa_link_1",
+    //   "iiwa_link_2",
+      "iiwa_link_3",
+      "iiwa_link_4",
+      "iiwa_link_5",
+      "iiwa_link_6",
+      "iiwa_link_7",
+      "iiwa_link_ee",
+    //   "iiwa_link_ee_kuka",
+      "left_finger",
+      "right_finger",
   };
 
   for (const std::string body_name : robot_body_names) {
@@ -821,8 +844,8 @@ int RunExample() {
 
   // We also need to define the bodies that are uncertain.
   std::vector<std::string> uncertain_bin_names{
-      "binR",
-      "binL",
+    //   "binR",
+    //   "binL",
   };
 
   for (const std::string name : uncertain_bin_names) {
@@ -842,9 +865,9 @@ int RunExample() {
 
   // Let's make both pillars uncertain in the x direction.
   Eigen::Matrix3d uncertain_obstacle_covariance;
-  uncertain_obstacle_covariance << 0.1, 0.0, 0.0,
-                                    0.0, 0.1, 0.0,
-                                    0.0, 0.0, 0.1;
+  uncertain_obstacle_covariance << 0.005, 0.0, 0.0,
+                                    0.0, 0.005, 0.0,
+                                    0.0, 0.0, 0.005;
   // Make a vector of n copies of the covariance, where n = the number of uncertain
   // geometry IDs found above
   std::vector<Eigen::Matrix3d> uncertain_obstacle_covariances;
@@ -852,12 +875,6 @@ int RunExample() {
   for (int i = 0; i < static_cast<int>(uncertain_obstacle_ids.size()); i++){
       uncertain_obstacle_covariances.push_back(uncertain_obstacle_covariance);
   }
-
-  // what():  GetBodyByName(): There is no Body named 'iiwa' anywhere in the model 
-  // (valid names are: base, bin_base, body, iiwa_link_0, iiwa_link_1, iiwa_link_2,
-  //  iiwa_link_3, iiwa_link_4, iiwa_link_5, iiwa_link_6, iiwa_link_7, iiwa_link_ee, 
-  // iiwa_link_ee_kuka, left_finger, right_finger, shelves_body, table_body, 
-  // top_and_bottom, world)
 
   // Next add a chance constraint covering the entire trajectory
   auto collision_chance_constraint = std::make_shared<ccopt::CollisionChanceConstraint>(

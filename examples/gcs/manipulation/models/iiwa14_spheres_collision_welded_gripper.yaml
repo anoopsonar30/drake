@@ -42,35 +42,35 @@ directives:
     child: shelves::shelves_body
 
 # Add Bins
-- add_model:
-    name: binR
-    file: package://drake/examples/gcs/manipulation/models/bin/bin.sdf
+# - add_model:
+#     name: binR
+#     file: package://drake/examples/gcs/manipulation/models/bin/bin.sdf
 
-- add_frame:
-    name: bin_originR
-    X_PF:
-      base_frame: world
-      translation: [0, -0.6, 0]
-      rotation: !Rpy { deg: [0.0, 0.0, 90.0 ]}
+# - add_frame:
+#     name: bin_originR
+#     X_PF:
+#       base_frame: world
+#       translation: [0, -0.6, 0]
+#       rotation: !Rpy { deg: [0.0, 0.0, 90.0 ]}
 
-- add_weld:
-    parent: bin_originR
-    child: binR::bin_base
+# - add_weld:
+#     parent: bin_originR
+#     child: binR::bin_base
 
-- add_model:
-    name: binL
-    file: package://drake/examples/gcs/manipulation/models/bin/bin.sdf
+# - add_model:
+#     name: binL
+#     file: package://drake/examples/gcs/manipulation/models/bin/bin.sdf
 
-- add_frame:
-    name: bin_originL
-    X_PF:
-      base_frame: world
-      translation: [0, 0.6, 0]
-      rotation: !Rpy { deg: [0.0, 0.0, 90.0 ]}
+# - add_frame:
+#     name: bin_originL
+#     X_PF:
+#       base_frame: world
+#       translation: [0, 0.6, 0]
+#       rotation: !Rpy { deg: [0.0, 0.0, 90.0 ]}
 
-- add_weld:
-    parent: bin_originL
-    child: binL::bin_base
+# - add_weld:
+#     parent: bin_originL
+#     child: binL::bin_base
 
 # Add table
 - add_model:
