@@ -38,6 +38,7 @@
 #include "drake/lcmt_iiwa_status.hpp"
 #include "drake/systems/rendering/multibody_position_to_geometry_pose.h"
 #include "drake/systems/primitives/trajectory_source.h"
+#include "drake/multibody/inverse_kinematics/minimum_distance_constraint.h"
 
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/parsing/process_model_directives.h"
@@ -80,6 +81,8 @@
 #include "drake/common/yaml/yaml_io.h"
 #include "drake/common/copyable_unique_ptr.h"
 
+#include "drake/examples/scora/ccopt/chance_constraints.h"
+
 DEFINE_double(simulation_sec, std::numeric_limits<double>::infinity(),
               "Number of seconds to simulate.");
 DEFINE_double(traj_duration, 2,
@@ -92,6 +95,18 @@ DEFINE_bool(torque_control, false, "Simulate using torque control mode.");
 DEFINE_double(sim_dt, 3e-3,
               "The time step to use for MultibodyPlant model "
               "discretization.");
+DEFINE_int32(T, 10,
+             "The number of timesteps used to define the trajectory.");
+DEFINE_double(min_distance, 0.05,
+              "The minimum allowable distance between collision bodies during the trajectory.");
+DEFINE_double(function_precision, 0.0001,
+              "SNOPT option.");
+DEFINE_int32(num_benchmark_runs, 1,
+             "The number of times which the optimization problem should be solved to measure its runtime.");
+DEFINE_double(delta, 0.2,
+              "The maximum acceptable risk of collision over the entire trajectory.");
+DEFINE_bool(use_max, false,
+             "If true, only the maximum waypoint risk over the entire trajectory is constrained.");
 
 namespace drake {
 namespace examples {
@@ -307,6 +322,10 @@ void VisualizeTrajectory(CompositeTrajectory<double> traj, solvers::Mathematical
       std::cout << "Solver failed..." << std::endl;
       return;
   }
+  else
+  {
+    std::cout << "Program solved successfully!" << std::endl;
+  }
 
   std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
 
@@ -407,8 +426,122 @@ void VisualizeTrajectory(CompositeTrajectory<double> traj, solvers::Mathematical
   simulator.AdvanceTo(T * timestep);
 }
 
+void VisualizeTrajectory(std::vector<MatrixX<symbolic::Variable>> segment_controls, solvers::MathematicalProgramResult result, Eigen::VectorXd start_state){
+
+  if (!result.is_success()){
+
+      std::cout << "Solver failed..." << std::endl;
+      return;
+  }
+  else{
+    std::cout << "Program solved successfully!" << std::endl;
+  }
+
+  std::cout << "Number of segments : " << segment_controls.size() << std::endl;
+
+  std::vector<double> t_solution;
+  std::vector<Eigen::MatrixXd> q_solution;
+
+  int T = 50;
+  double timestep = FLAGS_traj_duration / T;
+  int numberOfSegments = segment_controls.size() ;
+  double multiplier = FLAGS_traj_duration / (1 * numberOfSegments);
+
+  for (int segmentID = 0; segmentID < numberOfSegments; segmentID++)
+  {
+      auto optimal_coeffs = result.GetSolution(segment_controls[segmentID]);
+      auto optimal_trajectory = BezierCurve<double>(0, 1, optimal_coeffs);
+
+      for (int t = 0; t < T; t++)
+      {
+          double tStep= static_cast<double>(t) / T;
+          // std::cout << optimal_trajectory.value(tStep).transpose() << std::endl;
+
+          t_solution.push_back((segmentID * 1 + tStep) * multiplier);
+          q_solution.push_back(optimal_trajectory.value(tStep));
+      }
+
+      if (segmentID == (numberOfSegments - 1)){
+        t_solution.push_back(numberOfSegments * multiplier);
+        q_solution.push_back(optimal_trajectory.value(1));
+      }
+  }
+
+  for (auto elem : t_solution)
+    std::cout << elem << " ";
+  std::cout << std::endl;
+ 
+  for (auto elem : q_solution) 
+    std::cout << elem.transpose() << " " << std::endl;
+  std::cout << std::endl;
+
+  drake::trajectories::PiecewisePolynomial<double> trajectory_solution = 
+        drake::trajectories::PiecewisePolynomial<double>::FirstOrderHold(t_solution, q_solution);
+
+  systems::DiagramBuilder<double> builder;
+  // Adds a plant.
+  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
+      &builder, FLAGS_sim_dt);
+  
+  auto parser = multibody::Parser(&plant, &scene_graph);
+  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
+  const ModelDirectives directives = LoadModelDirectives(directives_file);
+  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
+
+  // const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
+  //                                                                   models[1].model_instance,
+  //                                                                   models[2].model_instance,
+  //                                                                   models[3].model_instance,
+  //                                                                   models[4].model_instance,
+  //                                                                   models[5].model_instance);
+
+  plant.Finalize();
+
+  int num_iiwa = 1;
+  int num_joints = 7;
+  StateFeedbackControllerInterface<double>* controller = nullptr;
+  VectorX<double> iiwa_kp, iiwa_kd, iiwa_ki;
+  SetPositionControlledIiwaGains(&iiwa_kp, &iiwa_ki, &iiwa_kd);
+  iiwa_kp = iiwa_kp.replicate(num_iiwa, 1).eval();
+  iiwa_kd = iiwa_kd.replicate(num_iiwa, 1).eval();
+  iiwa_ki = iiwa_ki.replicate(num_iiwa, 1).eval();
+  controller = builder.AddSystem<InverseDynamicsController<double>>(
+      plant, iiwa_kp, iiwa_ki, iiwa_kd,
+      false /* without feedforward acceleration */);
+
+  auto desired_state_from_position = builder.AddSystem<
+      StateInterpolatorWithDiscreteDerivative>(
+          num_joints, kIiwaLcmStatusPeriod,
+          true /* suppress_initial_transient */);
+
+  auto trajectory_source = builder.AddSystem<drake::systems::TrajectorySource<double>>(trajectory_solution);
+  
+  builder.Connect(trajectory_source->get_output_port(), desired_state_from_position->get_input_port());
+  builder.Connect(desired_state_from_position->get_output_port(), controller->get_input_port_desired_state());
+  builder.Connect(plant.get_state_output_port(), controller->get_input_port_estimated_state());
+  builder.Connect(controller->get_output_port_control(), plant.get_actuation_input_port());
+
+  // Create the visualizer
+  auto lcm = builder.AddSystem<systems::lcm::LcmInterfaceSystem>();
+  geometry::DrakeVisualizerd::AddToBuilder(&builder, scene_graph, lcm);
+
+  // Build the diagram.
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  auto plant_context = &plant.GetMyMutableContextFromRoot(context.get());
+
+  plant.SetPositions(plant_context, start_state);
+
+  Simulator<double> simulator(*diagram, std::move(context));
+  simulator.set_publish_every_time_step(true);
+  simulator.set_target_realtime_rate(FLAGS_target_realtime_rate);
+  simulator.Initialize();
+  simulator.AdvanceTo(T * timestep);
+}
+
 int RunExample() {
 
+  const int order = 3;
   Eigen::VectorXd q0(7);
   q0 << 0, 0.3, 0, -1.8, 0, 1, 1.57;
 
@@ -511,7 +644,7 @@ int RunExample() {
     regions_.emplace_back(std::make_unique<HPolyhedron>(polyhedron));
   }
 
-  auto& regions = gcs.AddRegions(regions_, 5, kMinimumDuration);
+  auto& regions = gcs.AddRegions(regions_, order, kMinimumDuration);
 
   auto& source = gcs.AddRegions(MakeConvexSets(Point(demo_a[0])), 0);
   auto& target = gcs.AddRegions(MakeConvexSets(Point(demo_a[1])), 0);
@@ -529,6 +662,244 @@ int RunExample() {
   auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
 
   VisualizeTrajectory(traj, result, execute_demo[0]);
+
+  // Add a minimum distance constraint to the GCS output
+
+  std::cout << "APPLY THE MINIMUM DISTANCE CONSTRAINT!" << std::endl;
+
+  systems::DiagramBuilder<double> builder;
+  auto [plant, scene_graph] = multibody::AddMultibodyPlantSceneGraph(
+      &builder, FLAGS_sim_dt);
+  
+  auto parser = multibody::Parser(&plant, &scene_graph);
+  const std::string directives_file = FindResourceOrThrow("drake/examples/gcs/manipulation/models/iiwa14_spheres_collision_welded_gripper.yaml");
+  const ModelDirectives directives = LoadModelDirectives(directives_file);
+  const std::vector<ModelInstanceInfo> models = ProcessModelDirectives(directives, &parser);
+
+  // const auto [iiwa_instance, wsg, shelf, binR, binL, table] = std::make_tuple(models[0].model_instance,
+  //                                                                   models[1].model_instance,
+  //                                                                   models[2].model_instance,
+  //                                                                   models[3].model_instance,
+  //                                                                   models[4].model_instance,
+  //                                                                   models[5].model_instance);
+
+  plant.Finalize();
+
+  // Build the plant
+  std::unique_ptr<drake::systems::Diagram<double>> diagram = builder.Build();
+  // Create a diagram-level context
+  std::unique_ptr<drake::systems::Context<double>> diagram_context = diagram->CreateDefaultContext();
+  drake::log()->debug("Plant built");
+
+  // Then create a subsystem context for the multibodyplant
+  drake::systems::Context<double>* plant_context =
+      &diagram->GetMutableSubsystemContext(plant, diagram_context.get());
+
+  std::unique_ptr<drake::solvers::MathematicalProgram> prog =
+      std::make_unique<drake::solvers::MathematicalProgram>();
+
+  const int numSegments = traj_control_points.size();
+  int num_positions = plant.num_positions();
+  int T = FLAGS_T;
+  
+  std::cout << order << " " << numSegments << " " << num_positions << " " << T << std::endl;
+
+  std::vector<MatrixX<symbolic::Variable>> segment_controls(numSegments);
+  std::vector<drake::trajectories::BezierCurve<drake::symbolic::Expression>> segment_trajectories(numSegments);
+  for (int i = 0; i < numSegments; i++)
+  {
+      segment_controls[i] = prog->NewContinuousVariables(num_positions, order + 1, "xu_" + std::to_string(i));
+      segment_trajectories[i] = BezierCurve<Expression>(0, 1, segment_controls[i].cast<drake::symbolic::Expression>());
+  }
+
+  for (int i = 0; i < (numSegments - 1); i++)
+  {
+      prog->AddLinearEqualityConstraint(segment_controls[i].col(order) == segment_controls[i + 1].col(0));
+  }
+
+  Eigen::MatrixXd start_ = VectorX<double>::Zero(num_positions);
+  start_ = execute_demo[0];
+  Eigen::MatrixXd end_ = VectorX<double>::Zero(num_positions);
+  end_ = execute_demo[1];
+
+  Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions);
+  auto xvars = prog->NewContinuousVariables(T * numSegments, num_positions, "xvars");
+
+  prog->AddBoundingBoxConstraint(start_.transpose(), start_.transpose(), xvars.row(0));
+  prog->AddBoundingBoxConstraint((end_ - goal_margin).transpose(), (end_ + goal_margin).transpose(), xvars.row(T * numSegments -1));
+
+  for (int t = 1; t < (T * numSegments); t++) {
+      prog->AddQuadraticCost(0.5 * (xvars.row(t) - xvars.row(t-1)).dot(xvars.row(t) - xvars.row(t-1)));
+  }
+
+  for (int segNum = 0; segNum < numSegments; segNum++)
+  {
+      for (int t = 0; t < T; t++) {
+          auto no_collision_constraint = std::make_shared<multibody::MinimumDistanceConstraint>(
+              &plant,
+              FLAGS_min_distance,
+              plant_context
+          );
+
+          double tStep= static_cast<double>(t) / T;
+          prog->AddLinearEqualityConstraint(xvars.row(segNum * T + t) == segment_trajectories[segNum].value(tStep).transpose());
+          prog->AddConstraint(no_collision_constraint, xvars.row(segNum * T + t));
+      }
+  }
+
+  for (int i = 0; i < numSegments; i++)
+  {
+      prog->SetInitialGuess(segment_controls[i], traj_control_points[i]);
+  }
+
+  drake::log()->debug("Deterministic program definition complete");
+
+  double risk_precision = 0.0001; // 10^-7
+
+  drake::solvers::SnoptSolver solver;
+  drake::solvers::SolverOptions options_;
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major iterations limit", 10000000);
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Print file", "ufo_snopt.out");
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Verify level", 0);
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major optimality tolerance", sqrt(FLAGS_function_precision));
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Major feasibility tolerance", sqrt(10 * risk_precision));
+  prog->SetSolverOption(drake::solvers::SnoptSolver::id(), "Function precision", FLAGS_function_precision);
+
+  drake::log()->debug("Solving deterministic program...");
+  drake::solvers::MathematicalProgramResult collision_free_result = solver.Solve(*prog);
+  drake::log()->debug("Deterministic program solved");
+
+  VisualizeTrajectory(segment_controls, collision_free_result, execute_demo[0]);
+
+  // To check the probability of collision between the robot and the environment,
+  // we need to define the list of bodies that make up the "robot", which we save
+  // in the Bullet world manager
+  ccopt::BulletWorldManager<double>* world_manager = new ccopt::BulletWorldManager<double>();
+  std::vector<std::string> robot_body_names{
+      "base"
+  };
+
+  for (const std::string body_name : robot_body_names) {
+      const std::vector<drake::geometry::GeometryId> robot_ids =
+          plant.GetCollisionGeometriesForBody(plant.GetBodyByName(body_name));
+      world_manager->AddRobotGeometryIds(robot_ids);
+      std::cout << "=====================\n" << body_name << std::endl;
+      for (auto id : robot_ids) {
+          drake::log()->info("ID: {}", id);
+      }
+  }
+
+  const std::vector<drake::geometry::GeometryId> floor_ids =
+      plant.GetCollisionGeometriesForBody(plant.GetBodyByName("table_body"));
+  std::cout << "=====================\n" << "floor" << std::endl;
+  for (auto id : floor_ids) {
+      drake::log()->info("ID: {}", id);
+  }
+
+  // We also need to define the bodies that are uncertain.
+  std::vector<std::string> uncertain_obstacle_names{
+      "table_body",
+      "shelves_body",
+      "top_and_bottom",
+  };
+
+  std::vector<drake::geometry::GeometryId> uncertain_obstacle_ids;
+  for (const std::string name : uncertain_obstacle_names) {
+      std::cout << "=====================\n" << name << std::endl;
+      // Get the geometry IDs corresponding to this obstacle
+      std::vector<drake::geometry::GeometryId> obstacle_ids =
+          plant.GetCollisionGeometriesForBody(
+              plant.GetBodyByName(name));
+      for (auto id : obstacle_ids) {
+          drake::log()->info("ID: {}", id);
+      }
+      // Append that to the vector of uncertain_obstacle_ids
+      uncertain_obstacle_ids.insert(uncertain_obstacle_ids.end(),
+                                    obstacle_ids.begin(),
+                                    obstacle_ids.end());
+  }
+
+  // We also need to define the bodies that are uncertain.
+  std::vector<std::string> uncertain_bin_names{
+      "binR",
+      "binL",
+  };
+
+  for (const std::string name : uncertain_bin_names) {
+      std::cout << "=====================\n" << name << std::endl;
+      // Get the geometry IDs corresponding to this obstacle
+      std::vector<drake::geometry::GeometryId> obstacle_ids =
+          plant.GetCollisionGeometriesForBody(
+              plant.GetBodyByName("bin_base", plant.GetModelInstanceByName(name)));
+      for (auto id : obstacle_ids) {
+          drake::log()->info("ID: {}", id);
+      }
+      // Append that to the vector of uncertain_obstacle_ids
+      uncertain_obstacle_ids.insert(uncertain_obstacle_ids.end(),
+                                    obstacle_ids.begin(),
+                                    obstacle_ids.end());
+  }
+
+  // Let's make both pillars uncertain in the x direction.
+  Eigen::Matrix3d uncertain_obstacle_covariance;
+  uncertain_obstacle_covariance << 0.1, 0.0, 0.0,
+                                    0.0, 0.1, 0.0,
+                                    0.0, 0.0, 0.1;
+  // Make a vector of n copies of the covariance, where n = the number of uncertain
+  // geometry IDs found above
+  std::vector<Eigen::Matrix3d> uncertain_obstacle_covariances;
+
+  for (int i = 0; i < static_cast<int>(uncertain_obstacle_ids.size()); i++){
+      uncertain_obstacle_covariances.push_back(uncertain_obstacle_covariance);
+  }
+
+  // what():  GetBodyByName(): There is no Body named 'iiwa' anywhere in the model 
+  // (valid names are: base, bin_base, body, iiwa_link_0, iiwa_link_1, iiwa_link_2,
+  //  iiwa_link_3, iiwa_link_4, iiwa_link_5, iiwa_link_6, iiwa_link_7, iiwa_link_ee, 
+  // iiwa_link_ee_kuka, left_finger, right_finger, shelves_body, table_body, 
+  // top_and_bottom, world)
+
+  // Next add a chance constraint covering the entire trajectory
+  auto collision_chance_constraint = std::make_shared<ccopt::CollisionChanceConstraint>(
+      &plant, plant_context, world_manager,
+      risk_precision,
+      FLAGS_delta,
+      numSegments * FLAGS_T,
+      FLAGS_use_max,
+      uncertain_obstacle_ids, uncertain_obstacle_covariances
+  );
+  // Add the chance constraint to the program
+  Eigen::Matrix<drake::symbolic::Variable, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> xvars_row_major(xvars);
+  Eigen::Map<drake::solvers::VectorXDecisionVariable> xvars_vectorized(xvars_row_major.data(), xvars_row_major.size());
+  drake::solvers::Binding<drake::solvers::Constraint> chance_constraint_bound =
+      prog->AddConstraint(collision_chance_constraint, xvars_vectorized);
+
+  // We'll seed the nonlinear solver with the solution from the minimum distance constraint problem
+  for (int i = 0; i < numSegments; i++)
+      prog->SetInitialGuess(segment_controls[i], collision_free_result.GetSolution(segment_controls[i]));
+
+  // That completes our setup for the chance-constrained mathematical program
+  drake::log()->debug("Chance-constrained program definition complete");
+
+  // Now the fun part: we can finally solve the problem! (don't forget to measure runtime)
+  drake::log()->debug("Solving chance-constrained program...");
+  auto start_time = std::chrono::high_resolution_clock::now();
+  drake::solvers::MathematicalProgramResult chance_constrained_result;
+  for (int i = 0; i < FLAGS_num_benchmark_runs; i++) {
+      // result = solver.Solve(*prog, guess, opts);
+      chance_constrained_result = solver.Solve(*prog);
+  }
+
+  auto stop_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop_time - start_time);
+  drake::log()->info("======================================================================================");
+  drake::log()->info("Solved {} chance-constrained optimization problems, avg. duration {} ms",
+                      FLAGS_num_benchmark_runs,
+                      double(duration.count()) / FLAGS_num_benchmark_runs);
+  drake::log()->info("Success? {}", chance_constrained_result.is_success());
+
+  // Visualize the results of the chance-constrained optimization, and report the risk incurred
+  VisualizeTrajectory(segment_controls, chance_constrained_result, execute_demo[0]);
 
   return 0;
 }

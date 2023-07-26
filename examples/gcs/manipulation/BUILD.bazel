@@ -136,6 +136,8 @@ drake_cc_binary(
     # causes timeouts in kcov.
     test_rule_tags = ["no_kcov"],
     deps = [
+        "//examples/scora/ccopt",
+        "//examples/scora/ProximityAlert:proximity_alert",
         ":iiwa_common",
         ":iiwa_lcm",
         ":kuka_torque_controller",
