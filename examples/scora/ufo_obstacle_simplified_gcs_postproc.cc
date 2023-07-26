@@ -90,7 +90,7 @@ using planning::trajectory_optimization::GcsTrajectoryOptimization;
 
 DEFINE_double(function_precision, 0.001,
               "SNOPT option.");
-DEFINE_double(delta, 1.5,
+DEFINE_double(delta, 0.2,
               "The maximum acceptable risk of collision over the entire trajectory.");
 DEFINE_double(min_distance, 0.5,
               "The minimum allowable distance between collision bodies during the trajectory.");
@@ -655,7 +655,7 @@ void DoMain() {
     end_(1) = 2.0;
     end_(2) = 1.0;
 
-    Eigen::MatrixXd goal_margin = 0.00 * VectorX<double>::Ones(num_positions);
+    Eigen::MatrixXd goal_margin = 0.01 * VectorX<double>::Ones(num_positions);
     auto xvars = prog->NewContinuousVariables(T * numSegments, num_positions, "xvars");
     
     prog->AddBoundingBoxConstraint(start_.transpose(), start_.transpose(), xvars.row(0));
@@ -811,6 +811,7 @@ void DoMain() {
         // result = solver.Solve(*prog, guess, opts);
         chance_constrained_result = solver.Solve(*prog);
     }
+
     auto stop_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop_time - start_time);
     drake::log()->info("======================================================================================");
@@ -819,7 +820,7 @@ void DoMain() {
                         double(duration.count()) / FLAGS_num_benchmark_runs);
     drake::log()->info("Success? {}", chance_constrained_result.is_success());
 
-    // // Visualize the results of the chance-constrained optimization, and report the risk incurred
+    // Visualize the results of the chance-constrained optimization, and report the risk incurred
     visualize_result(chance_constrained_result, segment_controls);
 
     // Validate with random trials
