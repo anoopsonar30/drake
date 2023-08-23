@@ -5,10 +5,12 @@
 #include <set>
 #include <vector>
 
-#include <drake_vendor/nlohmann/json.hpp>
 #include <gtest/gtest.h>
-#include <vtkCamera.h>
-#include <vtkMatrix4x4.h>
+#include <nlohmann/json.hpp>
+
+// To ease build system upkeep, we annotate VTK includes with their deps.
+#include <vtkCamera.h>     // vtkRenderingCore
+#include <vtkMatrix4x4.h>  // vtkCommonMath
 
 #include "drake/common/find_resource.h"
 #include "drake/common/fmt_eigen.h"
@@ -21,6 +23,10 @@
 #include "drake/geometry/render_gltf_client/internal_merge_gltf.h"
 #include "drake/geometry/render_gltf_client/render_engine_gltf_client_params.h"
 #include "drake/geometry/render_gltf_client/test/internal_sample_image_data.h"
+
+// This might *seem* to be unused, but don't remove it! We rely on this to dump
+// images to the console when calling `EXPECT_EQ(Image<...>, Image<...>)`.
+#include "drake/systems/sensors/test_utilities/image_compare.h"
 
 namespace drake {
 namespace geometry {
@@ -123,6 +129,13 @@ TEST_F(RenderEngineGltfClientTest, Constructor) {
   EXPECT_EQ(engine.get_params().cleanup, false);
 }
 
+// Confirms that the deprecated option doesn't crash anything.
+TEST_F(RenderEngineGltfClientTest, ConstructorDeprecation) {
+  Params test_params(params_);
+  test_params.default_label = render::RenderLabel::kUnspecified;
+  const RenderEngineGltfClient engine{test_params};
+}
+
 TEST_F(RenderEngineGltfClientTest, Clone) {
   const RenderEngineGltfClient engine{params_};
   const std::unique_ptr<RenderEngine> clone = engine.Clone();
@@ -132,8 +145,7 @@ TEST_F(RenderEngineGltfClientTest, Clone) {
 
   EXPECT_EQ(engine.get_params().GetUrl(), clone_engine->get_params().GetUrl());
   EXPECT_EQ(engine.get_params().verbose, clone_engine->get_params().verbose);
-  EXPECT_EQ(engine.get_params().cleanup,
-            clone_engine->get_params().cleanup);
+  EXPECT_EQ(engine.get_params().cleanup, clone_engine->get_params().cleanup);
   /* Cloning creates a new temporary directory, the underlying RenderClient is
    not cloned and as such a new temporary directory is created. */
   EXPECT_NE(engine.temp_directory(), clone_engine->temp_directory());
@@ -168,8 +180,11 @@ TEST_F(RenderEngineGltfClientTest, UpdateViewpoint) {
    via transpose, and using this inverted rotation to rotate the negated
    translation.  We do not need to be concerned about non-uniform scaling on the
    diagonal or the bottom row. */
-  auto transform_inverse = [](const Eigen::Matrix4d& mat) {
+  auto maybe_transform_inverse = [](const Eigen::Matrix4d& mat) {
     Matrix4d inverse{mat};
+#if VTK_VERSION_NUMBER > VTK_VERSION_CHECK(9, 1, 0)
+    return inverse;  // The bug (vtk#8883) was fixed in 9.1.0.
+#else
     // Invert the rotation via transpose.
     inverse.topLeftCorner<3, 3>().transposeInPlace();
     // Rotate the inverted translation.
@@ -177,6 +192,7 @@ TEST_F(RenderEngineGltfClientTest, UpdateViewpoint) {
     const Vector3d t_inv = inverse.topLeftCorner<3, 3>() * (-t);
     inverse.topRightCorner<3, 1>() = t_inv;
     return inverse;
+#endif
   };
   auto compare = [&](const Matrix4d& vtk, const Matrix4d& gltf) {
     constexpr double tolerance = 1e-9;
@@ -191,7 +207,7 @@ TEST_F(RenderEngineGltfClientTest, UpdateViewpoint) {
      of this matrix is what was supposed to be exported, since the "nodes" array
      in glTF is for world coordinate transforms. */
     // Compare the rotations.
-    const Matrix4d vtk_inv = transform_inverse(vtk);
+    const Matrix4d vtk_inv = maybe_transform_inverse(vtk);
     const Matrix3d R_vtk_inv = vtk_inv.topLeftCorner<3, 3>();
     const Matrix3d R_gltf = gltf.topLeftCorner<3, 3>();
     EXPECT_TRUE(R_vtk_inv.isApprox(R_gltf, tolerance)) << fmt::format(
@@ -408,15 +424,19 @@ TEST_F(RenderEngineGltfClientGltfTest, RegisteringMeshes) {
   const Tester::GltfRecord& record = gltfs.at(gltf_id);
   EXPECT_EQ(record.scale, scale_);
   EXPECT_EQ(record.label, label_);
-  // There are two nodes in the gltf, but only one root node.
-  EXPECT_EQ(record.contents["nodes"].size(), 2);
-  EXPECT_EQ(record.root_nodes.size(), 1);
-  // The pose of the stored matrix is drawn from the gltf directly.
-  EXPECT_EQ(record.contents["nodes"][record.root_nodes.begin()->first]["name"],
-            "root_tri");
-  EXPECT_TRUE(
-      CompareMatrices(record.root_nodes.begin()->second,
-                      RigidTransformd(Vector3d(1, 3, -2)).GetAsMatrix4()));
+  // There are three nodes in the gltf, but only two root nodes. One of the
+  // root nodes is empty.
+  EXPECT_EQ(record.contents["nodes"].size(), 3);
+  EXPECT_EQ(record.root_nodes.size(), 2);
+  // The root node data extracted directly from tri_tree.gltf.
+  const std::map<int, Matrix4<double>> expected_roots{
+      {1, RigidTransformd(Vector3d(1, 3, -2)).GetAsMatrix4()},    // root_tri
+      {2, RigidTransformd(Vector3d(-1, -3, 2)).GetAsMatrix4()}};  // empty_root
+  for (const int index : {1, 2}) {
+    EXPECT_TRUE(
+        CompareMatrices(record.root_nodes.at(index), expected_roots.at(index)))
+        << "Index: " << index;
+  }
   // The pose of the root node should have been set as part of its registration.
   // We're not testing it here because defining that pose is a bit more
   // elaborate. It is tested below in a dedicated test.
@@ -480,23 +500,30 @@ TEST_F(RenderEngineGltfClientGltfTest, PoseComputation) {
   const std::map<GeometryId, Tester::GltfRecord>& gltfs =
       Tester::gltfs(engine_);
   const Tester::GltfRecord& record = gltfs.at(gltf_id);
-  const Matrix4<double>& T_FN_expected = record.root_nodes.begin()->second;
+  for (const auto& [node_index, T_FN_expected] : record.root_nodes) {
+    const json& root = record.contents["nodes"][node_index];
+    SCOPED_TRACE(fmt::format("Node {}({})", root["name"].get<std::string>(),
+                             node_index));
+    // Confirm computation of X_WN during registration.
+    const Matrix4<double> X_WN_init = extract_T_WN(root);
+    const Matrix4<double> T_FN_init = extract_T_FN(X_WN_init, X_WG_, scale_);
+    EXPECT_TRUE(CompareMatrices(T_FN_init, T_FN_expected, 1e-15));
+  }
 
-  // Now confirm its pose was updated during registration to X_WG and scale.
-  const json& root = record.contents["nodes"][record.root_nodes.begin()->first];
-  const Matrix4<double> X_WN_init = extract_T_WN(root);
-  const Matrix4<double> T_FN_init = extract_T_FN(X_WN_init, X_WG_, scale_);
-  EXPECT_TRUE(CompareMatrices(T_FN_init, T_FN_expected, 1e-15));
-
-  // Now we'll pose the geometry and confirm the pose is as expected.
   const RigidTransformd X_WG_update(RollPitchYawd{M_PI * 0.5, 0, 3 * M_PI / 2},
                                     Vector3d(-3, 1, 2));
   engine_.UpdatePoses(
       std::unordered_map<GeometryId, RigidTransformd>{{gltf_id, X_WG_update}});
-  const Matrix4<double> T_WN_update = extract_T_WN(root);
-  const Matrix4<double> T_FN_update =
-      extract_T_FN(T_WN_update, X_WG_update, scale_);
-  EXPECT_TRUE(CompareMatrices(T_FN_update, T_FN_expected, 1e-15));
+  for (const auto& [node_index, T_FN_expected] : record.root_nodes) {
+    const json& root = record.contents["nodes"][node_index];
+    SCOPED_TRACE(fmt::format("Node {}({})", root["name"].get<std::string>(),
+                             node_index));
+    // Confirm computation of X_WN during UpdatePoses.
+    const Matrix4<double> T_WN_update = extract_T_WN(root);
+    const Matrix4<double> T_FN_update =
+        extract_T_FN(T_WN_update, X_WG_update, scale_);
+    EXPECT_TRUE(CompareMatrices(T_FN_update, T_FN_expected, 1e-15));
+  }
 }
 
 /* ExportScene() is responsible for merging gltf geometries into the VTK-made
@@ -505,7 +532,7 @@ TEST_F(RenderEngineGltfClientGltfTest, PoseComputation) {
    - The gltf data is present (it's been merged).
      - We're not validating all of the data; we've got unit tests on the
        merging code. We'll simply look for evidence that it has merged: its
-       root node.
+       root nodes.
    - If exporting for a label image, the materials should become simplified
      with only material.pbrMetallicRoughness.{baseColorFactor, emissiveFactor}.
  */
@@ -518,19 +545,21 @@ TEST_F(RenderEngineGltfClientGltfTest, ExportScene) {
    Node". */
   ASSERT_EQ(gltf_obj_only["nodes"].size(), 3);
 
-  /* Now we add the gltf. It adds two nodes: "root_tri" and "child_tri". */
+  /* Now we add the gltf. It adds three nodes: "empty_root", "root_tri", and
+   "child_tri". */
   AddGltf();
 
-  const json gltf_color  = ExportAndReadJson("color.gltf", ImageType::kColor);
-  ASSERT_EQ(gltf_color["nodes"].size(), 5);
-  bool gltf_root_present = false;
+  const json gltf_color = ExportAndReadJson("color.gltf", ImageType::kColor);
+  ASSERT_EQ(gltf_color["nodes"].size(), 6);
+  bool root_tri_present = false;
+  bool empty_root_present = false;
   for (const auto& n : gltf_color["nodes"]) {
-    if (n["name"].get<std::string>() == "root_tri") {
-      gltf_root_present = true;
-      break;
-    }
+    const std::string& name = n["name"].get<std::string>();
+    root_tri_present = root_tri_present || name == "root_tri";
+    empty_root_present = empty_root_present || name == "empty_root";
   }
-  EXPECT_TRUE(gltf_root_present);
+  EXPECT_TRUE(root_tri_present);
+  EXPECT_TRUE(empty_root_present);
 
   /* Finally, let's compare label and color. */
   auto find_mat_for_node = [](const json& gltf, std::string_view node_name) {
@@ -557,7 +586,6 @@ TEST_F(RenderEngineGltfClientGltfTest, ExportScene) {
   // We're not testing the actual differences. The fact that they're different
   // shows that something is being done. And observation of label images in the
   // wild will quickly report if what is being done is bad.
-
 
   // In the case of problems where we're writing the glTF file, we should throw
   // a (somewhat) meaningful message. We use an inaccessible file as proxy for

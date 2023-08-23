@@ -1,6 +1,9 @@
 import copy
+import hashlib
 import logging
 import numpy as np
+from pathlib import Path
+import re
 import sys
 import time
 
@@ -53,6 +56,12 @@ from pydrake.perception import (
 _logger = logging.getLogger("drake")
 
 
+def _to_pose(position, quaternion):
+    """Given pose parts, parses it into a RigidTransform.
+    """
+    return RigidTransform(Quaternion(wxyz=quaternion), p=position)
+
+
 class _Slider:
     """A slider with range [small-positive-value to 1.0]."""
 
@@ -83,6 +92,70 @@ class _Slider:
         return value, value_changed
 
 
+class _GeometryFileHasher:
+    """Calculates a checksum of external file(s) referenced by geometry
+    messages such as lcmt_viewer_load_robot or similar.
+
+    Each "on_..." method incorporates all of the external files cited by the
+    given argument (of a specific type) into the current hash. Files that are
+    named but cannot be opened are silently skipped.
+    """
+
+    def __init__(self):
+        self._paths = []
+        self._hasher = hashlib.sha256()
+
+    def value(self):
+        return self._hasher.hexdigest()
+
+    def _read_file(self, path: Path):
+        """Reads the given file and adds its content to the current hash.
+        Returns the file content (as ``bytes``, not ``str``).
+        Remembers the filename (for unit testing).
+        If the file is missing, silently returns an empty ``bytes``.
+        """
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+            self._hasher.update(content)
+            self._paths.append(path)
+            return content
+        except IOError:
+            return b""
+
+    def on_viewer_load_robot(self, message: lcmt_viewer_load_robot):
+        assert isinstance(message, lcmt_viewer_load_robot)
+        for link in message.link:
+            for geom in link.geom:
+                self.on_viewer_geometry_data(geom)
+
+    def on_viewer_geometry_data(self, message: lcmt_viewer_geometry_data):
+        assert isinstance(message, lcmt_viewer_geometry_data)
+        if (message.type == lcmt_viewer_geometry_data.MESH
+                and message.string_data):
+            self.on_mesh(Path(message.string_data))
+
+    def on_mesh(self, path: Path):
+        assert isinstance(path, Path)
+        content = self._read_file(path)
+        if path.suffix.lower() == ".obj":
+            for mtl_names in re.findall(rb"^\s*mtllib\s+(.*?)\s*$", content,
+                                        re.MULTILINE):
+                for mtl_name in mtl_names.decode("utf-8").split():
+                    self.on_mtl(path.parent / mtl_name)
+
+    def on_mtl(self, path: Path):
+        assert isinstance(path, Path)
+        content = self._read_file(path)
+        for tex_name in re.findall(rb"^\s*map_.*?\s+(\S+)\s*$", content,
+                                   re.MULTILINE):
+            self.on_texture(path.parent / tex_name.decode("utf-8"))
+
+    def on_texture(self, path: Path):
+        assert isinstance(path, Path)
+        self._read_file(path)
+
+
 class _ViewerApplet:
     """Displays lcmt_viewer_load_robot and lcmt_viewer_draw into MeshCat."""
 
@@ -98,6 +171,7 @@ class _ViewerApplet:
         self._meshcat = meshcat
         self._path = path
         self._load_message = None
+        self._load_message_mesh_checksum = None
         self._alpha_slider = _Slider(meshcat, alpha_slider_name)
         if should_accept_link is not None:
             self._should_accept_link = should_accept_link
@@ -116,9 +190,13 @@ class _ViewerApplet:
         # performance when the user is repeatedly viewing the same simulation
         # over and over again, since reloading a scene into Meshcat has high
         # latency.
+        hasher = _GeometryFileHasher()
+        hasher.on_viewer_load_robot(message)
+        mesh_checksum = hasher.value()
         if self._load_message is not None:
             if (message.num_links == self._load_message.num_links
-                    and message.encode() == self._load_message.encode()):
+                    and message.encode() == self._load_message.encode()
+                    and mesh_checksum == self._load_message_mesh_checksum):
                 _logger.info("Ignoring duplicate load message")
                 return
 
@@ -127,6 +205,7 @@ class _ViewerApplet:
 
         self._waiting_for_first_draw_message = True
         self._load_message = message
+        self._load_message_mesh_checksum = mesh_checksum
 
     def _build_links(self):
         # Make all of our (ViewerApplet's) geometry invisible so that the
@@ -164,7 +243,7 @@ class _ViewerApplet:
             link_name = message.link_name[i].replace("::", "/")
             robot_num = message.robot_num[i]
             link_path = f"{self._path}/{robot_num}/{link_name}"
-            pose = self._to_pose(message.position[i], message.quaternion[i])
+            pose = _to_pose(message.position[i], message.quaternion[i])
             self._meshcat.SetTransform(path=link_path, X_ParentPath=pose)
         if self._waiting_for_first_draw_message:
             self._waiting_for_first_draw_message = False
@@ -225,7 +304,7 @@ class _ViewerApplet:
         vertices = np.reshape(vertices, (3, num_verts), order='F')
         faces = np.reshape(faces, (3, num_faces), order='F')
         rgba = Rgba(*geom.color)
-        pose = self._to_pose(geom.position, geom.quaternion)
+        pose = _to_pose(geom.position, geom.quaternion)
         return (vertices, faces, rgba, pose)
 
     def _convert_geom(self, geom):
@@ -269,26 +348,8 @@ class _ViewerApplet:
             _logger.warning(f"Unknown geom.type of {geom.type}")
             return (None, None, None)
         rgba = Rgba(*geom.color)
-        pose = self._to_pose(geom.position, geom.quaternion)
+        pose = _to_pose(geom.position, geom.quaternion)
         return (shape, rgba, pose)
-
-    @staticmethod
-    def _to_pose(position, quaternion):
-        """Given pose parts of an lcmt_viewer_geometry_data, parses it into a
-        RigidTransform.
-        """
-        (p_x, p_y, p_z) = position
-        (q_w, q_x, q_y, q_z) = quaternion
-        return RigidTransform(
-            R=RotationMatrix(
-                quaternion=Quaternion(
-                    w=q_w,
-                    x=q_x,
-                    y=q_y,
-                    z=q_z,
-                ),
-            ),
-            p=(p_x, p_y, p_z))
 
 
 class _ContactApplet:
@@ -490,6 +551,70 @@ class _PointCloudApplet:
         )
 
 
+class _DrawFrameApplet:
+    """Applet to visualize triads in meshcat"""
+    def __init__(self, *, meshcat):
+        """Constructs an applet."""
+        self._meshcat = meshcat
+        # previously published link names
+        self._channel_link_map = {}
+
+    def _channel_to_meshcat_path(self, channel):
+        assert channel.startswith("DRAKE_DRAW_FRAMES")
+        if channel == "DRAKE_DRAW_FRAMES":
+            return "/DRAKE_DRAW_FRAMES/default"
+        else:
+            # E.g., `DRAKE_DRAW_FRAMES_FOO` => `/DRAKE_DRAW_FRAMES/FOO`.
+            suffix = channel[len("DRAKE_DRAW_FRAMES_"):]
+            return f"/DRAKE_DRAW_FRAMES/{suffix}"
+
+    def _add_meshcat_triad(self, path, X_PT):
+        length = 0.25
+        radius = 0.01
+        opacity = 1.0
+        self._meshcat.SetTransform(path, X_PT)
+        # x-axis
+        X_TG = RigidTransform(
+            RotationMatrix.MakeYRotation(np.pi / 2), [length / 2.0, 0, 0]
+        )
+        self._meshcat.SetTransform(path + "/x-axis", X_TG)
+        self._meshcat.SetObject(
+            path + "/x-axis", Cylinder(radius, length), Rgba(1, 0, 0, opacity)
+        )
+        # y-axis
+        X_TG = RigidTransform(
+            RotationMatrix.MakeXRotation(np.pi / 2), [0, length / 2.0, 0]
+        )
+        self._meshcat.SetTransform(path + "/y-axis", X_TG)
+        self._meshcat.SetObject(
+            path + "/y-axis", Cylinder(radius, length), Rgba(0, 1, 0, opacity)
+        )
+        # z-axis
+        X_TG = RigidTransform([0, 0, length / 2.0])
+        self._meshcat.SetTransform(path + "/z-axis", X_TG)
+        self._meshcat.SetObject(
+            path + "/z-axis", Cylinder(radius, length), Rgba(0, 0, 1, opacity)
+        )
+
+    def on_frame_update(self, channel, message):
+        """Handler to update triads in meshcat. It updates poses sent using
+        the lcmt_viewer_draw message."""
+        channel_path = self._channel_to_meshcat_path(channel)
+
+        # delete old frames if the link names have changed
+        link_names = set(message.link_name)
+        if self._channel_link_map.get(channel) != link_names:
+            self._meshcat.Delete(path=channel_path)
+        self._channel_link_map[channel] = link_names
+
+        for i in range(message.num_links):
+            link_name = message.link_name[i].replace("::", "/")
+            link_path = f"{channel_path}/{link_name}"
+            self._add_meshcat_triad(path=link_path,
+                                    X_PT=_to_pose(message.position[i],
+                                                  message.quaternion[i]))
+
+
 class Meldis:
     """
     MeshCat LCM Display Server (MeLDiS)
@@ -503,7 +628,8 @@ class Meldis:
     Refer to the pydrake.visualization.meldis module docs for details.
     """
 
-    def __init__(self, *, meshcat_host=None, meshcat_port=None):
+    def __init__(self, *, meshcat_host=None, meshcat_port=None,
+                 environment_map: Path = None):
         # Bookkeeping for update throttling.
         self._last_update_time = time.time()
 
@@ -522,6 +648,8 @@ class Meldis:
                                port=meshcat_port,
                                show_stats_plot=False)
         self.meshcat = Meshcat(params=params)
+        if environment_map is not None:
+            self.meshcat.SetEnvironmentMap(environment_map)
 
         def is_inertia_link(link_name):
             return "::InertiaVisualizer::" in link_name
@@ -591,6 +719,12 @@ class Meldis:
         self._subscribe_multichannel(regex="DRAKE_POINT_CLOUD.*",
                                      message_type=lcmt_point_cloud,
                                      handler=point_cloud.on_point_cloud)
+
+        # Subscribe to all the frame display channels.
+        draw_frame = _DrawFrameApplet(meshcat=self.meshcat)
+        self._subscribe_multichannel(regex="DRAKE_DRAW_FRAMES.*",
+                                     message_type=lcmt_viewer_draw,
+                                     handler=draw_frame.on_frame_update)
 
         # Bookkeeping for automatic shutdown.
         self._last_poll = None

@@ -15,12 +15,16 @@ namespace optimization {
 S = X₁ ∩ X₂ ∩ ... ∩ Xₙ =
     {x | x ∈ X₁, x ∈ X₂, ..., x ∈ Xₙ}
 
+Special behavior for IsEmpty: The intersection of zero sets (i.e. when we
+have sets_.size() == 0) is always nonempty. This includes the zero-dimensional
+case, which we treat as being {0}, the unique zero-dimensional vector space.
+
 @ingroup geometry_optimization */
 class Intersection final : public ConvexSet {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Intersection)
 
-  /** Constructs a default (zero-dimensional) set. */
+  /** Constructs a default (zero-dimensional, nonempty) set. */
   Intersection();
 
   /** Constructs the intersection from a vector of convex sets. */
@@ -41,7 +45,9 @@ class Intersection final : public ConvexSet {
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
-  bool DoIsBounded() const final;
+  std::optional<bool> DoIsBoundedShortcut() const final;
+
+  bool DoIsEmpty() const final;
 
   std::optional<Eigen::VectorXd> DoMaybeGetPoint() const final;
 

@@ -1711,14 +1711,14 @@ GTEST_TEST(MultibodyPlantTest, ReversedWeldError) {
   // reflect that.
   DRAKE_EXPECT_THROWS_MESSAGE(
       plant.Finalize(),
-      "This multibody tree already has a mobilizer connecting "
-      "inboard frame \\(index=0\\) and outboard frame \\(index=\\d*\\). "
-      "More than one mobilizer between two frames is not allowed.");
+      ".*already has a joint.*extra_welds_to_world.*joint.*not allowed.*");
 }
 
-// Utility to verify that the only ports of MultibodyPlant that are feedthrough
-// are acceleration and reaction force ports.
-bool OnlyAccelerationAndReactionPortsFeedthrough(
+// Utility to verify the subset of output ports we expect to be direct a
+// feedthrough of the inputs.
+// @returns `true` iff only if a closed subset of the ports is direct
+// feedthrough.
+bool VerifyFeedthroughPorts(
     const MultibodyPlant<double>& plant) {
   // Create a set of the indices of all ports that can be feedthrough.
   std::set<int> ok_to_feedthrough;
@@ -1730,6 +1730,10 @@ bool OnlyAccelerationAndReactionPortsFeedthrough(
         plant.get_generalized_acceleration_output_port(i).get_index());
   ok_to_feedthrough.insert(
       plant.get_body_spatial_accelerations_output_port().get_index());
+  if (plant.is_discrete()) {
+    ok_to_feedthrough.insert(
+        plant.get_contact_results_output_port().get_index());
+  }
 
   // Now find all the feedthrough ports and make sure they are on the
   // list of expected feedthrough ports.
@@ -1824,7 +1828,7 @@ GTEST_TEST(MultibodyPlantTest, CollisionGeometryRegistration) {
 
   // Only accelerations and joint reaction forces feedthrough, even with the
   // new ports related to SceneGraph interaction.
-  EXPECT_TRUE(OnlyAccelerationAndReactionPortsFeedthrough(plant));
+  EXPECT_TRUE(VerifyFeedthroughPorts(plant));
 
   EXPECT_EQ(plant.num_visual_geometries(), 0);
   EXPECT_EQ(plant.num_collision_geometries(), 3);
@@ -2770,7 +2774,7 @@ class KukaArmTest : public ::testing::TestWithParam<double> {
 
     // Only accelerations and joint reaction forces feedthrough, for either
     // continuous or discrete plants.
-    EXPECT_TRUE(OnlyAccelerationAndReactionPortsFeedthrough(*plant_));
+    EXPECT_TRUE(VerifyFeedthroughPorts(*plant_));
 
     EXPECT_EQ(plant_->num_positions(), 7);
     EXPECT_EQ(plant_->num_velocities(), 7);
@@ -3840,6 +3844,56 @@ GTEST_TEST(MultibodyPlantTest, AutoDiffAcrobotParameters) {
                               MatrixCompareType::relative));
 }
 
+GTEST_TEST(MultibodyPlantTests, ConstraintActiveStatus) {
+  // Set up a plant with 3 constraints with arbitrary parameters.
+  MultibodyPlant<double> plant(0.01);
+  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  const Body<double>& body_A =
+      plant.AddRigidBody("body_A", SpatialInertia<double>{});
+  const Body<double>& body_B =
+      plant.AddRigidBody("body_B", SpatialInertia<double>{});
+  const RevoluteJoint<double>& world_A =
+      plant.AddJoint<RevoluteJoint>("world_A", plant.world_body(), std::nullopt,
+                                    body_A, std::nullopt, Vector3d::UnitZ());
+  const RevoluteJoint<double>& A_B = plant.AddJoint<RevoluteJoint>(
+      "A_B", body_A, std::nullopt, body_B, std::nullopt, Vector3d::UnitZ());
+  MultibodyConstraintId coupler_id =
+      plant.AddCouplerConstraint(world_A, A_B, 2.3);
+  MultibodyConstraintId distance_id = plant.AddDistanceConstraint(
+      body_A, Vector3d(1.0, 2.0, 3.0), body_B, Vector3d(4.0, 5.0, 6.0), 2.0);
+  MultibodyConstraintId ball_id = plant.AddBallConstraint(
+      body_A, Vector3d(-1.0, -2.0, -3.0), body_B, Vector3d(-4.0, -5.0, -6.0));
+
+  plant.Finalize();
+
+  std::unique_ptr<Context<double>> context = plant.CreateDefaultContext();
+
+  // Verify all constraints are active in a default context.
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, coupler_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, distance_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, ball_id));
+
+  // Set all constraints to inactive.
+  plant.SetConstraintActiveStatus(context.get(), coupler_id, false);
+  plant.SetConstraintActiveStatus(context.get(), distance_id, false);
+  plant.SetConstraintActiveStatus(context.get(), ball_id, false);
+
+  // Verify all constraints are inactive in the context.
+  EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, coupler_id));
+  EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, distance_id));
+  EXPECT_FALSE(plant.GetConstraintActiveStatus(*context, ball_id));
+
+  // Set all constraints to back to active.
+  plant.SetConstraintActiveStatus(context.get(), coupler_id, true);
+  plant.SetConstraintActiveStatus(context.get(), distance_id, true);
+  plant.SetConstraintActiveStatus(context.get(), ball_id, true);
+
+  // Verify all constraints are active in the context.
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, coupler_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, distance_id));
+  EXPECT_TRUE(plant.GetConstraintActiveStatus(*context, ball_id));
+}
+
 GTEST_TEST(MultibodyPlantTests, FixedOffsetFrameFunctions) {
   MultibodyPlant<double> plant(0.0);
   const Body<double>& body_B = plant.AddRigidBody("body_B",
@@ -4570,6 +4624,78 @@ GTEST_TEST(MultibodyPlantTest, GetMutableSceneGraphPreFinalize) {
   plant.Finalize();
   DRAKE_EXPECT_THROWS_MESSAGE(plant.GetMutableSceneGraphPreFinalize(),
                               ".*!is_finalized.*");
+}
+
+GTEST_TEST(MultibodyPlantTest, RenameModelInstance) {
+  // Much of the functionality is tested as part of *Tree. Here we test the
+  // additional semantics of *Plant.
+  MultibodyPlant<double> plant(0.0);
+  SceneGraph<double> scene_graph;
+  plant.RegisterAsSourceForSceneGraph(&scene_graph);
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      plant.RenameModelInstance(ModelInstanceIndex(99), "invalid"),
+      ".*no model instance id 99.*");
+
+  // These renames are allowed; it is up to applications to decide if they are
+  // a good idea in a given situation.
+  EXPECT_NO_THROW(plant.RenameModelInstance(world_model_instance(), "Mars"));
+  EXPECT_NO_THROW(plant.RenameModelInstance(default_model_instance(), "hmm"));
+
+  std::string robot = R"""(
+<robot name="a">
+  <link name="b">
+    <collision>
+      <geometry>
+        <sphere radius="0.25"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>
+)""";
+
+  Parser parser(&plant);
+  auto models = parser.AddModelsFromString(robot, "urdf");
+  ASSERT_EQ(models.size(), 1);
+  auto& body = plant.GetBodyByName("b");
+  auto frame_id = plant.GetBodyFrameIdOrThrow(body.index());
+  auto& inspector = scene_graph.model_inspector();
+  ASSERT_EQ(inspector.GetName(frame_id), "a::b");
+  auto geoms = inspector.GetGeometries(frame_id);
+  ASSERT_EQ(geoms.size(), 1);
+  ASSERT_EQ(inspector.GetName(geoms[0]), "a::Sphere");
+
+  plant.RenameModelInstance(models[0], "zzz");
+  // Renaming affects scoped geometry names.
+  EXPECT_EQ(inspector.GetName(frame_id), "zzz::b");
+  EXPECT_EQ(inspector.GetName(geoms[0]), "zzz::Sphere");
+  // Renaming allows reload.
+  EXPECT_NO_THROW(parser.AddModelsFromString(robot, "urdf"));
+
+  // New names must be unique.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      plant.RenameModelInstance(models[0], "a"),
+      ".*must be unique.*");
+
+  // Renaming will silently skip frames and geometries that don't match the
+  // typical scoped-name pattern.
+
+  // Oddly renamed frames can evade renaming.
+  scene_graph.RenameFrame(frame_id, "something_random");
+  plant.RenameModelInstance(models[0], "xoxo");
+  EXPECT_EQ(inspector.GetName(frame_id), "something_random");
+  EXPECT_EQ(inspector.GetName(geoms[0]), "xoxo::Sphere");
+
+  // As can peculiarly renamed geometries.
+  scene_graph.RenameGeometry(geoms[0], "anything_else");
+  plant.RenameModelInstance(models[0], "bbbb");
+  EXPECT_EQ(inspector.GetName(frame_id), "something_random");
+  EXPECT_EQ(inspector.GetName(geoms[0]), "anything_else");
+
+  plant.Finalize();
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      plant.RenameModelInstance(models[0], "too_late"),
+      ".*finalized.*");
 }
 
 }  // namespace

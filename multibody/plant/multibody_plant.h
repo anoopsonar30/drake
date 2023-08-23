@@ -92,6 +92,12 @@ struct JointLockingCacheData {
   // @}
 };
 
+// Wrapper struct for using std::map<MultibodyConstraintId, bool> as a Value
+// type for an abstract parameter.
+struct ConstraintActiveStatusMap {
+  std::map<MultibodyConstraintId, bool> map;
+};
+
 // This struct contains the parameters to compute forces to enforce
 // no-interpenetration between bodies by a penalty method.
 struct ContactByPenaltyMethodParameters {
@@ -601,9 +607,11 @@ call to Finalize() must be performed. This call will:
 - Build the underlying tree structure of the multibody model,
 - declare the plant's state,
 - declare the plant's input and output ports,
-- declare collision filters to ignore collisions:
-  - between bodies connected by a joint,
-  - within subgraphs of welded bodies.
+- declare collision filters to ignore collisions among rigid bodies:
+  - between rigid bodies connected by a joint,
+  - within subgraphs of welded rigid bodies.
+Note that MultibodyPlant will *not* introduce *any* collision filters
+on deformable bodies.
 
 <!-- TODO(amcastro-tri): Consider making the actual geometry registration
      with GS AFTER Finalize() so that we can tell if there are any bodies
@@ -896,8 +904,6 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
       const std::string& name, ModelInstanceIndex model_instance,
       const SpatialInertia<double>& M_BBo_B) {
     DRAKE_MBP_THROW_IF_FINALIZED();
-    // Make note in the graph.
-    multibody_graph_.AddBody(name, model_instance);
     // Add the actual rigid body to the model.
     const RigidBody<T>& body = this->mutable_tree().AddRigidBody(
         name, model_instance, M_BBo_B);
@@ -972,7 +978,6 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     DRAKE_MBP_THROW_IF_FINALIZED();
     const JointType<T>& result =
         this->mutable_tree().AddJoint(std::move(joint));
-    RegisterJointInGraph(result);
     return result;
   }
 
@@ -1047,7 +1052,9 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   /// @endcode
   ///
   /// @throws std::exception if `this` %MultibodyPlant already contains a joint
-  /// with the given `name`.  See HasJointNamed(), Joint::name().
+  ///     with the given `name`.  See HasJointNamed(), Joint::name().
+  /// @throws std::exception if parent and child are the same body or if
+  ///     they are not both from `this` %MultibodyPlant.
   ///
   /// @see The Joint class's documentation for further details on how a Joint
   /// is defined.
@@ -1065,7 +1072,6 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     const JointType<T>& result =
         this->mutable_tree().template AddJoint<JointType>(
             name, parent, X_PF, child, X_BM, std::forward<Args>(args)...);
-    RegisterJointInGraph(result);
     return result;
   }
 
@@ -1151,6 +1157,18 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     return this->mutable_tree().AddModelInstance(name);
   }
 
+  /// Renames an existing model instance.
+  ///
+  /// @param[in] model_instance
+  ///   The instance to rename.
+  /// @param[in] name
+  ///   A string that uniquely identifies the instance within `this` model.
+  /// @throws std::exception if called after Finalize().
+  /// @throws std::exception if `model_instance` is not a valid index.
+  /// @throws std::exception if HasModelInstanceNamed(`name`) is true.
+  void RenameModelInstance(ModelInstanceIndex model_instance,
+                           const std::string& name);
+
   /// This method must be called after all elements in the model (joints,
   /// bodies, force elements, constraints, etc.) are added and before any
   /// computations are performed.
@@ -1190,6 +1208,20 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   /// the contact solver with set_discrete_contact_solver() or in the
   /// MultibodyPlantConfig, or to re-define the model so that such a constraint
   /// is not needed.
+  ///
+  /// Each constraint is identified with a MultibodyConstraintId returned
+  /// by the function used to add it (e.g. AddCouplerConstraint()). It is
+  /// possible to recover constraint specification parameters for each
+  /// constraint with various introspection functions (e.g.
+  /// get_coupler_constraint_specs()). Each constraint has an "active" status
+  /// that is set to true by default. Query a constraint's active status with
+  /// GetConstraintActiveStatus() and set its active status with
+  /// SetConstraintActiveStatus().
+  ///
+  /// <!-- TODO(joemasterjohn): As different constraint types are added in a
+  /// piecemeal fashion, the burden of managing and maintaining these different
+  /// constraints becomes cumbersome for the plant. Consider a new
+  /// MultibodyConstraintManager class to consolidate constraint management. -->
   /// @{
 
   /// Returns the total number of constraints specified by the user.
@@ -1262,6 +1294,21 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   get_ball_constraint_specs() const {
     return ball_constraints_specs_;
   }
+
+  /// Returns the active status of the constraint given by `id` in `context`.
+  /// @throws std::exception if the %MultibodyPlant has not been finalized.
+  /// @throws std::exception if `id` does not belong to any multibody constraint
+  /// in `context`.
+  bool GetConstraintActiveStatus(const systems::Context<T>& context,
+                                 MultibodyConstraintId id) const;
+
+  /// Sets the active status of the constraint given by `id` in `context`.
+  /// @throws std::exception if the %MultibodyPlant has not been finalized.
+  /// @throws std::exception if `context` == nullptr
+  /// @throws std::exception if `id` does not belong to any multibody constraint
+  /// in `context`.
+  void SetConstraintActiveStatus(systems::Context<T>* context,
+                                 MultibodyConstraintId id, bool status) const;
 
   /// Defines a holonomic constraint between two single-dof joints `joint0`
   /// and `joint1` with positions q₀ and q₁, respectively, such that q₀ = ρ⋅q₁ +
@@ -1532,8 +1579,9 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   const std::vector<geometry::GeometryId>& GetCollisionGeometriesForBody(
       const Body<T>& body) const;
 
-  /// Excludes the collision geometries between two given collision filter
-  /// groups.
+  /// Excludes the rigid collision geometries between two given collision filter
+  /// groups. Note that collisions involving deformable geometries are not
+  /// filtered by this function.
   /// @pre RegisterAsSourceForSceneGraph() has been called.
   /// @pre Finalize() has *not* been called.
   void ExcludeCollisionGeometriesWithCollisionFilterGroupPair(
@@ -1832,6 +1880,8 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   void set_contact_model(ContactModel model);
 
   /// Sets the contact solver type used for discrete %MultibodyPlant models.
+  /// @warning This function is a no-op for continuous models (when
+  /// is_discrete() is false.)
   /// @throws std::exception iff called post-finalize.
   void set_discrete_contact_solver(DiscreteContactSolver contact_solver);
 
@@ -4765,13 +4815,19 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     systems::CacheIndex joint_locking_data;
   };
 
+  // This struct stores in one single place all indices related to
+  // MultibodyPlant parameters. These are initialized at Finalize()
+  // when the plant declares parameters.
+  struct ParameterIndices {
+    systems::AbstractParameterIndex constraint_active_status;
+  };
+
   // Constructor to bridge testing from MultibodyTree to MultibodyPlant.
   // WARNING: This may *not* result in a plant with a valid state. Use
   // sparingly to test forwarding methods when the overhead is high to
   // reproduce the testing (e.g. benchmarks).
-  explicit MultibodyPlant(
-      std::unique_ptr<internal::MultibodyTree<T>> tree_in,
-      double time_step = 0);
+  explicit MultibodyPlant(std::unique_ptr<internal::MultibodyTree<T>> tree_in,
+                          double time_step = 0);
 
   // Helper method for throwing an exception within public methods that should
   // not be called post-finalize. The invoking method should pass its name so
@@ -4838,8 +4894,10 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
 
   // Helper method to apply default collision filters. By default, we don't
   // consider collisions:
-  // * between geometries affixed to bodies connected by a joint
-  // * within subgraphs of welded-together bodies
+  // * between rigid geometries affixed to bodies connected by a joint
+  // * within subgraphs of welded-together rigid bodies
+  // Note that collisions involving deformable bodies are not filtered by
+  // default.
   void ApplyDefaultCollisionFilters();
 
   // For discrete models, MultibodyPlant uses a penalty method to impose joint
@@ -4865,16 +4923,14 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // that still guarantees stability.
   void SetUpJointLimitsParameters();
 
-  // This is a *temporary* method to eliminate visual geometries from collision
-  // while we wait for geometry roles to be introduced.
-  // TODO(SeanCurtis-TRI): Remove this when geometry roles are introduced.
-  void ExcludeCollisionsWithVisualGeometry();
-
   // Helper method to declare state, cache entries, and ports after Finalize().
   void DeclareStateCacheAndPorts();
 
-  // Declare the system-level cache entries specific to MultibodyPlant.
+  // Declares the system-level cache entries specific to MultibodyPlant.
   void DeclareCacheEntries();
+
+  // Declares the system-level parameters specific to MultibodyPlant.
+  void DeclareParameters();
 
   // Estimates a global set of point contact parameters given a
   // `penetration_allowance`. See set_penetration_allowance()` for details.
@@ -5001,17 +5057,15 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
       const systems::Context<T>& context,
       ContactResults<T>* contact_results) const;
 
-  // This method accumulates both point and hydroelastic contact results into
-  // contact_results when the model is discrete.
-  // @param[out] contact_results is fully overwritten
-  void CalcContactResultsDiscrete(const systems::Context<T>& context,
-                                  ContactResults<T>* contact_results) const;
-
   // Evaluate contact results.
   const ContactResults<T>& EvalContactResults(
       const systems::Context<T>& context) const {
-    return this->get_cache_entry(cache_indexes_.contact_results)
-        .template Eval<ContactResults<T>>(context);
+    if (this->is_discrete()) {
+      return discrete_update_manager_->EvalContactResults(context);
+    } else {
+      return this->get_cache_entry(cache_indexes_.contact_results)
+          .template Eval<ContactResults<T>>(context);
+    }
   }
 
   // Calc method for the reaction forces output port.
@@ -5205,16 +5259,23 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // GeometryId is invalid or unknown to this plant.
   BodyIndex FindBodyByGeometryId(geometry::GeometryId) const;
 
-  // Registers a joint in the graph.
-  void RegisterJointInGraph(const Joint<T>& joint) {
-    const std::string type_name = joint.type_name();
-    if (!multibody_graph_.IsJointTypeRegistered(type_name)) {
-      multibody_graph_.RegisterJointType(type_name);
-    }
-    // Note changes in the graph.
-    multibody_graph_.AddJoint(joint.name(), joint.model_instance(), type_name,
-                              joint.parent_body().index(),
-                              joint.child_body().index());
+  // Gets the parameter corresponding to constraint active status.
+  const std::map<MultibodyConstraintId, bool>& GetConstraintActiveStatus(
+      const systems::Context<T>& context) const {
+    return context.get_parameters()
+        .template get_abstract_parameter<internal::ConstraintActiveStatusMap>(
+            parameter_indices_.constraint_active_status)
+        .map;
+  }
+
+  // Gets the mutable parameter corresponding to constraint active status.
+  std::map<MultibodyConstraintId, bool>& GetMutableConstraintActiveStatus(
+      systems::Context<T>* context) const {
+    return context->get_mutable_parameters()
+        .template get_mutable_abstract_parameter<
+            internal::ConstraintActiveStatusMap>(
+            parameter_indices_.constraint_active_status)
+        .map;
   }
 
   // Removes `this` MultibodyPlant's ability to convert to the scalar types
@@ -5412,10 +5473,6 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   std::vector<systems::OutputPortIndex>
       instance_generalized_contact_forces_output_ports_;
 
-  // A graph representing the body/joint topology of the multibody plant (Not
-  // to be confused with the spanning-tree model we will build for analysis.)
-  internal::MultibodyGraph multibody_graph_;
-
   // If the plant is modeled as a discrete system with periodic updates,
   // time_step_ corresponds to the period of those updates. Otherwise, if the
   // plant is modeled as a continuous system, it is exactly zero.
@@ -5446,9 +5503,12 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // All MultibodyPlant cache indexes are stored in cache_indexes_.
   CacheIndexes cache_indexes_;
 
+  // All MultibodyPlant parameter indices are stored in parameter_indices_.
+  ParameterIndices parameter_indices_;
+
   // Whether to apply collsion filters to adjacent bodies at Finalize().
   bool adjacent_bodies_collision_filters_{
-    MultibodyPlantConfig{}.adjacent_bodies_collision_filters};
+      MultibodyPlantConfig{}.adjacent_bodies_collision_filters};
 };
 
 /// @cond

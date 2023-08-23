@@ -9,10 +9,11 @@
 #include <string_view>
 #include <utility>
 
-#include <vtkCamera.h>
-#include <vtkGLTFExporter.h>
-#include <vtkMatrix4x4.h>
-#include <vtkVersionMacros.h>
+// To ease build system upkeep, we annotate VTK includes with their deps.
+#include <vtkCamera.h>         // vtkRenderingCore
+#include <vtkGLTFExporter.h>   // vtkIOExport
+#include <vtkMatrix4x4.h>      // vtkCommonMath
+#include <vtkVersionMacros.h>  // vtkCommonCore
 
 #include "drake/common/never_destroyed.h"
 #include "drake/common/ssize.h"
@@ -53,7 +54,9 @@ int64_t GetNextSceneId() {
 /* RenderEngineGltfClient always produces a gltf+json file.  See also:
  https://www.khronos.org/registry/glTF/specs/2.0/glTF-2.0.html#_media_type_registrations
  */
-std::string MimeType() { return "model/gltf+json"; }
+std::string MimeType() {
+  return "model/gltf+json";
+}
 
 /* Drake uses an explicit projection matrix with RenderEngineVtk to fine tune
  the displayed viewing frustum tailored to the sensor being rendered.  The
@@ -157,11 +160,10 @@ std::string GetSceneFileName(ImageType image_type, int64_t scene_id) {
                      ImageTypeToString(image_type));
 }
 
-/* Searches the gltf and identifies all *mesh* root nodes: nodes that are not
-  referenced in a node's "children" list but do have the "mesh" attribute.
-  Returns a map from the *index* of a root node to that node's transform *in the
-  file* (T_FN). The transform can consist of rotation, translation, *and* scale
-  components. */
+/* Searches the gltf and identifies all root nodes (a node that doesn't appear
+ in a "children" list). Returns a map from the *index* of each root node to that
+ node's transform *in the file* (T_FN). The transform can consist of rotation,
+ translation, *and* scale components. */
 std::map<int, Matrix4<double>> FindRootNodes(const nlohmann::json& gltf) {
   std::map<int, Matrix4<double>> roots;
   std::set<int> indices;
@@ -178,38 +180,40 @@ std::map<int, Matrix4<double>> FindRootNodes(const nlohmann::json& gltf) {
         }
       }
     }
-    // Cull non-meshes and compute transforms.
+    // TODO(SeanCurtis-TRI): We could test to make sure that the root node is
+    // actually referenced in a scene (or even the default scene) and omit it
+    // from the set if it's not.
+
+    // Compute transforms for the identified root nodes.
     for (int n : indices) {
       const auto& node = nodes[n];
-      if (node.contains("mesh")) {
-        Matrix4<double> T_FN;
-        if (node.contains("matrix")) {
-          T_FN = EigenMatrixFromGltfMatrix(node["matrix"]);
-        } else {
-          T_FN = Matrix4<double>::Identity();
-          if (node.contains("translation")) {
-            const auto& t = node["translation"];
-            const Vector3<double> p_GN(t[0].get<double>(), t[1].get<double>(),
-                                       t[2].get<double>());
-            T_FN.block<3, 1>(0, 3) = p_GN.transpose();
-          }
-          if (node.contains("rotation")) {
-            const auto& q = node["rotation"];
-            // glTF rotation is (x, y, z, w) quaternion. Eigen is (w, x, y, z).
-            const Quaternion<double> quat_GN(
-                q[3].get<double>(), q[0].get<double>(), q[1].get<double>(),
-                q[2].get<double>());
-            T_FN.block<3, 3>(0, 0) = math::RotationMatrixd(quat_GN).matrix();
-          }
-          if (node.contains("scale")) {
-            const auto& s = node["scale"];
-            for (int i = 0; i < 3; ++i) {
-              T_FN.block<3, 1>(0, i) *= s[i].get<double>();
-            }
+      Matrix4<double> T_FN;
+      if (node.contains("matrix")) {
+        T_FN = EigenMatrixFromGltfMatrix(node["matrix"]);
+      } else {
+        T_FN = Matrix4<double>::Identity();
+        if (node.contains("translation")) {
+          const auto& t = node["translation"];
+          const Vector3<double> p_GN(t[0].get<double>(), t[1].get<double>(),
+                                     t[2].get<double>());
+          T_FN.block<3, 1>(0, 3) = p_GN.transpose();
+        }
+        if (node.contains("rotation")) {
+          const auto& q = node["rotation"];
+          // glTF rotation is (x, y, z, w) quaternion. Eigen is (w, x, y, z).
+          const Quaternion<double> quat_GN(
+              q[3].get<double>(), q[0].get<double>(), q[1].get<double>(),
+              q[2].get<double>());
+          T_FN.block<3, 3>(0, 0) = math::RotationMatrixd(quat_GN).matrix();
+        }
+        if (node.contains("scale")) {
+          const auto& s = node["scale"];
+          for (int i = 0; i < 3; ++i) {
+            T_FN.block<3, 1>(0, i) *= s[i].get<double>();
           }
         }
-        roots.insert(roots.end(), {n, T_FN});
       }
+      roots.insert(roots.end(), {n, T_FN});
     }
   }
 
@@ -310,7 +314,13 @@ void ChangeToLabelMaterials(nlohmann::json* gltf, const ColorD& color) {
 RenderEngineGltfClient::RenderEngineGltfClient(
     const RenderEngineGltfClientParams& parameters)
     : RenderEngineVtk({.default_label = parameters.default_label}),
-      render_client_{std::make_unique<RenderClient>(parameters)} {}
+      render_client_{std::make_unique<RenderClient>(parameters)} {
+  if (parameters.default_label.has_value()) {
+    static const logging::Warn log_once(
+        "RenderEngineGltfClient(): the default_label configuration option is "
+        "deprecated and will be removed from Drake on or after 2023-12-01.");
+  }
+}
 
 RenderEngineGltfClient::RenderEngineGltfClient(
     const RenderEngineGltfClient& other)
@@ -325,6 +335,9 @@ std::unique_ptr<RenderEngine> RenderEngineGltfClient::DoClone() const {
 
 void RenderEngineGltfClient::UpdateViewpoint(
     const math::RigidTransformd& X_WC) {
+#if VTK_VERSION_NUMBER > VTK_VERSION_CHECK(9, 1, 0)
+  RenderEngineVtk::UpdateViewpoint(X_WC);
+#else
   /* The vtkGLTFExporter populates the camera matrix in "nodes" incorrectly in
    VTK 9.1.0.  It should be providing the inverted modelview transformation
    matrix since the "nodes" array is to contain global transformations.  See:
@@ -333,11 +346,9 @@ void RenderEngineGltfClient::UpdateViewpoint(
 
    When VTK is updated, RenderEngineGltfClient::UpdateViewpoint can be deleted
    as RenderEngineVtk::UpdateViewpoint will correctly update the transforms on
-   the cameras. */
-#if VTK_VERSION_NUMBER > VTK_VERSION_CHECK(9, 1, 0)
-#error "UpdateViewpoint can be removed, modified transform no longer needed."
-#endif
-  /* Build the alternate transform, which consists of both an inversion of the
+   the cameras.
+
+   Build the alternate transform, which consists of both an inversion of the
    input transformation as well as a coordinate system inversion.  For the
    coordinate inversion, we must account for:
 
@@ -378,6 +389,7 @@ void RenderEngineGltfClient::UpdateViewpoint(
   hacked_matrix(2, 3) *= -1.0;  // -l
   math::RigidTransformd X_WC_hacked{hacked_matrix};
   RenderEngineVtk::UpdateViewpoint(X_WC_hacked);
+#endif
 }
 
 void RenderEngineGltfClient::DoRenderColorImage(
@@ -560,7 +572,7 @@ void RenderEngineGltfClient::ExportScene(const std::string& export_path,
   // be up to date after closing it. Now we can check for errors.
   if (!f) {
     throw std::runtime_error(
-      "RenderEngineGltfClient: Error writing exported scene data to disk.");
+        "RenderEngineGltfClient: Error writing exported scene data to disk.");
   }
 }
 
@@ -597,25 +609,24 @@ void RenderEngineGltfClient::ImplementGeometry(const Mesh& mesh,
 
 void RenderEngineGltfClient::ImplementMesh(
     const std::filesystem::path& mesh_path, double scale, void* user_data) {
+  auto& data = *static_cast<RegistrationData*>(user_data);
   const std::string extension = Mesh(mesh_path.string()).extension();
   if (extension == ".obj") {
-    ImplementObj(mesh_path.string(), scale, user_data);
+    data.accepted = ImplementObj(mesh_path.string(), scale, data);
   } else if (extension == ".gltf") {
-    ImplementGltf(mesh_path, scale, user_data);
-  } else   {
-    auto* data = static_cast<RegistrationData*>(user_data);
-    data->accepted = false;
+    data.accepted = ImplementGltf(mesh_path, scale, data);
+  } else {
     static const logging::Warn one_time(
         "RenderEngineGltfClient only supports Mesh/Convex specifications which "
         "use .obj or .gltf files. Mesh specifications using other mesh types "
         "(e.g., .stl, .dae, etc.) will be ignored.");
+    data.accepted = false;
   }
 }
 
-void RenderEngineGltfClient::ImplementGltf(
-    const std::filesystem::path& gltf_path, double scale, void* user_data) {
-  auto& data = *static_cast<RenderEngineVtk::RegistrationData*>(user_data);
-
+bool RenderEngineGltfClient::ImplementGltf(
+    const std::filesystem::path& gltf_path, double scale,
+    const RenderEngineVtk::RegistrationData& data) {
   nlohmann::json mesh_data = ReadJsonFile(gltf_path);
 
   // TODO(SeanCurtis-TRI) What to do about a gltf that has no materials? We need
@@ -630,6 +641,7 @@ void RenderEngineGltfClient::ImplementGltf(
   gltfs_.insert({data.id,
                  {std::move(mesh_data), std::move(root_nodes), scale,
                   GetRenderLabelOrThrow(data.properties)}});
+  return true;
 }
 
 Eigen::Matrix4d RenderEngineGltfClient::CameraModelViewTransformMatrix(

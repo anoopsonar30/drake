@@ -5,10 +5,12 @@
 
 #include <Eigen/Dense>
 #include <gtest/gtest.h>
-#include <vtkCellData.h>
-#include <vtkNew.h>
-#include <vtkPlaneSource.h>
-#include <vtkSmartPointer.h>
+
+// To ease build system upkeep, we annotate VTK includes with their deps.
+#include <vtkCellData.h>      // vtkCommonDataModel
+#include <vtkNew.h>           // vtkCommonCore
+#include <vtkPlaneSource.h>   // vtkFiltersSources
+#include <vtkSmartPointer.h>  // vtkCommonCore
 
 namespace drake {
 namespace geometry {
@@ -27,16 +29,17 @@ struct Point {
   double z;
 };
 
+// clang-format off
 const Point kExpectedPointSet[kNumPoints] = {
   Point{ kHalfSize, -kHalfSize, 0.},
   Point{ kHalfSize,  kHalfSize, 0.},
   Point{-kHalfSize, -kHalfSize, 0.},
   Point{-kHalfSize,  kHalfSize, 0.}
 };
+// clang-format on
 
 GTEST_TEST(PointsCorrespondenceTest, PlaneCreationTest) {
-  vtkSmartPointer<vtkPlaneSource> dut =
-      CreateSquarePlane(kSize);
+  vtkSmartPointer<vtkPlaneSource> dut = CreateSquarePlane(kSize);
 
   EXPECT_EQ(kNumPoints, dut->GetOutput()->GetPoints()->GetNumberOfPoints());
   for (int i = 0; i < kNumPoints; ++i) {
@@ -52,18 +55,17 @@ GTEST_TEST(PointsCorrespondenceTest, PlaneCreationTest) {
 // Verifies whether the conversion is correct.
 GTEST_TEST(ConvertToVtkTransformTest, ConversionTest) {
   const math::RigidTransformd expected(
-       Eigen::AngleAxisd(1., Eigen::Vector3d(1. / std::sqrt(3.),
-                                             1. / std::sqrt(3.),
-                                             1. / std::sqrt(3.))),
-       Eigen::Vector3d(1., 2., 3.));
+      Eigen::AngleAxisd(1.,
+                        Eigen::Vector3d(1. / std::sqrt(3.), 1. / std::sqrt(3.),
+                                        1. / std::sqrt(3.))),
+      Eigen::Vector3d(1., 2., 3.));
 
   auto dut = ConvertToVtkTransform(expected);
 
   for (int i = 0; i < 4; ++i) {
     for (int j = 0; j < 4; ++j) {
       EXPECT_NEAR(expected.GetAsMatrix4()(i, j),
-                  dut->GetMatrix()->GetElement(i, j),
-                  kTolerance);
+                  dut->GetMatrix()->GetElement(i, j), kTolerance);
     }
   }
 }

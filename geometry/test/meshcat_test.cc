@@ -1,12 +1,14 @@
 #include "drake/geometry/meshcat.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <thread>
+#include <vector>
 
-#include <drake_vendor/msgpack.hpp>
 #include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <msgpack.hpp>
 
 #include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
@@ -106,18 +108,41 @@ GTEST_TEST(MeshcatTest, ConstructMultiple) {
   EXPECT_NE(meshcat.web_url(), meshcat2.web_url());
 }
 
-GTEST_TEST(MeshcatTest, Ports) {
-  Meshcat meshcat(7050);
-  EXPECT_EQ(meshcat.port(), 7050);
+// We'll assume that nothing else on the machine is using this port.
+// This will have false positives if something else was using the port.
+GTEST_TEST(MeshcatTest, HardCodedPort) {
+  // Use a port greater than 8000, to make sure the user can step outside our
+  // default range of [7000, 7999].
+  const int specific_port = 8422;
+  Meshcat meshcat(specific_port);
+  EXPECT_EQ(meshcat.port(), specific_port);
+}
+
+GTEST_TEST(MeshcatTest, DefaultPort) {
+  // The default constructor gets a default port.
+  Meshcat meshcat;
+  const int port = meshcat.port();
+  EXPECT_GE(port, 7000);
+  EXPECT_LE(port, 7999);
 
   // Can't open the same port twice.
-  DRAKE_EXPECT_THROWS_MESSAGE(Meshcat(7050),
+  DRAKE_EXPECT_THROWS_MESSAGE(Meshcat(port),
                               "Meshcat failed to open a websocket port.");
+}
 
-  // The default constructor gets a default port.
-  Meshcat m3;
-  EXPECT_GE(m3.port(), 7000);
-  EXPECT_LE(m3.port(), 7099);
+GTEST_TEST(MeshcatTest, EphemeralPort) {
+  // Use port 0 to choose an ephemeral port:
+  //  https://en.wikipedia.org/wiki/Ephemeral_port
+  Meshcat meshcat(0);
+  EXPECT_GE(meshcat.port(), 32768);
+
+  // Try clicking a button to make sure the number was correct.
+  meshcat.AddButton("button");
+  CheckWebsocketCommand(meshcat, R"""({
+      "type": "button",
+      "name": "button"
+    })""", {}, {});
+  EXPECT_EQ(meshcat.GetButtonClicks("button"), 1);
 }
 
 // Use a basic web_url_pattern to affect web_url() and ws_url(). The pattern
@@ -584,6 +609,46 @@ GTEST_TEST(MeshcatTest, SetPropertyDouble) {
   EXPECT_EQ(data.path, "/Cameras/default/rotated/<object>");
   EXPECT_EQ(data.property, "zoom");
   EXPECT_EQ(data.value, 2.0);
+}
+
+GTEST_TEST(MeshcatTest, SetEnvironmentMap) {
+  Meshcat meshcat;
+  EXPECT_FALSE(meshcat.HasPath("/Background/<object>"));
+  EXPECT_TRUE(
+      meshcat.GetPackedProperty("/Background/<object>", "environment_map")
+          .empty());
+
+  // Set the map to a valid image.
+  const std::filesystem::path env_map(
+      FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
+  EXPECT_NO_THROW(meshcat.SetEnvironmentMap(env_map));
+  EXPECT_TRUE(meshcat.HasPath("/Background/<object>"));
+
+  std::string property =
+      meshcat.GetPackedProperty("/Background/<object>", "environment_map");
+  msgpack::object_handle oh = msgpack::unpack(property.data(), property.size());
+  auto data = oh.get().as<internal::SetPropertyData<std::string>>();
+  EXPECT_EQ(data.type, "set_property");
+  EXPECT_EQ(data.path, "/Background/<object>");
+  EXPECT_EQ(data.property, "environment_map");
+  EXPECT_THAT(data.value, testing::StartsWith("data:image/png;base64"));
+
+  // Clear the map with an empty string.
+  EXPECT_NO_THROW(meshcat.SetEnvironmentMap(""));
+  EXPECT_TRUE(meshcat.HasPath("/Background/<object>"));
+
+  property =
+      meshcat.GetPackedProperty("/Background/<object>", "environment_map");
+  oh = msgpack::unpack(property.data(), property.size());
+  data = oh.get().as<internal::SetPropertyData<std::string>>();
+  EXPECT_EQ(data.type, "set_property");
+  EXPECT_EQ(data.path, "/Background/<object>");
+  EXPECT_EQ(data.property, "environment_map");
+  EXPECT_EQ(data.value, "");
+
+  // An invalid map throws.
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.SetEnvironmentMap("invalid_file.png"),
+                              "Requested environment map cannot be read.+");
 }
 
 GTEST_TEST(MeshcatTest, Buttons) {
@@ -1095,6 +1160,55 @@ GTEST_TEST(MeshcatTest, ResetRenderMode) {
   EXPECT_FALSE(meshcat.GetPackedProperty("/Background", "visible").empty());
   EXPECT_FALSE(meshcat.GetPackedProperty("/Grid", "visible").empty());
   EXPECT_FALSE(meshcat.GetPackedProperty("/Axes", "visible").empty());
+}
+
+GTEST_TEST(MeshcatTest, SetCameraTarget) {
+  Meshcat meshcat;
+  meshcat.SetCameraTarget({1, 2, 3});
+  // The actual meshcat message has the p_WT re-expressed in a y-up world frame.
+  CheckWebsocketCommand(meshcat, {}, 1, R"""({
+      "type": "set_target",
+      "value": [1, 3, -2]
+    })""");
+}
+
+GTEST_TEST(MeshcatTest, SetCameraPose) {
+  Meshcat meshcat;
+  meshcat.SetCameraPose({1, 2, 3}, {-2, -3, -4});
+  // The actual meshcat messages have the p_WT re-expressed in a y-up world
+  // frame.
+
+  // SetCameraTarget() called on <-2, -3, -4>.
+  CheckWebsocketCommand(meshcat, {}, 3, R"""({
+      "type": "set_target",
+      "value": [-2, -4, 3]
+    })""");
+
+  // /Cameras/default should have an identity transform.
+  {
+    std::string transform = meshcat.GetPackedTransform("/Cameras/default");
+    msgpack::object_handle oh =
+        msgpack::unpack(transform.data(), transform.size());
+    auto data = oh.get().as<internal::SetTransformData>();
+    EXPECT_EQ(data.type, "set_transform");
+    EXPECT_EQ(data.path, "/Cameras/default");
+    Eigen::Map<Eigen::Matrix4d> matrix(data.matrix);
+    EXPECT_TRUE(CompareMatrices(matrix, Eigen::Matrix4d::Identity()));
+  }
+
+  // /Cameras/default/rotated/<object> should have a position value equal to
+  // <1, 3, -2>.
+  {
+    std::string property = meshcat.GetPackedProperty(
+        "/Cameras/default/rotated/<object>", "position");
+    msgpack::object_handle oh =
+        msgpack::unpack(property.data(), property.size());
+    auto data = oh.get().as<internal::SetPropertyData<std::vector<double>>>();
+    EXPECT_EQ(data.type, "set_property");
+    EXPECT_EQ(data.path, "/Cameras/default/rotated/<object>");
+    EXPECT_EQ(data.property, "position");
+    EXPECT_EQ(data.value, std::vector({1.0, 3.0, -2.0}));
+  }
 }
 
 GTEST_TEST(MeshcatTest, StaticHtml) {

@@ -284,16 +284,19 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
       return certified_polytope_;
     }
 
+    /** Each plane index is mapped to a vector of polynomials. */
     [[nodiscard]] const std::unordered_map<int, Vector3<symbolic::Polynomial>>&
     a() const {
       return a_;
     }
 
+    /** Each plane index is mapped to a polynomial, */
     [[nodiscard]] const std::unordered_map<int, symbolic::Polynomial>& b()
         const {
       return b_;
     }
 
+    /** The number of iterations taken to search for the result. */
     [[nodiscard]] int num_iter() const { return num_iter_; }
 
    private:
@@ -578,7 +581,8 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
   struct FindPolytopeGivenLagrangianResult {
     Eigen::MatrixXd C;
     Eigen::MatrixXd d;
-    // a[i].dot(x) + b[i] = 0 is the separation plane for separating_planes_[i].
+    // a[i].dot(x) + b[i] = 0 is the separation plane for
+    // this->separating_planes()[i].
     std::unordered_map<int, Vector3<symbolic::Polynomial>> a;
     std::unordered_map<int, symbolic::Polynomial> b;
     Eigen::VectorXd ellipsoid_margins;

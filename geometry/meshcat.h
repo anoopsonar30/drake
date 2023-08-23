@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -38,8 +39,9 @@ struct MeshcatParams {
   std::string host{"*"};
 
   /** Meshcat will listen on the given http `port`. If no port is specified,
-  then it will listen on the first available port starting at 7000 (up to 7099).
-  @pre We require `port` >= 1024. */
+  then it will listen on the first available port starting at 7000 (up to 7999).
+  If port 0 is specified, it will listen on an arbitrary "ephemeral" port.
+  @pre We require `port` == 0 || `port` >= 1024. */
   std::optional<int> port{std::nullopt};
 
   /** The `web_url_pattern` may be used to change the web_url() (and therefore
@@ -142,8 +144,9 @@ class Meshcat {
   enum SideOfFaceToRender { kFrontSide = 0, kBackSide = 1, kDoubleSide = 2 };
 
   /** Constructs the %Meshcat instance on `port`. If no port is specified,
-  it will listen on the first available port starting at 7000 (up to 7099).
-  @pre We require `port` >= 1024.
+  it will listen on the first available port starting at 7000 (up to 7999).
+  If port 0 is specified, it will listen on an arbitrary "ephemeral" port.
+  @pre We require `port` == 0 || `port` >= 1024.
   @throws std::exception if no requested `port` is available. */
   explicit Meshcat(std::optional<int> port = std::nullopt);
 
@@ -429,9 +432,52 @@ class Meshcat {
                        double xmin = -1, double xmax = 1, double ymin = -1,
                        double ymax = 1);
 
-  /** Resets the default camera, background, grid lines, and axes to their
-   default settings. */
+  /** Resets the default camera, camera target, background, grid lines, and axes
+   to their default settings. */
   void ResetRenderMode();
+
+  // TODO(SeanCurtis-TRI): Once meshcat supports animation of camera target,
+  // add the ability to animate this and SetCameraPose().
+
+  /** Positions the camera's view target point T to the location in
+   `target_in_world` (`p_WT`).
+
+   If the camera is orthographic (i.e., by calling Set2DRenderMode() or
+   SetCamera(OrthographicCamera)), this will have no effect.
+
+   @warning Setting the target position to be coincident with the camera
+   position will lead to undefined behavior.
+
+   @param target_in_world the position of the target point T in Drake's z-up
+               world frame (p_WT). */
+  void SetCameraTarget(const Eigen::Vector3d& target_in_world);
+
+  /** A convenience function for positioning the camera and its view target
+   in the world frame. The camera is placed at `camera_in_world` and looks
+   toward `target_in_world`. The camera is oriented around this view direction
+   so that the camera's up vector points in the positive Wz direction as much
+   as possible.
+
+   Unlike SetCameraTarget() this can be used to orient orthographic cameras
+   as well.
+
+   @note This is Drake's z-up world frame and not the three.js world frame
+   you'd have to use if you set the "position" on the camera directly.
+
+   @warning The behavior is undefined if camera and target positions are
+   coincident.
+
+   @param camera_in_world the position of the camera's origin C in Drake's z-up
+               world frame (p_WC).
+   @param target_in_world the position of the target point T in Drake's z-up
+               world frame (p_WT). */
+  void SetCameraPose(const Eigen::Vector3d& camera_in_world,
+                     const Eigen::Vector3d& target_in_world);
+
+  // TODO(SeanCurtis-TRI): Consider the API:
+  //  void SetCameraPose(const RigidTransformd& X_WC, bool target_distance = 1);
+  // We'll have to confirm that picking arbitrary rotations R_WC doesn't
+  // fight badly with the camera controller.
 
   /** Set the RigidTransform for a given path in the scene tree relative to its
   parent path. An object's pose is the concatenation of all of the transforms
@@ -559,6 +605,24 @@ class Meshcat {
       std::string_view path, std::string property,
       const std::vector<double>& value,
       const std::optional<double>& time_in_recording = std::nullopt);
+
+  /** Sets the *environment* texture. For objects with physically-based
+   rendering (PBR) material properties (e.g., metallic surfaces), this defines
+   the luminance environment, contributing to total illumination and appearing
+   in reflections.
+
+   The image should be of a format typically supported by web browsers: e.g.,
+   jpg, png, etc. Furthermore, the image must be an
+   <a href="https://en.wikipedia.org/wiki/Equirectangular_projection">
+   equirectangular image</a> (as opposed to a
+   <a href="https://en.wikipedia.org/wiki/Cube_mapping">cube-map</a>).
+
+   If the path is empty, the environment map will be cleared.
+
+   @throws if `image_path` is *not* empty and the file isn't accessible.
+   @pre If `image_path` names an accessible file, it is an appropriate image
+        type. */
+  void SetEnvironmentMap(const std::filesystem::path& image_path);
 
   // TODO(russt): Support multiple animations, by name.  Currently "default" is
   // hard-coded in the meshcat javascript.

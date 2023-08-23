@@ -83,6 +83,9 @@ drake_cc_library(
         "//common/schema:transform",
         "//geometry:rgba",
         "//geometry/render:render_camera",
+        "//geometry/render_gl:render_engine_gl_params",
+        "//geometry/render_gltf_client:render_engine_gltf_client_params",
+        "//geometry/render_vtk:render_engine_vtk_params",
     ],
 )
 
@@ -101,8 +104,10 @@ drake_cc_library(
     deps = [
         ":camera_info",
         ":rgbd_sensor",
+        ":rgbd_sensor_async",
         ":sim_rgbd_sensor",
         "//geometry/render_gl",
+        "//geometry/render_gltf_client",
         "//geometry/render_vtk",
         "//math:geometric_transform",
         "//multibody/parsing:scoped_names",
@@ -201,6 +206,7 @@ drake_cc_library(
         ":lcm_image_traits",
         "//lcmtypes:image_array",
         "@libpng",
+        "@vtk//:vtkCommonCore",
         "@vtk//:vtkIOImage",
         "@zlib",
     ],
@@ -357,21 +363,25 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "//common/yaml:yaml_io",
-        "//geometry/render_gl",
+        "//geometry/render_vtk",
         "@fmt",
     ],
 )
 
 drake_cc_googletest(
     name = "camera_config_functions_test",
+    allow_network = ["render_gltf_client"],
     tags = vtk_test_tags(),
     deps = [
         ":camera_config_functions",
         ":image_to_lcm_image_array_t",
+        ":rgbd_sensor_async",
         ":sim_rgbd_sensor",
         "//common/test_utilities:expect_throws_message",
         "//common/yaml:yaml_io",
         "//geometry/render_gl",
+        "//geometry/render_gltf_client",
+        "//geometry/render_vtk",
         "//lcm:drake_lcm",
         "//systems/lcm:lcm_publisher_system",
     ],
@@ -412,7 +422,23 @@ drake_cc_googletest(
         ":image_writer",
         "//common:temp_directory",
         "//common/test_utilities",
-        "@vtk//:vtkIOImage",
+        "//systems/sensors/test_utilities:image_compare",
+    ],
+)
+
+drake_cc_googletest(
+    name = "image_writer_free_functions_test",
+    deps = [
+        ":image_writer",
+        "//common:temp_directory",
+        "//systems/sensors/test_utilities:image_compare",
+    ],
+)
+
+drake_cc_googletest(
+    name = "pixel_types_test",
+    deps = [
+        ":image",
     ],
 )
 
@@ -508,6 +534,7 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "optitrack_receiver_test",
+    copts = ["-Wno-deprecated-declarations"],
     deps = [
         ":optitrack_receiver",
         "//common/test_utilities:eigen_matrix_compare",
@@ -518,6 +545,7 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "optitrack_sender_test",
+    copts = ["-Wno-deprecated-declarations"],
     deps = [
         ":optitrack_sender",
         "@optitrack_driver//lcmtypes:optitrack_lcmtypes",

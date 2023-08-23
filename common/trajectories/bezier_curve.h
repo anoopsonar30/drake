@@ -52,8 +52,44 @@ class BezierCurve final : public trajectories::Trajectory<T> {
   T BernsteinBasis(int i, const T& time,
                    std::optional<int> order = std::nullopt) const;
 
-  /** Returns a reference to the control points which define the curve. */
+  /** Returns a const reference to the control points which define the curve. */
   const MatrixX<T>& control_points() const { return control_points_; }
+
+  /** Supports writing optimizations using the control points as decision
+   variables.  This method returns the matrix, `M`, defining the control points
+   of the `order` derivative in the form:
+   <pre>
+   derivative.control_points() = this.control_points() * M
+   </pre>
+   For instance, since we have
+   <pre>
+   derivative.control_points().col(k) = this.control_points() * M.col(k),
+   </pre>
+   constraining the kth control point of the `n`th derivative to be in [ub,
+   lb], could be done with:
+   @code
+   auto M = curve.AsLinearInControlPoints(n);
+   for (int i=0; i<curve.rows(); ++i) {
+     auto c = std::make_shared<solvers::LinearConstraint>(
+       M.col(k).transpose(), Vector1d(lb(i)), Vector1d(ub(i)));
+     prog.AddConstraint(c, curve.row(i).transpose());
+   }
+   @endcode
+   Iterating over the rows of the control points is the natural sparsity pattern
+   here (since `M` is the same for all rows).  For instance, we also have
+   <pre>
+   derivative.control_points().row(k).T = M.T * this.control_points().row(k).T,
+   </pre> or
+   <pre>
+   vec(derivative.control_points().T) = blockMT * vec(this.control_points().T),
+   blockMT = [ M.T,   0, .... 0 ]
+             [   0, M.T, 0, ... ]
+             [      ...         ]
+             [  ...    , 0, M.T ].
+   </pre>
+   @pre derivative_order >= 0. */
+  Eigen::SparseMatrix<double> AsLinearInControlPoints(
+      int derivative_order = 1) const;
 
   // Required methods for trajectories::Trajectory interface.
 
@@ -85,6 +121,7 @@ class BezierCurve final : public trajectories::Trajectory<T> {
   T end_time() const override { return end_time_; }
 
  private:
+  /* Calculates the control points of the derivative curve. */
   MatrixX<T> CalcDerivativePoints(int derivative_order) const;
 
   bool do_has_derivative() const override { return true; }

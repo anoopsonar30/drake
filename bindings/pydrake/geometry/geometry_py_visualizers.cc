@@ -270,6 +270,10 @@ void DoScalarIndependentDefinitions(py::module m) {
             cls_doc.Set2dRenderMode.doc)
         .def("ResetRenderMode", &Class::ResetRenderMode,
             cls_doc.ResetRenderMode.doc)
+        .def("SetCameraTarget", &Class::SetCameraTarget,
+            py::arg("target_in_world"), cls_doc.SetCameraTarget.doc)
+        .def("SetCameraPose", &Class::SetCameraPose, py::arg("camera_in_world"),
+            py::arg("target_in_world"), cls_doc.SetCameraPose.doc)
         .def("SetTransform",
             py::overload_cast<std::string_view, const math::RigidTransformd&,
                 const std::optional<double>&>(&Class::SetTransform),
@@ -304,6 +308,8 @@ void DoScalarIndependentDefinitions(py::module m) {
             py::arg("path"), py::arg("property"), py::arg("value"),
             py::arg("time_in_recording") = std::nullopt,
             cls_doc.SetProperty.doc_vector_double)
+        .def("SetEnvironmentMap", &Class::SetEnvironmentMap,
+            py::arg("image_path"), cls_doc.SetEnvironmentMap.doc)
         .def("SetAnimation", &Class::SetAnimation, py::arg("animation"),
             +cls_doc.SetAnimation.doc)
         .def("AddButton", &Class::AddButton, py::arg("name"),

@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/convex_set.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/math/rigid_transform.h"
@@ -22,12 +23,20 @@ interior of the set).
 Note: Unlike the half-space representation, this definition means the set is
 always bounded (hence the name polytope, instead of polyhedron).
 
+A VPolytope is empty if and only if it is composed of zero vertices, i.e.,
+if vertices_.cols() == 0. This includes the zero-dimensional case. If
+vertices_.rows() == 0 but vertices_.cols() > 0, we treat this as having one or
+more copies of 0 in the zero-dimensional vector space {0}. If vertices_.rows()
+and vertices_.cols() are zero, we treat this as no points in {0}, which is
+empty.
+
 @ingroup geometry_optimization */
 class VPolytope final : public ConvexSet {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(VPolytope)
 
-  /** Constructs a default (zero-dimensional) set. */
+  /** Constructs a set with no vertices in the zero-dimensional space, which is
+  empty (by convention). */
   VPolytope();
 
   /** Constructs the polytope from a d-by-n matrix, where d is the ambient
@@ -36,11 +45,16 @@ class VPolytope final : public ConvexSet {
   @pydrake_mkdoc_identifier{vertices} */
   explicit VPolytope(const Eigen::Ref<const Eigen::MatrixXd>& vertices);
 
-  /** Constructs the polytope from a bounded polyhedron (using Qhull).
+  /** Constructs the polytope from a bounded polyhedron (using Qhull). If the
+  HPolyhedron is not full-dimensional, we perform computations in a coordinate
+  system of its affine hull. `tol` specifies the numerical tolerance used in the
+  computation of the affine hull. See the documentation of AffineSubspace for
+  more details. A loose tolerance is necessary for the built-in solvers, but a
+  tighter tolerance can be used with commercial solvers (e.g. Gurobi and Mosek).
   @throws std::runtime_error if H is unbounded or if Qhull terminates with an
   error.
   @pydrake_mkdoc_identifier{hpolyhedron} */
-  explicit VPolytope(const HPolyhedron& H);
+  explicit VPolytope(const HPolyhedron& H, const double tol = 1e-9);
 
   /** Constructs the polytope from a SceneGraph geometry.
   @pydrake_mkdoc_identifier{scenegraph} */
@@ -88,11 +102,13 @@ class VPolytope final : public ConvexSet {
  private:
   std::unique_ptr<ConvexSet> DoClone() const final;
 
-  bool DoIsBounded() const final;
+  std::optional<bool> DoIsBoundedShortcut() const final;
 
   bool DoIsEmpty() const final;
 
   std::optional<Eigen::VectorXd> DoMaybeGetPoint() const final;
+
+  std::optional<Eigen::VectorXd> DoMaybeGetFeasiblePoint() const final;
 
   bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
                     double tol) const final;

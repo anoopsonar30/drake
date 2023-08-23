@@ -6,10 +6,18 @@
 #include "drake/common/symbolic/polynomial.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/geometry/optimization/vpolytope.h"
+#include "drake/solvers/mathematical_program.h"
 
 namespace drake {
 namespace trajectories {
 namespace {
+
+using Eigen::Map;
+using Eigen::Matrix2d;
+using Eigen::MatrixXd;
+using Eigen::SparseMatrix;
+using Eigen::Vector2d;
+using Eigen::VectorXd;
 
 // Tests the default constructor.
 GTEST_TEST(BezierCurveTest, DefaultConstructor) {
@@ -39,6 +47,10 @@ GTEST_TEST(BezierCurveTest, Constant) {
   EXPECT_EQ(curve.rows(), 2);
   EXPECT_EQ(curve.cols(), 1);
   EXPECT_TRUE(CompareMatrices(curve.value(0.5), kValue));
+
+  auto M = curve.AsLinearInControlPoints(1);
+  EXPECT_EQ(M.rows(), 1);
+  EXPECT_EQ(M.cols(), 0);
 
   curve.ElevateOrder();
   EXPECT_EQ(curve.order(), 1);
@@ -121,6 +133,17 @@ GTEST_TEST(BezierCurveTest, Linear) {
   CheckConvexHullProperty(curve, num_samples);
   CheckConvexHullProperty(deriv_bezier, num_samples);
 
+  auto M = curve.AsLinearInControlPoints(1);
+  EXPECT_EQ(M.rows(), 2);
+  EXPECT_EQ(M.cols(), 1);
+  EXPECT_TRUE(CompareMatrices(deriv_bezier.control_points(),
+                              curve.control_points() * M, 1e-14));
+  M = curve.AsLinearInControlPoints(0);
+  EXPECT_TRUE(CompareMatrices(M.toDense(), Matrix2d::Identity()));
+  M = curve.AsLinearInControlPoints(2);
+  EXPECT_EQ(M.rows(), 2);
+  EXPECT_EQ(M.cols(), 0);
+
   curve.ElevateOrder();
   EXPECT_EQ(curve.order(), 2);
   EXPECT_TRUE(
@@ -149,6 +172,12 @@ GTEST_TEST(BezierCurveTest, Quadratic) {
   EXPECT_EQ(deriv_bezier.order(), 1);
   EXPECT_EQ(deriv->start_time(), 0.0);
   EXPECT_EQ(deriv->end_time(), 1.0);
+
+  auto M = curve.AsLinearInControlPoints(1);
+  EXPECT_EQ(M.rows(), 3);
+  EXPECT_EQ(M.cols(), 2);
+  EXPECT_TRUE(CompareMatrices(deriv_bezier.control_points(),
+                              curve.control_points() * M, 1e-14));
 
   // second derivative is [ 2; 2 ]
   auto second_deriv = curve.MakeDerivative(2);
@@ -181,7 +210,13 @@ GTEST_TEST(BezierCurveTest, Quadratic) {
                                 Eigen::Vector2d(2, 2), 1e-14));
   }
 
-  // Extract the symoblic exprssion for the bezier curve.
+  M = curve.AsLinearInControlPoints(2);
+  EXPECT_EQ(M.rows(), 3);
+  EXPECT_EQ(M.cols(), 1);
+  EXPECT_TRUE(CompareMatrices(second_deriv_bezier.control_points(),
+                              curve.control_points() * M, 1e-14));
+
+  // Extract the symbolic expression for the bezier curve.
   VectorX<symbolic::Expression> curve_expression{
       curve.GetExpression(symbolic::Variable("t"))};
   for (int i = 0; i < curve_expression.rows(); i++) {
@@ -201,6 +236,61 @@ GTEST_TEST(BezierCurveTest, Quadratic) {
                                 Eigen::Vector2d((1 - t) * (1 - t), t * t),
                                 1e-14));
   }
+}
+
+// Test the example from the AsLinearInControlPoints doc string.
+GTEST_TEST(BezierCurve, ConstraintDerivativeControlPoint) {
+  Eigen::Matrix<double, 2, 3> points;
+  // clang-format off
+  points << 1, 0, 0,
+            0, 0, 1;
+  // clang-format on
+  BezierCurve<double> curve(0, 1, points);
+  auto deriv = curve.MakeDerivative();
+  BezierCurve<double>& deriv_bezier =
+      dynamic_cast<BezierCurve<double>&>(*deriv);
+
+  solvers::MathematicalProgram prog;
+  auto p = prog.NewContinuousVariables<2, 3>("p");
+  prog.SetInitialGuess(p, points);
+
+  SparseMatrix<double> M = curve.AsLinearInControlPoints(1);
+  const Vector2d lb(-0.1, -0.2);
+  const Vector2d ub(0.1, 0.2);
+  const int k = 1;
+  // Test the code sample.
+  for (int i = 0; i < curve.rows(); ++i) {
+    auto constraint = std::make_shared<solvers::LinearConstraint>(
+        M.col(k).transpose(), Vector1d(lb(i)), Vector1d(ub(i)));
+    auto b = prog.AddConstraint(constraint, p.row(i).transpose());
+    EXPECT_NEAR(prog.EvalBindingAtInitialGuess(b)[0],
+                deriv_bezier.control_points()(i, k), 1e-12);
+  }
+
+  // TODO(russt): Implement blkdiag for SparseMatrix and switch this example to
+  // use it instead of converting to dense matrices.
+
+  /* Test the block matrix documentation:
+   vec(derivative.control_points().T) = blockMT * vec(this.control_points().T),
+   blockMT = [ M.T,   0, .... 0 ]
+             [   0, M.T, 0, ... ]
+             [      ...         ]
+             [  ...    , 0, M.T ].
+  */
+  const int m = M.rows();
+  const int n = M.cols();
+  MatrixXd blockMT = MatrixXd::Zero(n * curve.rows(), m * curve.rows());
+  for (int i = 0; i < curve.rows(); ++i) {
+    blockMT.block(i * n, i * m, n, m) = M.transpose().toDense();
+  }
+  Map<const VectorXd> vec_curve_points(
+      curve.control_points().transpose().data(),
+      curve.rows() * (curve.order() + 1));
+  Map<const VectorXd> vec_deriv_points(
+      deriv_bezier.control_points().transpose().data(),
+      curve.rows() * (deriv_bezier.order() + 1));
+  EXPECT_TRUE(
+      CompareMatrices(vec_deriv_points, blockMT * vec_curve_points, 1e-12));
 }
 
 GTEST_TEST(BezierCurve, Clone) {

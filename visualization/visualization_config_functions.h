@@ -18,8 +18,8 @@
 namespace drake {
 namespace visualization {
 
-/** Adds LCM visualization publishers to communicate to drake_visualizer
-and/or meldis.
+/** Adds LCM visualization publishers to communicate to Meshcat, Meldis, and/or
+the legacy ``drake_visualizer`` application of days past.
 
 <dl><dt>Example</dt><dd>
 @code
@@ -34,7 +34,7 @@ plant.Finalize();
 
 // Add the visualization.
 const VisualizationConfig vis_config = ...;
-ApplyVisualizationConfig(config, &builder);
+ApplyVisualizationConfig(vis_config, &builder);
 
 // Simulate.
 Simulator<double> simulator(builder.Build());
@@ -124,9 +124,9 @@ void ApplyVisualizationConfig(
     std::shared_ptr<geometry::Meshcat> meshcat = nullptr,
     lcm::DrakeLcmInterface* lcm = nullptr);
 
-/** Adds LCM visualization publishers to communicate to Meshcat,
-drake_visualizer and/or meldis, using all of the default configuration
-settings.
+/** Adds LCM visualization publishers to communicate to Meshcat, Meldis, and/or
+the legacy ``drake_visualizer`` application of days past, using all of the
+default configuration settings.
 
 @param meshcat An optional existing Meshcat instance. (If nullptr, then a
 meshcat instance will be created.)

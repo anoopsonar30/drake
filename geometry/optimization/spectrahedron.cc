@@ -76,9 +76,19 @@ std::unique_ptr<ConvexSet> Spectrahedron::DoClone() const {
   return std::make_unique<Spectrahedron>(*this);
 }
 
-bool Spectrahedron::DoIsBounded() const {
-  throw std::runtime_error(
-      "Spectrahedron::IsBounded() is not implemented yet.");
+std::optional<bool> Spectrahedron::DoIsBoundedShortcut() const {
+  // CSDP cannot handle an unconstrained spectrahedron (i.e. a set whose only
+  // constraints are positive semidefinite constraints), so we must check for
+  // that case explicitly.
+  auto constraints = sdp_->GetAllConstraints();
+  auto psd_constraints = sdp_->positive_semidefinite_constraints();
+  if (constraints.size() == psd_constraints.size()) {
+    // If there are no constraints, then the set is bounded iff its ambient
+    // dimension is zero. If the ambient dimension is zero, it's caught in
+    // IsBounded, so we know the set will be unbounded.
+    return false;
+  }
+  return std::nullopt;
 }
 
 bool Spectrahedron::DoPointInSet(const Eigen::Ref<const VectorXd>& x,
@@ -128,7 +138,10 @@ Spectrahedron::DoAddPointInNonnegativeScalingConstraints(
     Ab.leftCols(binding.evaluator()->num_vars()) =
         binding.evaluator()->get_sparse_A();
     Ab.rightCols<1>() = -binding.evaluator()->lower_bound();
-    constraints.emplace_back(prog->AddLinearEqualityConstraint(Ab, 0, vars));
+
+    VectorXd zeros = VectorXd::Zero(binding.evaluator()->num_constraints());
+    constraints.emplace_back(
+        prog->AddLinearEqualityConstraint(Ab, zeros, vars));
   }
 
   std::vector<Binding<LinearConstraint>> linear_inequality_constraints =
@@ -146,11 +159,23 @@ Spectrahedron::DoAddPointInNonnegativeScalingConstraints(
         binding.evaluator()->get_sparse_A();
     if (binding.evaluator()->lower_bound().array().isFinite().any()) {
       Ab.rightCols<1>() = -binding.evaluator()->lower_bound();
-      constraints.emplace_back(prog->AddLinearConstraint(Ab, 0, kInf, vars));
+
+      VectorXd zeros = VectorXd::Zero(binding.evaluator()->num_constraints());
+      VectorXd infs =
+          VectorXd::Constant(binding.evaluator()->num_constraints(), kInf);
+
+      constraints.emplace_back(
+          prog->AddLinearConstraint(Ab, zeros, infs, vars));
     }
     if (binding.evaluator()->upper_bound().array().isFinite().any()) {
       Ab.rightCols<1>() = -binding.evaluator()->upper_bound();
-      constraints.emplace_back(prog->AddLinearConstraint(Ab, -kInf, 0, vars));
+
+      VectorXd zeros = VectorXd::Zero(binding.evaluator()->num_constraints());
+      VectorXd infs =
+          VectorXd::Constant(binding.evaluator()->num_constraints(), kInf);
+
+      constraints.emplace_back(
+          prog->AddLinearConstraint(Ab, -infs, zeros, vars));
     }
   }
 

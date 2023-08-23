@@ -185,6 +185,7 @@ drake_cc_library(
         "//common:nice_type_name",
         "//common:unused",
         "//math:geometric_transform",
+        "//multibody/topology:multibody_graph",
         "//systems/framework:leaf_system",
     ],
 )
@@ -345,6 +346,7 @@ drake_cc_googletest(
     deps = [
         ":tree",
         "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -546,6 +548,7 @@ drake_cc_googletest(
     name = "articulated_body_algorithm_test",
     deps = [
         ":tree",
+        "//common/test_utilities:eigen_matrix_compare",
     ],
 )
 

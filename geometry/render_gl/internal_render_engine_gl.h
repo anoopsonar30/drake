@@ -11,6 +11,7 @@
 
 #include "drake/common/copyable_unique_ptr.h"
 #include "drake/common/eigen_types.h"
+#include "drake/common/reset_on_copy.h"
 #include "drake/geometry/geometry_roles.h"
 #include "drake/geometry/render/render_engine.h"
 #include "drake/geometry/render/render_material.h"
@@ -236,8 +237,8 @@ class RenderEngineGl final : public render::RenderEngine {
   // objects (render buffer, frame_buffer, and texture). It should only be
   // called if there is not already a cached render target for the camera's
   // reported image size (w, h) in render_targets_.
-  static RenderTarget CreateRenderTarget(
-      const render::RenderCameraCore& camera, RenderType render_type);
+  static RenderTarget CreateRenderTarget(const render::RenderCameraCore& camera,
+                                         RenderType render_type);
 
   // Obtains the label image rendered from a specific object pose. This is
   // slower than it has to be because it does per-pixel processing on the CPU.
@@ -254,8 +255,7 @@ class RenderEngineGl final : public render::RenderEngine {
   // Creates an OpenGlGeometry from the mesh defined by the given `mesh_data`.
   // The geometry is added to geometries_ and its index is returned.
   // This is *not* threadsafe.
-  int CreateGlGeometry(
-      const geometry::internal::RenderMesh& mesh_data);
+  int CreateGlGeometry(const geometry::internal::RenderMesh& mesh_data);
 
   // Given a geometry that has its buffers (and vertex counts assigned), ties
   // all of the buffer data into the vertex array attributes.
@@ -291,9 +291,20 @@ class RenderEngineGl final : public render::RenderEngine {
   ShaderProgramData GetShaderProgram(const PerceptionProperties& properties,
                                      RenderType render_type) const;
 
-  void SetDefaultLightPosition(const Vector3<double>& light_dir_C) override {
-    light_dir_C_ = light_dir_C.normalized().cast<float>();
+  void SetDefaultLightPosition(const Vector3<double>& p_DL) override;
+
+  const std::vector<render::LightParameter>& active_lights() const {
+    if (active_lights_ == nullptr) {
+      active_lights_ = parameters_.lights.size() > 0 ? &parameters_.lights
+                                                     : &fallback_lights_;
+    }
+    return *active_lights_;
   }
+
+  // Configures all uniforms related to lighting. This should be called once
+  // upon construction, after the shaders have been instantiated. This includes
+  // during cloning.
+  void ConfigureLights();
 
   // The cached value transformation between camera and world frames.
   math::RigidTransformd X_CW_;
@@ -321,7 +332,7 @@ class RenderEngineGl final : public render::RenderEngine {
   std::shared_ptr<TextureLibrary> texture_library_;
 
   // The engine's configuration parameters.
-  RenderEngineGlParams parameters_;
+  const RenderEngineGlParams parameters_;
 
   // A "shader family" is all of the shaders used to produce a particular image
   // type. Each unique shader is associated with the geometries to which it
@@ -332,8 +343,7 @@ class RenderEngineGl final : public render::RenderEngine {
   std::array<ShaderFamily, RenderType::kTypeCount> shader_families_;
 
   // The collection of all shader programs (grouped by render type).
-  std::array<std::unordered_map<ShaderId,
-                                copyable_unique_ptr<ShaderProgram>>,
+  std::array<std::unordered_map<ShaderId, copyable_unique_ptr<ShaderProgram>>,
              RenderType::kTypeCount>
       shader_programs_;
 
@@ -382,9 +392,8 @@ class RenderEngineGl final : public render::RenderEngine {
   // Note: copies of this render engine share the same frame buffer objects.
   // If RenderEngineGl is included in a SceneGraph and its context is cloned
   // multiple times, mutating this cache is *not* thread safe.
-  mutable std::array<
-      std::unordered_map<BufferDim, RenderTarget>,
-      RenderType::kTypeCount>
+  mutable std::array<std::unordered_map<BufferDim, RenderTarget>,
+                     RenderType::kTypeCount>
       frame_buffers_;
 
   // Mapping from GeometryId to the visual data associated with that geometry.
@@ -394,8 +403,15 @@ class RenderEngineGl final : public render::RenderEngine {
   // modify their copy of visuals_ (adding and removing geometries).
   std::unordered_map<GeometryId, OpenGlInstance> visuals_;
 
-  // The direction *to* the light expressed in the camera frame.
-  Vector3<float> light_dir_C_{0.0f, 0.0f, 1.0f};
+  // Lights can be defined in the engine parameters. If no lights are defined,
+  // we use the fallback_lights. Otherwise, we use the parameter lights.
+  std::vector<render::LightParameter> fallback_lights_;
+
+  // A pointer to the set of lights to actually use at runtime -- it will either
+  // point to the lights in parameters_ or the fallback_lights_. Don't access
+  // this directly; call active_lights() instead.
+  mutable reset_on_copy<const std::vector<render::LightParameter>*>
+      active_lights_{};
 };
 
 }  // namespace internal

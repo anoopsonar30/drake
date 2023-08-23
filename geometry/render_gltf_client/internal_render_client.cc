@@ -10,11 +10,13 @@
 
 #include <fmt/format.h>
 #include <picosha2.h>
-#include <vtkImageData.h>
-#include <vtkImageExport.h>
-#include <vtkNew.h>
-#include <vtkPNGReader.h>
-#include <vtkTIFFReader.h>
+
+// To ease build system upkeep, we annotate VTK includes with their deps.
+#include <vtkImageData.h>    // vtkCommonDataModel
+#include <vtkImageExport.h>  // vtkIOImage
+#include <vtkNew.h>          // vtkCommonCore
+#include <vtkPNGReader.h>    // vtkIOImage
+#include <vtkTIFFReader.h>   // vtkIOImage
 
 #include "drake/common/temp_directory.h"
 #include "drake/common/text_logging.h"
@@ -214,10 +216,9 @@ std::string RenderClient::RenderOnServer(
 
   const std::string url = params_.GetUrl();
   // Post the form and validate the results.
-  const HttpResponse response =
-      http_service_->PostForm(temp_directory_, url, field_map,
-                              {{"scene", {scene_path, mime_type}}},
-                              params_.verbose);
+  const HttpResponse response = http_service_->PostForm(
+      temp_directory_, url, field_map, {{"scene", {scene_path, mime_type}}},
+      params_.verbose);
   if (!response.Good()) {
     /* Server may have responded with meaningful text, try and load the file
      as a string. */

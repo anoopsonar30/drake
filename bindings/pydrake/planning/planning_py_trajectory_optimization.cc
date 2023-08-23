@@ -37,14 +37,6 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
   using solvers::MatrixXDecisionVariable;
   using solvers::VectorXDecisionVariable;
 
-  // TODO(jwnimmer-tri) We should probably do all importing in our
-  // planning_py.cc rather than in our helper functions. That will probably be
-  // easier to topo-sort.
-  py::module::import("pydrake.symbolic");
-  py::module::import("pydrake.systems.framework");
-  py::module::import("pydrake.systems.primitives");
-  py::module::import("pydrake.solvers");
-
   {
     using Class = MultipleShooting;
     constexpr auto& cls_doc = doc.MultipleShooting;
@@ -490,7 +482,9 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py::arg("target"),
             py::arg("options") =
                 geometry::optimization::GraphOfConvexSetsOptions(),
-            cls_doc.SolvePath.doc);
+            cls_doc.SolvePath.doc)
+        .def("graph_of_convex_sets", &Class::graph_of_convex_sets,
+            py_rvp::reference_internal, cls_doc.graph_of_convex_sets.doc);
   }
 }
 

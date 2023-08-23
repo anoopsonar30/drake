@@ -97,6 +97,7 @@ from pydrake.common import FindResourceOrThrow
 from pydrake.common.deprecation import install_numpy_warning_filters
 from pydrake.common.eigen_geometry import Quaternion_
 from pydrake.common.test_utilities import numpy_compare
+from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.test_utilities.pickle_compare import assert_pickle
 from pydrake.common.value import AbstractValue, Value
 from pydrake.geometry import (
@@ -199,6 +200,10 @@ class TestPlant(unittest.TestCase):
         body_default_rotational_inertial = body.default_rotational_inertia()
         body_default_spatial_inertial = body.default_spatial_inertia()
         new_model_instance = plant.AddModelInstance("new_model_instance")
+        plant.RenameModelInstance(model_instance=new_model_instance,
+                                  name="something")
+        plant.RenameModelInstance(model_instance=new_model_instance,
+                                  name="new_model_instance")
         body = plant.AddRigidBody(name="new_body_2",
                                   M_BBo_B=spatial_inertia,
                                   model_instance=new_model_instance)
@@ -404,6 +409,8 @@ class TestPlant(unittest.TestCase):
         self.assertIs(
             link1_frame,
             plant.GetFrameByName(name="Link1", model_instance=model_instance))
+        self.assertEqual(
+            len(plant.GetFrameIndices(model_instance=model_instance)), 7)
         self.assertIs(link1.GetParentPlant(), plant)
         self.assertTrue(plant.HasModelInstanceNamed(name="acrobot"))
         self.assertEqual(
@@ -726,22 +733,54 @@ class TestPlant(unittest.TestCase):
         self.assertIsInstance(UnitInertia.SolidBox(Lx=1, Ly=2, Lz=3),
                               UnitInertia)
         self.assertIsInstance(UnitInertia.SolidCube(L=2), UnitInertia)
-        self.assertIsInstance(UnitInertia.SolidCylinder(r=1.5, L=2),
+        self.assertIsInstance(UnitInertia.SolidCylinder(
+                                  radius=1.5, length=2, unit_vector=[0, 0, 1]),
                               UnitInertia)
-        self.assertIsInstance(
-            UnitInertia.SolidCylinder(r=1.5, L=2, b_E=[1, 2, 3]), UnitInertia)
-        self.assertIsInstance(UnitInertia.SolidCapsule(r=1, L=2), UnitInertia)
-        self.assertIsInstance(UnitInertia.SolidCapsule(r=1, L=2,
-                                                       unit_vector=[0, 0, 1]),
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.SolidCylinder(r=1.5, L=2),
+                                  UnitInertia)
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.SolidCylinder(
+                                      r=1.5, L=2, b_E=[1, 2, 3]),
+                                  UnitInertia)
+        self.assertIsInstance(UnitInertia.SolidCapsule(
+                                  radius=1, length=2, unit_vector=[0, 0, 1]),
                               UnitInertia)
-        self.assertIsInstance(UnitInertia.SolidCylinderAboutEnd(r=1, L=2),
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.SolidCapsule(r=1, L=2),
+                                  UnitInertia)
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.SolidCapsule(
+                                      r=1, L=2, unit_vector=[0, 0, 1]),
+                                  UnitInertia)
+        self.assertIsInstance(UnitInertia.SolidCylinderAboutEnd(
+            radius=0.1, length=0.4, unit_vector=[0, 0, 1]),
                               UnitInertia)
-        self.assertIsInstance(
-            UnitInertia.AxiallySymmetric(J=1, K=2, b_E=[1, 2, 3]), UnitInertia)
-        self.assertIsInstance(UnitInertia.StraightLine(K=1.5, b_E=[1, 2, 3]),
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.SolidCylinderAboutEnd(r=1, L=4),
+                                  UnitInertia)
+        self.assertIsInstance(UnitInertia.AxiallySymmetric(
+                                  moment_parallel=1, moment_perpendicular=2,
+                                  unit_vector=[0, 0, 1]),
                               UnitInertia)
-        self.assertIsInstance(UnitInertia.ThinRod(L=1.5, b_E=[1, 2, 3]),
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.AxiallySymmetric(
+                                      J=1, K=2, b_E=[1, 2, 3]),
+                                  UnitInertia)
+        self.assertIsInstance(UnitInertia.StraightLine(
+                                  moment_perpendicular=1.5,
+                                  unit_vector=[0, 0, 1]),
                               UnitInertia)
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.StraightLine(
+                                      K=1.5, b_E=[1, 2, 3]),
+                                  UnitInertia)
+        self.assertIsInstance(UnitInertia.ThinRod(
+                                  length=1.5, unit_vector=[0, 0, 1]),
+                              UnitInertia)
+        with catch_drake_warnings(expected_count=1):
+            self.assertIsInstance(UnitInertia.ThinRod(L=1.5, b_E=[1, 2, 3]),
+                                  UnitInertia)
 
     @numpy_compare.check_all_types
     def test_spatial_inertia_api(self, T):
@@ -773,6 +812,8 @@ class TestPlant(unittest.TestCase):
             mass=0.123, radius=0.1, length=0.4, unit_vector=[0, 0, 1])
         SpatialInertia.SolidCylinderWithDensityAboutEnd(
             density=1000, radius=0.1, length=0.4, unit_vector=[0, 0, 1])
+        SpatialInertia.SolidCylinderWithMassAboutEnd(
+            mass=0.123, radius=0.1, length=0.4, unit_vector=[0, 0, 1])
         SpatialInertia.ThinRodWithMass(
             mass=2, length=0.3, unit_vector=[0, 0, 1])
         SpatialInertia.ThinRodWithMassAboutEnd(
@@ -2345,6 +2386,81 @@ class TestPlant(unittest.TestCase):
 
         # Verify the constraint was added.
         self.assertEqual(plant.num_constraints(), 1)
+
+    def test_constraint_active_status_api(self):
+        plant = MultibodyPlant_[float](0.01)
+        plant.set_discrete_contact_solver(DiscreteContactSolver.kSap)
+
+        # Since we won't be performing dynamics computations,
+        # using garbage inertia is ok for this test.
+        M_BBo_B = SpatialInertia_[float]()
+        body_A = plant.AddRigidBody(name="A", M_BBo_B=M_BBo_B)
+        body_B = plant.AddRigidBody(name="B", M_BBo_B=M_BBo_B)
+
+        # Add ball and distance constraints.
+        p_AP = [0.0, 0.0, 0.0]
+        p_BQ = [0.0, 0.0, 0.0]
+        distance_id = plant.AddDistanceConstraint(
+            body_A=body_A, p_AP=p_AP, body_B=body_B, p_BQ=p_BQ, distance=0.01)
+        ball_id = plant.AddBallConstraint(
+            body_A=body_A, p_AP=p_AP, body_B=body_B, p_BQ=p_BQ)
+
+        Parser(plant).AddModelsFromUrl(
+            "package://drake/manipulation/models/"
+            "wsg_50_description/sdf/schunk_wsg_50.sdf")
+
+        # Add coupler constraint.
+        left_slider = plant.GetJointByName("left_finger_sliding_joint")
+        right_slider = plant.GetJointByName("right_finger_sliding_joint")
+        coupler_id = plant.AddCouplerConstraint(
+            joint0=left_slider, joint1=right_slider,
+            gear_ratio=1.2, offset=3.4)
+
+        # We are done creating the model.
+        plant.Finalize()
+
+        # Default context.
+        context = plant.CreateDefaultContext()
+
+        # Verify all constraints are active in a default context.
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=coupler_id))
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=distance_id))
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=ball_id))
+
+        # Set all constraints to inactive.
+        plant.SetConstraintActiveStatus(
+            context=context, id=coupler_id, status=False)
+        plant.SetConstraintActiveStatus(
+            context=context, id=distance_id, status=False)
+        plant.SetConstraintActiveStatus(
+            context=context, id=ball_id, status=False)
+
+        # Verify all constraints are inactive in the context.
+        self.assertFalse(
+            plant.GetConstraintActiveStatus(context=context, id=coupler_id))
+        self.assertFalse(
+            plant.GetConstraintActiveStatus(context=context, id=distance_id))
+        self.assertFalse(
+            plant.GetConstraintActiveStatus(context=context, id=ball_id))
+
+        # Set all constraints to back to active.
+        plant.SetConstraintActiveStatus(
+            context=context, id=coupler_id, status=True)
+        plant.SetConstraintActiveStatus(
+            context=context, id=distance_id, status=True)
+        plant.SetConstraintActiveStatus(
+            context=context, id=ball_id, status=True)
+
+        # Verify all constraints are active in the context.
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=coupler_id))
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=distance_id))
+        self.assertTrue(
+            plant.GetConstraintActiveStatus(context=context, id=ball_id))
 
     @numpy_compare.check_all_types
     def test_multibody_dynamics(self, T):

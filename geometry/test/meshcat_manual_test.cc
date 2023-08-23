@@ -7,6 +7,7 @@
 #include "drake/common/find_resource.h"
 #include "drake/common/find_runfiles.h"
 #include "drake/common/temp_directory.h"
+#include "drake/common/test_utilities/maybe_pause_for_user.h"
 #include "drake/geometry/meshcat.h"
 #include "drake/geometry/meshcat_animation.h"
 #include "drake/geometry/meshcat_visualizer.h"
@@ -27,6 +28,7 @@ namespace drake {
 namespace geometry {
 
 using Eigen::Vector3d;
+using common::MaybePauseForUser;
 using math::RigidTransformd;
 using math::RotationMatrixd;
 
@@ -45,6 +47,9 @@ int do_main() {
 
   meshcat->SetObject("cylinder", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
   meshcat->SetTransform("cylinder", RigidTransformd(Vector3d{++x, 0, 0}));
+
+  // For animation, we'll aim the camera between the cylinder and ellipsoid.
+  const Vector3d animation_target{x + 0.5, 0, 0};
 
   meshcat->SetObject("ellipsoid", Ellipsoid(0.25, 0.25, 0.5),
                      Rgba(1.0, 0, 1, 0.5));
@@ -66,7 +71,8 @@ int do_main() {
       "gltf",
       Mesh(FindResourceOrThrow("drake/geometry/render/test/meshes/cube.gltf"),
            0.25));
-  meshcat->SetTransform("gltf", RigidTransformd(Vector3d{++x, 0, 0}));
+  const Vector3d gltf_pose{++x, 0, 0};
+  meshcat->SetTransform("gltf", RigidTransformd(gltf_pose));
 
   auto mustard_obj =
       FindRunfile("drake_models/ycb/meshes/006_mustard_bottle_textured.obj")
@@ -190,15 +196,18 @@ Open up your browser to the URL above.
   - the same triangle mesh drawn in multicolor.
   - a blue mesh plot of the function z = y*sin(5*x).
 )""";
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   std::cout << "Calling meshcat.Flush(), which will block until all clients "
                "have received all the data)...";
   meshcat->Flush();
   std::cout << "Done." << std::endl;
 
-  std::cout << "Animations:\n";
+  std::cout << "\nAnimations:\n";
+  meshcat->SetCameraPose(animation_target + Vector3d{0, -3, 1.5},
+                         animation_target);
+  std::cout << "The camera has moved to focus on the following animated "
+               "geometries:\n";
   MeshcatAnimation animation;
   std::cout << "- the red sphere should move up and down in z.\n";
   animation.SetTransform(0, "sphere", RigidTransformd(sphere_home));
@@ -234,30 +243,33 @@ Open up your browser to the URL above.
   meshcat->SetAnimation(animation);
 
   std::cout << "You can review/replay the animation from the controls menu.\n";
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   meshcat->Set2dRenderMode(math::RigidTransform(Vector3d{0, -3, 0}), -4,
                            4, -2, 2);
 
   std::cout << "- The scene should have switched to 2D rendering mode.\n";
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   meshcat->Set2dRenderMode(
       math::RigidTransform(math::RotationMatrixd::MakeZRotation(-M_PI / 2.0),
                            sphere_home),
       -2, 2, -2, 2);
+  // This call shows that SetCameraTarget() is a no-op for orthographic cameras.
+  // The described view should be unaffected by this absurd target point.
+  meshcat->SetCameraTarget(Vector3d{0, -100, -50});
 
   std::cout << "- Now 2D rendering along the +x axis (red sphere in front).\n";
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
+
+  meshcat->SetCameraPose(Vector3d{2, 2, 2}, Vector3d::Zero());
+  std::cout << "- Now we have an isometric 3/4 view.\n";
+  MaybePauseForUser();
 
   std::cout << "- The scene should have switched back to 3D.\n";
   meshcat->ResetRenderMode();
 
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   // Turn off the background (it will appear white).
   meshcat->SetProperty("/Background", "visible", false);
@@ -270,14 +282,32 @@ Open up your browser to the URL above.
       << "- The lights should have dimmed.\n"
       << "- The background should have been disabled (it will appear white)"
       << std::endl;
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
+  meshcat->SetCameraTarget(gltf_pose);
+  meshcat->SetProperty("/Background", "visible", true);
+  meshcat->SetEnvironmentMap(
+      FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
+
+  std::cout << "- An environment map has been loaded from a png -- the Cornell "
+            << "box.\n"
+            << "  The dented green box should reflect it (the camera has moved "
+               "to focus on the box).\n";
+  MaybePauseForUser();
+
+  meshcat->SetEnvironmentMap(
+      FindResourceOrThrow("drake/geometry/test/env_256_brick_room.jpg"));
+
+  std::cout << "- The Cornell box has been replaced by a room with brick walls "
+            << "loaded from a jpg.\n";
+  MaybePauseForUser();
+
+  meshcat->SetEnvironmentMap("");
+  meshcat->SetCameraTarget(Vector3d::Zero());
   meshcat->Delete();
-  std::cout << "- Everything else should have disappeared." << std::endl;
+  std::cout << "- Everything should have disappeared." << std::endl;
 
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   meshcat->SetProperty("/Lights/AmbientLight/<object>", "intensity", 0.6);
 
@@ -318,16 +348,17 @@ Open up your browser to the URL above.
     plant.SetPositions(&plant.GetMyMutableContextFromRoot(context.get()),
                        Eigen::Vector2d{0.1, 0.3});
     diagram->ForcedPublish(*context);
+    meshcat->SetCameraPose(Vector3d{0, -1.5, 1}, Vector3d{0.25, 0, 0});
     std::cout << "- Now you should see three colliding hydroelastic spheres."
               << std::endl;
-    std::cout << "[Press RETURN to continue]." << std::endl;
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    MaybePauseForUser();
 
     contact.Delete();
     visualizer.Delete();
   }
 
   {
+    meshcat->SetCameraPose(Vector3d{-1.0, -1.0, 1.5}, Vector3d{0, 0, 0.5});
     systems::DiagramBuilder<double> builder;
     auto [plant, scene_graph] =
         multibody::AddMultibodyPlantSceneGraph(&builder, 0.001);
@@ -364,8 +395,7 @@ Open up your browser to the URL above.
         << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph)"
         << std::endl;
 
-    std::cout << "[Press RETURN to continue]." << std::endl;
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    MaybePauseForUser();
 
     std::cout << "Now we'll run the simulation...\n"
               << "- You should see the robot fall down and hit the table\n"
@@ -383,24 +413,33 @@ Open up your browser to the URL above.
            "animation.  Use the animation GUI to confirm."
         << std::endl;
 
-    std::cout << "[Press RETURN to continue]." << std::endl;
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    MaybePauseForUser();
   }
 
+  meshcat->SetEnvironmentMap(
+      FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
+  meshcat->SetCameraTarget(Vector3d{-0.4, 0, 0});
   const std::string html_filename(temp_directory() + "/meshcat_static.html");
   std::ofstream html_file(html_filename);
   html_file << meshcat->StaticHtml();
   html_file.close();
+  meshcat->SetEnvironmentMap("");
+  meshcat->SetCameraPose(Vector3d{-1.0, -1.0, 1.5}, Vector3d{0, 0, 0.5});
 
-  std::cout << "A standalone HTML file capturing this scene (including the "
-               "animation) has been written to file://"
-            << html_filename
+  std::cout << "A standalone HTML file capturing this scene. In addition the "
+               "standalone file includes:\n"
+               "   - the animation shown here\n"
+               "   - an additional environment map (not shown here)\n"
+               "   - the camera moved to focus on the contact point between "
+               "robot and table\n"
+               "The file has been written to:\n"
+            << "  file://" << html_filename
             << "\nOpen that location in your browser now and confirm that "
-               "the iiwa is visible and the animation plays."
+               "the iiwa is visible, the animation plays, the environment map "
+               "is present, and the camera is positioned as indicated."
             << std::endl;
 
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   std::remove(html_filename.c_str());
   std::cout
@@ -424,8 +463,7 @@ Open up your browser to the URL above.
             << ") and confirm that moving the slider in one updates the slider "
                "in the other.\n";
 
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   std::cout << "Got " << meshcat->GetButtonClicks("ButtonTest")
             << " clicks on ButtonTest.\n"
@@ -446,8 +484,7 @@ Open up your browser to the URL above.
       << "sufficient to consider the test passing; the exact values do not "
       << "matter.\n";
 
-  std::cout << "[Press RETURN to continue]." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+  MaybePauseForUser();
 
   Meshcat::Gamepad gamepad = meshcat->GetGamepad();
   if (!gamepad.index) {

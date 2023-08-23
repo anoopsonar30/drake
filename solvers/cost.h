@@ -94,6 +94,8 @@ class LinearCost : public Cost {
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
 
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
+
  private:
   template <typename DerivedX, typename U>
   void DoEvalGeneric(const Eigen::MatrixBase<DerivedX>& x, VectorX<U>* y) const;
@@ -205,6 +207,8 @@ class QuadraticCost : public Cost {
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
 
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
+
   bool CheckHessianPsd();
 
   Eigen::MatrixXd Q_;
@@ -277,6 +281,8 @@ class L1NormCost : public Cost {
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
 
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
+
  private:
   Eigen::MatrixXd A_;
   Eigen::VectorXd b_;
@@ -329,6 +335,8 @@ class L2NormCost : public Cost {
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
 
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
+
  private:
   Eigen::MatrixXd A_;
   Eigen::VectorXd b_;
@@ -380,16 +388,22 @@ class LInfNormCost : public Cost {
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
 
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
+
  private:
   Eigen::MatrixXd A_;
   Eigen::VectorXd b_;
 };
 
 /**
- * If z = Ax + b, implements a cost of the form:
+ * If \f$ z = Ax + b,\f$ implements a cost of the form:
+ * @f[
  * (z_1^2 + z_2^2 + ... + z_{n-1}^2) / z_0.
+ * @f]
  * Note that this cost is convex when we additionally constrain z_0 > 0. It is
  * treated as a generic nonlinear objective by most solvers.
+ *
+ * Costs of this form are sometimes referred to as "quadratic over linear".
  *
  * @ingroup solver_evaluators
  */
@@ -433,6 +447,8 @@ class PerspectiveQuadraticCost : public Cost {
 
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
+
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
 
  private:
   template <typename DerivedX, typename U>
@@ -580,6 +596,8 @@ class ExpressionCost : public Cost {
 
   std::ostream& DoDisplay(std::ostream&,
                           const VectorX<symbolic::Variable>&) const override;
+
+  std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
 
  private:
   std::unique_ptr<EvaluatorBase> evaluator_;

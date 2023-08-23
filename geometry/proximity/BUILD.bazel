@@ -183,6 +183,7 @@ drake_cc_library(
     srcs = ["deformable_contact_internal.cc"],
     hdrs = ["deformable_contact_internal.h"],
     deps = [
+        ":collision_filter",
         ":deformable_mesh_intersection",
         "//common:essential",
         "//geometry:geometry_ids",
@@ -668,7 +669,7 @@ drake_cc_library(
     deps = [
         "//common:essential",
         "@fmt",
-        "@tinyobjloader",
+        "@tinyobjloader_internal//:tinyobjloader",
     ],
 )
 
@@ -818,7 +819,9 @@ drake_cc_library(
     ],
     deps = [
         "@fmt",
-        "@vtk//:vtkIOGeometry",
+        "@vtk//:vtkCommonCore",
+        "@vtk//:vtkCommonDataModel",
+        "@vtk//:vtkIOLegacy",
     ],
 )
 
@@ -1418,4 +1421,4 @@ drake_cc_googletest(
     ],
 )
 
-add_lint_tests(enable_clang_format_lint = False)
+add_lint_tests()
