@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import copy
+import sys
 from types import SimpleNamespace
 import unittest
 import warnings
@@ -79,6 +80,19 @@ class CustomAdder(LeafSystem):
             input_vector = self.EvalVectorInput(context=context, port_index=i)
             sum += input_vector.get_value()
 
+    def DoGetGraphvizFragment(self, params):
+        # N.B. We cannot use `header_lines.append(...)` here; the property
+        # getter returns a _copy_ of the lines, not a _reference_.
+        params.header_lines += ["hello=world"]
+        if sys.version_info[:2] >= (3, 9):
+            params.options |= {"split": "I/O"}
+        else:
+            # TODO(jwnimmer-tri) Kill this spelling when we drop Ubuntu 20.04.
+            options = params.options
+            options.update({"split": "I/O"})
+            params.options = options
+        return super().DoGetGraphvizFragment(params)
+
 
 # TODO(eric.cousineau): Make this class work with custom scalar types once
 # referencing with custom dtypes lands.
@@ -101,14 +115,17 @@ class CustomVectorSystem(VectorSystem):
         self.has_called = []
 
     def DoCalcVectorOutput(self, context, u, x, y):
+        self.ValidateContext(context=context)
         y[:] = np.hstack([u, x])
         self.has_called.append("output")
 
     def DoCalcVectorTimeDerivatives(self, context, u, x, x_dot):
+        self.ValidateContext(context)
         x_dot[:] = x + u
         self.has_called.append("continuous")
 
     def DoCalcVectorDiscreteVariableUpdates(self, context, u, x, x_n):
+        self.ValidateContext(context)
         x_n[:] = x + 2*u
         self.has_called.append("discrete")
 
@@ -129,6 +146,12 @@ class CustomDiagram(Diagram):
         for i in range(num_inputs):
             builder.ExportInput(adder.get_input_port(i))
         builder.BuildInto(self)
+
+    def DoGetGraphvizFragment(self, params):
+        # N.B. We cannot use `header_lines.append(...)` here; the property
+        # getter returns a _copy_ of the lines, not a _reference_.
+        params.header_lines += ["meaning_of_life=42"]
+        return super().DoGetGraphvizFragment(params)
 
 
 class TestCustom(unittest.TestCase):
@@ -183,6 +206,17 @@ class TestCustom(unittest.TestCase):
         value = (diagram.GetMutableSubsystemContext(zoh, context)
                  .get_discrete_state_vector().get_value())
         self.assertTrue(np.allclose([5, 7, 9], value))
+
+    def test_adder_graphviz(self):
+        system = CustomAdder(2, 3)
+        graph = system.GetGraphvizString()
+        self.assertIn("hello=world", graph)
+        self.assertIn("(split)", graph)
+
+    def test_diagram_graphviz(self):
+        system = CustomDiagram(2, 3)
+        graph = system.GetGraphvizString()
+        self.assertIn("meaning_of_life=42", graph)
 
     def test_leaf_system_well_known_tickets(self):
         for func in [
@@ -420,6 +454,12 @@ class TestCustom(unittest.TestCase):
                     "system reset", WitnessFunctionDirection.kCrossesZero,
                     self._guard, UnrestrictedUpdateEvent(
                         system_callback=self._system_reset))
+                self.witness_result = 1.0
+                self.getwitness_result = [
+                    self.witness,
+                    self.reset_witness,
+                    self.system_reset_witness,
+                ]
 
             def DoPublish(self, context, events):
                 # Call base method to ensure we do not get recursion.
@@ -447,8 +487,7 @@ class TestCustom(unittest.TestCase):
 
             def DoGetWitnessFunctions(self, context):
                 self.called_getwitness = True
-                return [self.witness, self.reset_witness,
-                        self.system_reset_witness]
+                return self.getwitness_result
 
             def _on_initialize(self, context, event):
                 test.assertIsInstance(context, Context)
@@ -547,7 +586,7 @@ class TestCustom(unittest.TestCase):
             def _witness(self, context):
                 test.assertIsInstance(context, Context)
                 self.called_witness = True
-                return 1.0
+                return self.witness_result
 
             def _guard(self, context):
                 test.assertIsInstance(context, Context)
@@ -670,6 +709,20 @@ class TestCustom(unittest.TestCase):
         self.assertFalse(system.called_guard)
         self.assertFalse(system.called_reset)
         self.assertFalse(system.called_system_reset)
+
+        # Test witness function error messages.
+        system = TrivialSystem()
+        system.getwitness_result = None
+        simulator = Simulator(system)
+        with self.assertRaisesRegex(TypeError, "NoneType"):
+            simulator.AdvanceTo(0.1)
+        self.assertTrue(system.called_getwitness)
+        system = TrivialSystem()
+        system.witness_result = None
+        simulator = Simulator(system)
+        with self.assertRaisesRegex(TypeError, "NoneType"):
+            simulator.AdvanceTo(0.1)
+        self.assertTrue(system.called_witness)
 
     def test_event_handler_returns_none(self):
         """Checks that a Python event handler callback function is allowed to

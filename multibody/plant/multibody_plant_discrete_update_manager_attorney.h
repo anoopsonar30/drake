@@ -54,16 +54,40 @@ class MultibodyPlantDiscreteUpdateManagerAttorney {
     plant.AddJointLimitsPenaltyForces(context, forces);
   }
 
-  static void AddInForcesFromInputPorts(
+  static void AddAppliedExternalGeneralizedForces(
       const MultibodyPlant<T>& plant, const drake::systems::Context<T>& context,
       MultibodyForces<T>* forces) {
-    plant.AddInForcesFromInputPorts(context, forces);
+    plant.AddAppliedExternalGeneralizedForces(context, forces);
+  }
+
+  static void AddAppliedExternalSpatialForces(
+      const MultibodyPlant<T>& plant, const drake::systems::Context<T>& context,
+      MultibodyForces<T>* forces) {
+    plant.AddAppliedExternalSpatialForces(context, forces);
+  }
+
+  static void AddJointActuationForces(const MultibodyPlant<T>& plant,
+                                      const drake::systems::Context<T>& context,
+                                      VectorX<T>* forces) {
+    plant.AddJointActuationForces(context, forces);
   }
 
   static void CalcForceElementsContribution(
       const MultibodyPlant<T>& plant, const drake::systems::Context<T>& context,
       MultibodyForces<T>* forces) {
     return plant.CalcForceElementsContribution(context, forces);
+  }
+
+  static VectorX<T> AssembleActuationInput(
+      const MultibodyPlant<T>& plant,
+      const systems::Context<T>& context) {
+    return plant.AssembleActuationInput(context);
+  }
+
+  static VectorX<T> AssembleDesiredStateInput(
+      const MultibodyPlant<T>& plant,
+      const systems::Context<T>& context) {
+    return plant.AssembleDesiredStateInput(context);
   }
 
   // TODO(xuchenhan-tri): Remove this when SceneGraph takes control of all
@@ -108,6 +132,11 @@ class MultibodyPlantDiscreteUpdateManagerAttorney {
   static const std::map<MultibodyConstraintId, internal::BallConstraintSpec>&
   ball_constraints_specs(const MultibodyPlant<T>& plant) {
     return plant.ball_constraints_specs_;
+  }
+
+  static const std::map<MultibodyConstraintId, internal::WeldConstraintSpec>&
+  weld_constraints_specs(const MultibodyPlant<T>& plant) {
+    return plant.weld_constraints_specs_;
   }
 
   static const std::map<MultibodyConstraintId, bool>&

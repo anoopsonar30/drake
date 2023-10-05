@@ -262,6 +262,45 @@ std::string GetScopedName(
   }
 }
 
+// Helper that returns `true` when all actuators in `model_instance` have PD
+// gains defined.
+template <typename T>
+bool AllActuatorsHavePdControl(const MultibodyPlant<T>& plant,
+                               ModelInstanceIndex model_instance) {
+  for (JointActuatorIndex actuator_index :
+       plant.GetJointActuatorIndices(model_instance)) {
+    if (!plant.get_joint_actuator(actuator_index).has_controller())
+      return false;
+  }
+  return true;
+}
+
+// Helper that returns `true` iff any joint actuator in the model is PD
+// controlled.
+template <typename T>
+bool AnyActuatorHasPdControl(const MultibodyPlant<T>& plant) {
+  for (JointActuatorIndex a(0); a < plant.num_actuators(); ++a) {
+    if (plant.get_joint_actuator(a).has_controller()) return true;
+  }
+  return false;
+}
+
+// Helper that computes the number of PD controlled actuators in a given model
+// instance.
+template <typename T>
+int NumOfPdControlledActuators(const MultibodyPlant<T>& plant,
+                               ModelInstanceIndex model_instance) {
+  int num_actuators = 0;
+  for (JointActuatorIndex a(0); a < plant.num_actuators(); ++a) {
+    const JointActuator<T>& actuator = plant.get_joint_actuator(a);
+    if (actuator.model_instance() == model_instance &&
+        actuator.has_controller()) {
+      ++num_actuators;
+    }
+  }
+  return num_actuators;
+}
+
 }  // namespace
 
 template <typename T>
@@ -382,6 +421,7 @@ MultibodyPlant<T>::MultibodyPlant(const MultibodyPlant<U>& other)
     coupler_constraints_specs_ = other.coupler_constraints_specs_;
     distance_constraints_specs_ = other.distance_constraints_specs_;
     ball_constraints_specs_ = other.ball_constraints_specs_;
+    weld_constraints_specs_ = other.weld_constraints_specs_;
 
     // cache_indexes_ is set in DeclareCacheEntries() in
     // DeclareStateCacheAndPorts() in FinalizePlantOnly().
@@ -557,6 +597,39 @@ MultibodyConstraintId MultibodyPlant<T>::AddBallConstraint(
   }
 
   ball_constraints_specs_[constraint_id] = spec;
+
+  return constraint_id;
+}
+
+template <typename T>
+MultibodyConstraintId MultibodyPlant<T>::AddWeldConstraint(
+    const Body<T>& body_A, const math::RigidTransform<double>& X_AP,
+    const Body<T>& body_B, const math::RigidTransform<double>& X_BQ) {
+  // N.B. The manager is set up at Finalize() and therefore we must require
+  // constraints to be added pre-finalize.
+  DRAKE_MBP_THROW_IF_FINALIZED();
+
+  if (!is_discrete()) {
+    throw std::runtime_error(
+        "Currently weld constraints are only supported for discrete "
+        "MultibodyPlant models.");
+  }
+
+  const MultibodyConstraintId constraint_id =
+      MultibodyConstraintId::get_new_id();
+
+  internal::WeldConstraintSpec spec{body_A.index(), X_AP, body_B.index(), X_BQ,
+                                     constraint_id};
+  if (!spec.IsValid()) {
+    const std::string msg = fmt::format(
+        "AddWeldConstraint(): Invalid set of parameters for constraint between "
+        "bodies '{}' and '{}'. For a weld constraint, frames P and Q must be "
+        "on two distinct bodies, i.e. body_A != body_B must be satisfied.",
+        body_A.name(), body_B.name());
+    throw std::logic_error(msg);
+  }
+
+  weld_constraints_specs_[constraint_id] = spec;
 
   return constraint_id;
 }
@@ -1040,6 +1113,13 @@ void MultibodyPlant<T>::Finalize() {
       SetDiscreteUpdateManager(std::move(manager));
     }
   }
+
+  if (!is_discrete() && AnyActuatorHasPdControl(*this)) {
+    throw std::logic_error(
+        "Continuous model with PD controlled joint actuators. This feature is "
+        "only supported for discrete models. Refer to MultibodyPlant's "
+        "documentation for further details.");
+  }
 }
 
 template<typename T>
@@ -1369,12 +1449,35 @@ void MultibodyPlant<T>::set_penetration_allowance(
 }
 
 template <typename T>
+VectorX<T> MultibodyPlant<T>::GetDefaultPositions() const {
+  DRAKE_MBP_THROW_IF_NOT_FINALIZED();
+  VectorX<T> q;
+  q.setConstant(num_positions(), std::numeric_limits<double>::quiet_NaN());
+  for (JointIndex i{0}; i < num_joints(); ++i) {
+    const Joint<T>& joint = get_joint(i);
+    q.segment(joint.position_start(), joint.num_positions()) =
+        joint.default_positions();
+  }
+  return q;
+}
+
+template <typename T>
+VectorX<T> MultibodyPlant<T>::GetDefaultPositions(
+    ModelInstanceIndex model_instance) const {
+  DRAKE_MBP_THROW_IF_NOT_FINALIZED();
+  const VectorX<T> q = GetDefaultPositions();
+  const VectorX<T> q_instance = internal_tree().GetPositionsFromArray(
+      model_instance, q);
+  return q_instance;
+}
+
+template <typename T>
 void MultibodyPlant<T>::SetDefaultPositions(
     const Eigen::Ref<const Eigen::VectorXd>& q) {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   DRAKE_THROW_UNLESS(q.size() == num_positions());
-  for (int i = 0; i < num_joints(); ++i) {
-    Joint<T>& joint = get_mutable_joint(JointIndex(i));
+  for (JointIndex i{0}; i < num_joints(); ++i) {
+    Joint<T>& joint = get_mutable_joint(i);
     joint.set_default_positions(
         q.segment(joint.position_start(), joint.num_positions()));
   }
@@ -2064,7 +2167,7 @@ void MultibodyPlant<T>::AddInForcesFromInputPorts(
   this->ValidateContext(context);
   AddAppliedExternalGeneralizedForces(context, forces);
   AddAppliedExternalSpatialForces(context, forces);
-  AddJointActuationForces(context, forces);
+  AddJointActuationForces(context, &forces->mutable_generalized_forces());
 }
 
 template<typename T>
@@ -2155,21 +2258,19 @@ void MultibodyPlant<T>::AddAppliedExternalSpatialForces(
 
 template<typename T>
 void MultibodyPlant<T>::AddJointActuationForces(
-    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+    const systems::Context<T>& context, VectorX<T>* forces) const {
   this->ValidateContext(context);
   DRAKE_DEMAND(forces != nullptr);
+  DRAKE_DEMAND(forces->size() == num_velocities());
   if (num_actuators() > 0) {
     const VectorX<T> u = AssembleActuationInput(context);
-    for (JointActuatorIndex actuator_index(0);
-         actuator_index < num_actuators(); ++actuator_index) {
-      const JointActuator<T>& actuator =
-          get_joint_actuator(actuator_index);
+    for (JointActuatorIndex actuator_index(0); actuator_index < num_actuators();
+         ++actuator_index) {
+      const JointActuator<T>& actuator = get_joint_actuator(actuator_index);
+      const Joint<T>& joint = actuator.joint();
       // We only support actuators on single dof joints for now.
-      DRAKE_DEMAND(actuator.joint().num_velocities() == 1);
-      for (int joint_dof = 0;
-           joint_dof < actuator.joint().num_velocities(); ++joint_dof) {
-        actuator.AddInOneForce(context, joint_dof, u[actuator_index], forces);
-      }
+      DRAKE_DEMAND(joint.num_velocities() == 1);
+      (*forces)[joint.velocity_start()] += u[actuator_index];
     }
   }
 }
@@ -2229,14 +2330,13 @@ VectorX<T> MultibodyPlant<T>::AssembleActuationInput(
 
   // Assemble the vector from the model instance input ports.
   // TODO(sherm1) Heap allocation here. Get rid of it.
-  VectorX<T> actuation_input(num_actuated_dofs());
+  VectorX<T> actuation_input = VectorX<T>::Zero(num_actuated_dofs());
 
   const auto& actuation_port = this->get_input_port(actuation_port_);
-  const ModelInstanceIndex first_non_world_index(1);
   if (actuation_port.HasValue(context)) {
     // The port for all instances and the actuation ports for individual
     // instances should not be connected at the same time.
-    for (ModelInstanceIndex model_instance_index(first_non_world_index);
+    for (ModelInstanceIndex model_instance_index(0);
          model_instance_index < num_model_instances(); ++model_instance_index) {
       const auto& per_instance_actuation_port =
           this->get_input_port(instance_actuation_ports_[model_instance_index]);
@@ -2248,7 +2348,7 @@ VectorX<T> MultibodyPlant<T>::AssembleActuationInput(
             GetModelInstanceName(model_instance_index)));
       }
     }
-    // TODO(xuchenhan-tri): It'd be nice to avoid the copy here.
+    // TODO(amcastro-tri): It'd be nice to avoid the copy here.
     actuation_input = actuation_port.Eval(context);
     if (actuation_input.hasNaN()) {
       throw std::runtime_error(
@@ -2257,33 +2357,111 @@ VectorX<T> MultibodyPlant<T>::AssembleActuationInput(
     DRAKE_ASSERT(actuation_input.size() == num_actuated_dofs());
   } else {
     int u_offset = 0;
-    for (ModelInstanceIndex model_instance_index(first_non_world_index);
+    for (ModelInstanceIndex model_instance_index(0);
          model_instance_index < num_model_instances(); ++model_instance_index) {
       // Ignore the port if the model instance has no actuated DoFs.
       const int instance_num_dofs = num_actuated_dofs(model_instance_index);
       if (instance_num_dofs == 0) continue;
 
+      // The user can apply an external feed-forward torque using an actuator.
       const auto& input_port =
           this->get_input_port(instance_actuation_ports_[model_instance_index]);
-      if (!input_port.HasValue(context)) {
-        throw std::logic_error(fmt::format("Actuation input port for model "
-            "instance {} must be connected.",
-            GetModelInstanceName(model_instance_index)));
-      }
-      const auto& u_instance = input_port.Eval(context);
 
-      if (u_instance.hasNaN()) {
-        throw std::runtime_error(
-            fmt::format("Actuation input port for model "
-                        "instance {} contains NaN.",
-                        GetModelInstanceName(model_instance_index)));
+      if (input_port.HasValue(context)) {
+        const auto& u_instance = input_port.Eval(context);
+        if (u_instance.hasNaN()) {
+          throw std::runtime_error(
+              fmt::format("Actuation input port for model "
+                          "instance {} contains NaN.",
+                          GetModelInstanceName(model_instance_index)));
+        }
+        actuation_input.segment(u_offset, instance_num_dofs) = u_instance;
+      } else {
+        // If there is PD control we do not require this actuation to be
+        // connected and we assume a zero feed-forward torque.
+        // However, if there is no PD controller, we require the actuation input
+        // port to be connected.
+        if (!AllActuatorsHavePdControl(*this, model_instance_index)) {
+          throw std::logic_error(
+              fmt::format("Actuation input port for model instance {} must "
+                          "be connected or PD gains must be specified for "
+                          "each actuator.",
+                          GetModelInstanceName(model_instance_index)));
+        }
       }
-      actuation_input.segment(u_offset, instance_num_dofs) = u_instance;
+
       u_offset += instance_num_dofs;
     }
     DRAKE_ASSERT(u_offset == num_actuated_dofs());
   }
+
   return actuation_input;
+}
+
+template <typename T>
+VectorX<T> MultibodyPlant<T>::AssembleDesiredStateInput(
+    const systems::Context<T>& context) const {
+  this->ValidateContext(context);
+
+  // Assemble the vector from the model instance input ports.
+  // TODO(amcastro-tri): Heap allocation here. Get rid of it. Make it EvalFoo().
+  // Desired states of size 2 * num_actuators() for the full model packed as xd
+  // = [qd, vd].
+  VectorX<T> xd = VectorX<T>::Zero(2 * num_actuated_dofs());
+
+  int qd_offset = 0;
+  int vd_offset = num_actuators();
+  for (ModelInstanceIndex model_instance_index(0);
+       model_instance_index < num_model_instances(); ++model_instance_index) {
+    // Ignore the port if the model instance has no actuated DoFs.
+    const int instance_num_u = num_actuated_dofs(model_instance_index);
+    const int instance_num_xd = 2 * instance_num_u;
+
+    // N.B. The desired state port is always declared, though it is zero sized
+    // for models with no PD controllers.
+    if (instance_num_xd == 0) continue;
+
+    const auto& xd_input_port =
+        this->get_desired_state_input_port(model_instance_index);
+
+    const int num_pd_controlled_actuators =
+        NumOfPdControlledActuators(*this, model_instance_index);
+
+    // Desired states input port is ignored for models without PD controllers.
+    if (num_pd_controlled_actuators == instance_num_u) {
+      if (xd_input_port.HasValue(context)) {
+        const auto& xd_instance = xd_input_port.Eval(context);
+        if (xd_instance.hasNaN()) {
+          throw std::runtime_error(
+              fmt::format("Desired state input port for model "
+                          "instance {} contains NaN.",
+                          GetModelInstanceName(model_instance_index)));
+        }
+        xd.segment(qd_offset, instance_num_u) =
+            xd_instance.head(instance_num_u);
+        xd.segment(vd_offset, instance_num_u) =
+            xd_instance.tail(instance_num_u);
+      } else {
+        throw std::runtime_error(
+            fmt::format("Desired state input port for model "
+                        "instance {} not connected.",
+                        GetModelInstanceName(model_instance_index)));
+      }
+    } else if (0 < num_pd_controlled_actuators &&
+               num_pd_controlled_actuators < instance_num_u) {
+      // Partially controlled model. Not supported.
+      throw std::runtime_error(fmt::format(
+          "Model {} is partially PD controlled. For PD controlling a model "
+          "instance, all of its actuators must have gains defined.",
+          GetModelInstanceName(model_instance_index)));
+    }
+    qd_offset += instance_num_u;
+    vd_offset += instance_num_u;
+  }
+  DRAKE_ASSERT(qd_offset == num_actuators());
+  DRAKE_ASSERT(vd_offset == 2 * num_actuators());
+
+  return xd;
 }
 
 template <typename T>
@@ -2503,27 +2681,21 @@ void MultibodyPlant<T>::CalcAndAddSpatialContactForcesContinuous(
 template <typename T>
 void MultibodyPlant<T>::CalcNonContactForces(
     const drake::systems::Context<T>& context,
-    bool discrete,
     MultibodyForces<T>* forces) const {
   this->ValidateContext(context);
+  DRAKE_DEMAND(!is_discrete());
   DRAKE_DEMAND(forces != nullptr);
   DRAKE_DEMAND(forces->CheckHasRightSizeForModel(*this));
-  if (discrete) {
-    discrete_update_manager_->CalcNonContactForces(
-        context, /* include joint limit penalty forces */ true, forces);
-    return;
-  } else {
-    // Compute forces applied through force elements. Note that this resets
-    // forces to empty so must come first.
-    CalcForceElementsContribution(context, forces);
-    AddInForcesFromInputPorts(context, forces);
-    // Only discrete models support joint limits. We log a warning if joint
-    // limits are set.
-    auto& warning = joint_limits_parameters_.pending_warning_message;
-    if (!warning.empty()) {
-      drake::log()->warn(warning);
-      warning.clear();
-    }
+  // Compute forces applied through force elements. Note that this resets
+  // forces to empty so must come first.
+  CalcForceElementsContribution(context, forces);
+  AddInForcesFromInputPorts(context, forces);
+  // Only discrete models support joint limits. We log a warning if joint
+  // limits are set.
+  auto& warning = joint_limits_parameters_.pending_warning_message;
+  if (!warning.empty()) {
+    drake::log()->warn(warning);
+    warning.clear();
   }
 }
 
@@ -2623,14 +2795,10 @@ void MultibodyPlant<T>::DeclareStateCacheAndPorts() {
   DeclareParameters();
 
   // Declare per model instance actuation ports.
-  ModelInstanceIndex last_actuated_instance;
   instance_actuation_ports_.resize(num_model_instances());
   for (ModelInstanceIndex model_instance_index(0);
        model_instance_index < num_model_instances(); ++model_instance_index) {
     const int instance_num_dofs = num_actuated_dofs(model_instance_index);
-    if (instance_num_dofs > 0) {
-      last_actuated_instance = model_instance_index;
-    }
     instance_actuation_ports_[model_instance_index] =
         this->DeclareVectorInputPort(
                 GetModelInstanceName(model_instance_index) + "_actuation",
@@ -2640,6 +2808,22 @@ void MultibodyPlant<T>::DeclareStateCacheAndPorts() {
   actuation_port_ =
       this->DeclareVectorInputPort("actuation", num_actuated_dofs())
           .get_index();
+
+  // Declare per model instance desired states input ports.
+  instance_desired_state_ports_.resize(num_model_instances());
+  for (ModelInstanceIndex model_instance_index(0);
+       model_instance_index < num_model_instances(); ++model_instance_index) {
+    const int instance_num_u =
+        NumOfPdControlledActuators(*this, model_instance_index);
+    // Actuators can only be defined on single-dof joints. Therefore the number
+    // of desired states per instance is twice the number of actuators.
+    const int instance_num_xd = 2 * instance_num_u;
+    instance_desired_state_ports_[model_instance_index] =
+        this->DeclareVectorInputPort(
+                GetModelInstanceName(model_instance_index) + "_desired_state",
+                instance_num_xd)
+            .get_index();
+  }
 
   // Declare the generalized force input port.
   applied_generalized_force_input_port_ =
@@ -3020,6 +3204,17 @@ const systems::InputPort<T>& MultibodyPlant<T>::get_actuation_input_port()
 
 template <typename T>
 const systems::InputPort<T>&
+MultibodyPlant<T>::get_desired_state_input_port(
+    ModelInstanceIndex model_instance) const {
+  DRAKE_MBP_THROW_IF_NOT_FINALIZED();
+  DRAKE_THROW_UNLESS(model_instance.is_valid());
+  DRAKE_THROW_UNLESS(model_instance < num_model_instances());
+  return systems::System<T>::get_input_port(
+      instance_desired_state_ports_.at(model_instance));
+}
+
+template <typename T>
+const systems::InputPort<T>&
 MultibodyPlant<T>::get_applied_spatial_force_input_port() const {
   DRAKE_MBP_THROW_IF_NOT_FINALIZED();
   return systems::System<T>::get_input_port(applied_spatial_force_input_port_);
@@ -3192,7 +3387,7 @@ void MultibodyPlant<T>::CalcReactionForces(
     applied_forces =
         discrete_update_manager_->EvalDiscreteUpdateMultibodyForces(context);
   } else {
-    CalcNonContactForces(context, is_discrete(), &applied_forces);
+    CalcNonContactForces(context, &applied_forces);
     CalcAndAddSpatialContactForcesContinuous(context, &Fapplied_Bo_W_array);
   }
 
@@ -3356,6 +3551,25 @@ template <typename T>
 std::vector<std::set<BodyIndex>>
 MultibodyPlant<T>::FindSubgraphsOfWeldedBodies() const {
   return internal_tree().multibody_graph().FindSubgraphsOfWeldedBodies();
+}
+
+template <typename T>
+bool MultibodyPlant<T>::is_gravity_enabled(
+    ModelInstanceIndex model_instance) const {
+  if (model_instance >= num_model_instances()) {
+    throw std::logic_error("Model instance index is invalid.");
+  }
+  return gravity_field().is_enabled(model_instance);
+}
+
+template <typename T>
+void MultibodyPlant<T>::set_gravity_enabled(ModelInstanceIndex model_instance,
+                                            bool is_enabled) {
+  DRAKE_MBP_THROW_IF_FINALIZED();
+  if (model_instance >= num_model_instances()) {
+    throw std::logic_error("Model instance index is invalid.");
+  }
+  mutable_gravity_field().set_enabled(model_instance, is_enabled);
 }
 
 template <typename T>

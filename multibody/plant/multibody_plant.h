@@ -198,6 +198,7 @@ input_ports:
 - applied_generalized_force
 - applied_spatial_force
 - <em style="color:gray">model_instance_name[i]</em>_actuation
+- <em style="color:gray">model_instance_name[i]</em>_desired_state
 - <span style="color:green">geometry_query</span>
 output_ports:
 - state
@@ -319,6 +320,91 @@ velocities v, [Seth 2010]. `N(q)` is an `nq x nv` matrix.
 The vector `τ ∈ ℝⁿᵛ` on the right hand side of Eq. (1) is
 the system's generalized forces. These incorporate gravity, springs,
 externally applied body forces, constraint forces, and contact forces.
+
+@anchor mbp_actuation
+                ### Actuation
+
+In a %MultibodyPlant model an actuator can be added as a JointActuator, see
+AddJointActuator(). For models with actuators, the plant will declare an
+actuation input port to provide feedforward actuation, see
+get_actuation_input_port(). Actuation ports can be requested for each individual
+@ref model_instances "model instance" in the %MultibodyPlant.
+
+Unless PD controllers are defined
+(see @ref pd_controllers "PD controlled actuators" next), actuation input ports
+are required to be connected.
+
+@warning Effort limits (JointActuator::effort_limit()) are not enforced, unless
+PD controllers are defined. See @ref pd_controllers "PD controlled actuators".
+
+<!-- TODO(amcastro-tri): Consider enforcing effort limits whether PD controllers
+     are defined or not. -->
+
+@anchor pd_controllers
+  #### Using PD controlled actuators
+
+While PD controllers can be modeled externally and be connected to the
+%MultibodyPlant model via the get_actuation_input_port(), simulation stability
+at discrete time steps can be compromised for high controller gains. For such
+cases, simulation stability and robustness can be improved significantly by
+moving your PD controller into the plant where the discrete solver can strongly
+couple controller and model dynamics.
+
+@warning Currently, this feature is only supported for discrete models
+(is_discrete() is true) using the SAP solver (get_discrete_contact_solver()
+returns DiscreteContactSolver::kSap.)
+
+PD controlled joint actuators can be defined by setting PD gains for each joint
+actuator, see JointActuator::set_controller_gains(). Unless these gains are
+specified, joint actuators will not be PD controlled and
+JointActuator::has_controller() will return `false`.
+
+@warning For PD controlled models, all joint actuators in a model instance are
+required to have PD controllers defined. That is, partially PD controlled model
+instances are not supported. An exception will be thrown when evaluating the
+actuation input ports if only a subset of the actuators in a model instance is
+PD controlled.
+
+For models with PD controllers, the actuation torque per actuator is computed
+according to: <pre>
+  ũ = -Kp⋅(q − qd) - Kd⋅(v − vd) + u_ff
+  u = max(−e, min(e, ũ))
+</pre>
+where qd and vd are desired configuration and velocity (see
+get_desired_state_input_port()) for the actuated joint (see
+JointActuator::joint()), Kp and Kd are the proportional and derivative gains of
+the actuator (see JointActuator::get_controller_gains()), `u_ff` is the
+feed-forward actuation specified with get_actuation_input_port(), and `e`
+corresponds to effort limit (see JointActuator::effort_limit()).
+
+Notice that actuation through get_actuation_input_port() and PD control are not
+mutually exclusive, and they can be used together. This is better explained
+through examples:
+  1. **PD controlled gripper**. In this case, only PD control is used to drive
+     the opening and closing of the fingers. The feed-forward term is assumed to
+     be zero and the actuation input port is not required to be connected.
+  2. **Robot arm**. A typical configuration consists on applying gravity
+     compensation in the feed-forward term plus PD control to drive the robot to
+     a given desired state.
+
+@anchor pd_controllers_and_ports
+  #### Actuation input ports requirements
+
+The following table specifies whether actuation ports are required to be
+connected or not:
+
+|               Port               |   without PD control  | with PD control |
+| :------------------------------: | :-------------------: | :-------------: |
+|  get_actuation_input_port()      |          yes          |       no¹       |
+|  get_desired_state_input_port()  |          no²          |       yes       |
+
+¹ Feed-forward actuation is not required for models with PD controlled
+  actuators. This simplifies the diagram wiring for models that only rely on PD
+  controllers.
+
+² This port is always declared, though it will be zero sized for model instances
+  with no PD controllers.
+
 
 @anchor sdf_loading
                  ### Loading models from SDFormat files
@@ -704,24 +790,72 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   const systems::OutputPort<T>& get_body_spatial_accelerations_output_port()
       const;
 
+  /// Returns a constant reference to the input port for external actuations for
+  /// all actuated dofs regardless the number of model instances that have
+  /// actuated dofs. The input actuation is assumed to be ordered according to
+  /// model instances. This input port is a vector valued port, which can be set
+  /// with JointActuator::set_actuation_vector().
+  /// Refer to @ref mbp_actuation "Actuation" for further details.
+  /// @pre Finalize() was already called on `this` plant.
+  /// @throws std::exception if called before Finalize().
+  /// @throws std::exception if individual actuation ports are connected.
+  const systems::InputPort<T>& get_actuation_input_port() const;
+
   /// Returns a constant reference to the input port for external actuation for
   /// a specific model instance.  This input port is a vector valued port, which
   /// can be set with JointActuator::set_actuation_vector().
+  /// Refer to @ref mbp_actuation "Actuation" for further details.
+  ///
+  /// Each model instance in `this` plant model has an actuation input port,
+  /// even if zero sized (for model instance with no actuators.)
+  ///
+  /// @see GetJointActuatorIndices(), GetActuatedJointIndices().
+  ///
+  /// @note This is a vector valued port of size num_actuators(model_instance)
+  /// (where we assume only 1-DOF joints are actuated.)
+  ///
+  /// @warning It is required to connect this input port unless the model
+  /// instance has PD controllers defined, see get_desired_state_input_port(),
+  /// or if the full multibody version of this port is connected. For models
+  /// with PD controllers, actuation defaults to zero. This allows the modeler
+  /// to use PD controllers only, without the need to provide feed-forward
+  /// torques.
+  ///
+  /// @warning This port cannot be used together with get_actuation_input_port()
+  /// for the full multibody system. Either use the port for the full multibody
+  /// system or the port per model instance, never both.
+  ///
   /// @pre Finalize() was already called on `this` plant.
   /// @throws std::exception if called before Finalize().
   /// @throws std::exception if the model instance does not exist.
   const systems::InputPort<T>& get_actuation_input_port(
       ModelInstanceIndex model_instance) const;
 
-  /// Returns a constant reference to the input port for external actuations for
-  /// all actuated dofs regardless the number of model instances that have
-  /// actuated dofs. The input actuation is assumed to be ordered according to
-  /// model instances. This input port is a vector valued port, which can be set
-  /// with JointActuator::set_actuation_vector().
-  /// @pre Finalize() was already called on `this` plant.
-  /// @throws std::exception if called before Finalize().
-  /// @throws std::exception if individual actuation ports are connected.
-  const systems::InputPort<T>& get_actuation_input_port() const;
+  /// For models with PD controlled joint actuators, returns the port to provide
+  /// the desired state for the full `model_instance`.
+  /// Refer to @ref mbp_actuation "Actuation" for further details.
+  ///
+  /// For consistency with get_actuation_input_port(), each model instance in
+  /// `this` plant model has a desired states input port, even if zero sized
+  /// (for model instance with no actuators.)
+  ///
+  /// @note This is a vector valued port of size
+  /// 2*num_actuators(model_instance), where we assumed 1-DOF actuated joints.
+  /// This is true even for unactuated models, for which this port is zero
+  /// sized. This port must provide one desired position and one desired
+  /// velocity per joint actuator. Desired state is assumed to be packed as xd =
+  /// [qd, vd] that is, configurations first followed by velocities.
+  /// Configurations in qd are ordered by JointActuatorIndex, see
+  /// JointActuator::set_actuation_vector(). Similarly for velocities in vd.
+  ///
+  /// @warning If a user specifies a PD controller for an actuator from a given
+  /// model instance, then all actuators of that model instance are required to
+  /// be PD controlled.
+  ///
+  /// @warning It is required to connect this port for PD controlled model
+  /// instances.
+  const systems::InputPort<T>& get_desired_state_input_port(
+      ModelInstanceIndex model_instance) const;
 
   /// Returns a constant reference to the vector-valued input port for applied
   /// generalized forces, and the vector will be added directly into `tau` (see
@@ -1227,7 +1361,7 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   /// Returns the total number of constraints specified by the user.
   int num_constraints() const {
     return num_coupler_constraints() + num_distance_constraints() +
-           num_ball_constraints();
+           num_ball_constraints() + num_weld_constraints();
   }
 
   /// Returns the total number of coupler constraints specified by the user.
@@ -1243,6 +1377,11 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   /// Returns the total number of ball constraints specified by the user.
   int num_ball_constraints() const {
     return ssize(ball_constraints_specs_);
+  }
+
+  /// Returns the total number of weld constraints specified by the user.
+  int num_weld_constraints() const {
+    return ssize(weld_constraints_specs_);
   }
 
   /// (Internal use only) Returns the coupler constraint specification
@@ -1272,6 +1411,15 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     return ball_constraints_specs_.at(id);
   }
 
+  /// (Internal use only)  Returns the weld constraint specification
+  /// corresponding to `id`
+  /// @throws if `id` is not a valid identifier for a weld constraint.
+  const internal::WeldConstraintSpec& get_weld_constraint_specs(
+      MultibodyConstraintId id) const {
+    DRAKE_THROW_UNLESS(weld_constraints_specs_.count(id) > 0);
+    return weld_constraints_specs_.at(id);
+  }
+
   /// (Internal use only)  Returns a reference to the all of the coupler
   /// constraints in this plant as a map from MultibodyConstraintId to
   /// CouplerConstraintSpec.
@@ -1288,11 +1436,18 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     return distance_constraints_specs_;
   }
 
-  /// (Internal use only) Returns a reference to the all of the ball constraints
-  /// in this plant as a map from MultibodyConstraintId to BallConstraintSpec.
+  /// (Internal use only) Returns a reference to all of the ball constraints in
+  /// this plant as a map from MultibodyConstraintId to BallConstraintSpec.
   const std::map<MultibodyConstraintId, internal::BallConstraintSpec>&
   get_ball_constraint_specs() const {
     return ball_constraints_specs_;
+  }
+
+  /// (Internal use only) Returns a reference to the all of the weld constraints
+  /// in this plant as a map from MultibodyConstraintId to WeldConstraintSpec.
+  const std::map<MultibodyConstraintId, internal::WeldConstraintSpec>&
+  get_weld_constraint_specs() const {
+    return weld_constraints_specs_;
   }
 
   /// Returns the active status of the constraint given by `id` in `context`.
@@ -1394,6 +1549,22 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
                                     const Vector3<double>& p_AP,
                                     const Body<T>& body_B,
                                     const Vector3<double>& p_BQ);
+
+  /// Defines a constraint such that frame P affixed to body A is coincident at
+  /// all times with frame Q affixed to body B, effectively modeling a weld
+  /// joint.
+  ///
+  /// @param[in] body_A Body to which frame P is rigidly attached.
+  /// @param[in] X_AP Pose of frame P in body A's frame.
+  /// @param[in] body_B Body to which frame Q is rigidly attached.
+  /// @param[in] X_BQ Pose of frame Q in body B's frame.
+  /// @returns the id of the newly added constraint.
+  ///
+  /// @throws std::exception if bodies A and B are the same body.
+  /// @throws std::exception if the %MultibodyPlant has already been finalized.
+  MultibodyConstraintId AddWeldConstraint(
+      const Body<T>& body_A, const math::RigidTransform<double>& X_AP,
+      const Body<T>& body_B, const math::RigidTransform<double>& X_BQ);
 
   /// <!-- TODO(#18732): Add getters to interrogate existing constraints.
   /// -->
@@ -2311,6 +2482,17 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     internal_tree().SetPositionsInArray(model_instance, q_instance, &q);
   }
 
+  /// Gets the default positions for the plant, which can be changed via
+  /// SetDefaultPositions().
+  /// @throws std::exception if the plant is not finalized.
+  VectorX<T> GetDefaultPositions() const;
+
+  /// Gets the default positions for the plant for a given model instance,
+  /// which can be changed via SetDefaultPositions().
+  /// @throws std::exception if the plant is not finalized, or if the
+  /// model_instance is invalid,
+  VectorX<T> GetDefaultPositions(ModelInstanceIndex model_instance) const;
+
   /// Sets the default positions for the plant.  Calls to CreateDefaultContext
   /// or SetDefaultContext/SetDefaultState will return a Context populated with
   /// these position values. They have no other effects on the dynamics of the
@@ -2724,9 +2906,10 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   /// implicitly construct a 6-dof joint, QuaternionFloatingJoint, for all free
   /// bodies at the time of Finalize(). Using Joint APIs to affect a free body
   /// (setting  state, changing parameters, etc.) has the same effect as using
-  /// the free body APIs below. Each implicitly created joint is named
-  /// "$world_<bodyname>" where "<bodyname>" is the name of the free body, given
-  /// by `Body::name()`.
+  /// the free body APIs below. Each implicitly created joint is named the same
+  /// as the free body, as reported by `Body::name()`. In the rare case that
+  /// there is already some (unrelated) joint with that name, we'll prepend
+  /// underscores to the name until it is unique.
   /// @{
 
   /// Returns the set of body indexes corresponding to the free (floating)
@@ -4562,11 +4745,26 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
         force_element_index);
   }
 
+  /// @returns `true` iff gravity is enabled for `model_instance`.
+  /// @see set_gravity_enabled().
+  /// @throws std::exception if the model instance is invalid.
+  bool is_gravity_enabled(ModelInstanceIndex model_instance) const;
+
+  /// Sets is_gravity_enabled() for `model_instance` to `is_enabled`.
+  /// The effect of `is_enabled = false` is effectively equivalent to disabling
+  /// (or making zero) gravity for all bodies in the specified model instance.
+  /// By default is_gravity_enabled() equals `true` for all model instances.
+  /// @throws std::exception if called post-finalize.
+  /// @throws std::exception if the model instance is invalid.
+  void set_gravity_enabled(ModelInstanceIndex model_instance, bool is_enabled);
+
   /// An accessor to the current gravity field.
   const UniformGravityFieldElement<T>& gravity_field() const {
     return internal_tree().gravity_field();
   }
 
+  // TODO(amastro-tri): mutation of the model should only be allowed
+  // pre-finalize.
   /// A mutable accessor to the current gravity field.
   UniformGravityFieldElement<T>& mutable_gravity_field() {
     return this->mutable_tree().mutable_gravity_field();
@@ -4947,14 +5145,19 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   VectorX<T> AssembleActuationInput(
       const systems::Context<T>& context) const;
 
+  // For models with joint actuators with PD control, this method helps to
+  // assemble desired states for the full model from the input ports for
+  // individual model instances.
+  VectorX<T> AssembleDesiredStateInput(
+      const systems::Context<T>& context) const;
+
   // Computes all non-contact applied forces including:
   //  - Force elements.
   //  - Joint actuation.
   //  - Externally applied spatial forces.
   //  - Joint limits.
-  // May be different between continuous and discrete modes.
+  // @pre The plant is continuous.
   void CalcNonContactForces(const drake::systems::Context<T>& context,
-                            bool discrete,
                             MultibodyForces<T>* forces) const;
 
   // Collects up forces from input ports (actuator, generalized, and spatial
@@ -5096,7 +5299,7 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // Add contribution of external actuation forces passed in through our
   // actuation input ports (there is a separate port for each model instance).
   void AddJointActuationForces(
-      const systems::Context<T>& context, MultibodyForces<T>* forces) const;
+      const systems::Context<T>& context, VectorX<T>* forces) const;
 
   // Helper method to register geometry for a given body, either visual or
   // collision. The registration includes:
@@ -5434,6 +5637,8 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // The actuation port for all actuated dofs.
   systems::InputPortIndex actuation_port_;
 
+  std::vector<systems::InputPortIndex> instance_desired_state_ports_;
+
   // A port for externally applied generalized forces u.
   systems::InputPortIndex applied_generalized_force_input_port_;
 
@@ -5499,6 +5704,10 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   // Map of ball constraint specifications.
   std::map<MultibodyConstraintId, internal::BallConstraintSpec>
       ball_constraints_specs_;
+
+  // Map of weld constraint specifications.
+  std::map<MultibodyConstraintId, internal::WeldConstraintSpec>
+      weld_constraints_specs_;
 
   // All MultibodyPlant cache indexes are stored in cache_indexes_.
   CacheIndexes cache_indexes_;

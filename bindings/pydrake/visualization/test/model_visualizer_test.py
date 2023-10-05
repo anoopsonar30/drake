@@ -2,6 +2,7 @@ import copy
 import inspect
 import subprocess
 import textwrap
+import time
 import unittest
 
 from pydrake.common import FindResourceOrThrow
@@ -226,6 +227,12 @@ class TestModelVisualizer(unittest.TestCase):
             cli,
             f"--ws_url={meshcat.ws_url()}",
             f"--send_message={message}"])
+
+        # Wait up to 5 seconds for the button click to be processed.
+        for _ in range(500):
+            if meshcat.GetButtonClicks(button) > 0:
+                break
+            time.sleep(1 / 100)
         self.assertEqual(meshcat.GetButtonClicks(button), 1)
 
         # Run once. If a reload() happened, the diagram will have changed out.
