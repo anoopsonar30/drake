@@ -126,7 +126,7 @@ void GCSDiamondExample(){
   solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Function precision", function_precision);
   options.solver_options = solver_options_;
   
-  auto [traj, result] = gcs.SolvePath(source, target, options);
+  auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
 
   std::cout << "Result is Success : " << result.is_success() << std::endl;
 
@@ -219,7 +219,7 @@ void GCSDiamond3DExample(){
   solver_options_.SetOption(drake::solvers::SnoptSolver::id(), "Function precision", function_precision);
   options.solver_options = solver_options_;
 
- auto [traj, result] = gcs.SolvePath(source, target, options);
+ auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
 
   std::cout << "Number of segments : " << traj.get_number_of_segments() << std::endl;
 

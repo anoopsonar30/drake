@@ -75,7 +75,7 @@ void do_main() {
   GraphOfConvexSetsOptions options;
   options.max_rounded_paths = 3;
   
-  auto [traj, result] = gcs.SolvePath(source, target, options);
+  auto [traj, traj_control_points, result] = gcs.SolvePath(source, target, options);
 
   std::cout << "Result is success : " << result.is_success() << std::endl;
   std::cout << "Rows : " << traj.rows() << ", Cols : " << traj.cols() << std::endl;

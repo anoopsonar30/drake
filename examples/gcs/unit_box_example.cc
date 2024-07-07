@@ -65,7 +65,7 @@ void do_main() {
   gcs.AddEdges(source, regions);
   gcs.AddEdges(regions, target);
 
-  auto [traj, result] = gcs.SolvePath(source, target);
+  auto [traj, traj_control_points, result] = gcs.SolvePath(source, target);
 
   std::cout << "Result is success : " << result.is_success() << std::endl;
   std::cout << "Rows : " << traj.rows() << ", Cols : " << traj.cols() << std::endl;
