@@ -124,7 +124,7 @@ drake_cc_binary(
     name = "single_arm",
     srcs = ["single_arm.cc"],
     add_test_rule = 1,
-    copts = ["-fopenmp"],
+    copts = ["-fopenmp", "-Werror=deprecated-declarations"],
     linkopts = ["-fopenmp"],
     data = [
         ":models",

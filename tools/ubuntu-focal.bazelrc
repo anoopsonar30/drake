@@ -1,5 +1,5 @@
 # Use C++17 by default.
-build --jobs=8
+build --jobs=32
 build --test_tag_filters=gurobi,mosek,snopt
 build --cxxopt=-std=c++17
 build --host_cxxopt=-std=c++17

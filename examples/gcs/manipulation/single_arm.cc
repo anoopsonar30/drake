@@ -107,6 +107,8 @@ DEFINE_double(delta, 0.2,
               "The maximum acceptable risk of collision over the entire trajectory.");
 DEFINE_bool(use_max, false,
              "If true, only the maximum waypoint risk over the entire trajectory is constrained.");
+DEFINE_int32(T_check, 100,
+             "The number of timesteps used to check the trajectory.");
 
 namespace drake {
 namespace examples {
@@ -539,6 +541,98 @@ void VisualizeTrajectory(std::vector<MatrixX<symbolic::Variable>> segment_contro
   simulator.AdvanceTo(T * timestep);
 }
 
+bool VerifyTrajectoryInConvexSetsConvexHull(drake::solvers::MathematicalProgramResult result, std::vector<MatrixX<symbolic::Variable>> segment_controls, ConvexSets regions_){
+    
+    if (!result.is_success()){
+        return false;
+    }
+    
+    bool trajectoryInConvexSets = true;
+    // Iterate over each segment of the trajectory
+    for (int i = 0; i < static_cast<int>(segment_controls.size()); i++){
+        // auto optimalCoeffs = traj_control_points[i];
+        // auto optimalCoeffs = collision_free_result.GetSolution(segment_controls[i]);
+        auto optimalCoeffs = result.GetSolution(segment_controls[i]);
+        
+        bool segmentInSet = true;
+        // Iterate over each control point.
+        for (int j = 0; j < segment_controls[i].cols(); j++){
+            // Iterate over all convex sets
+            bool pointIsInSet = false;
+            int regionNumber = 0;
+            for (auto set : regions_)
+            {
+                bool check = set->PointInSet(optimalCoeffs.col(j), 1e-6);
+                // std::cout << "i: " << i << ", j: " << j << " region : " << regionNumber << ", check : " << check << std::endl;
+                regionNumber++;
+                if (check)
+                {
+                    pointIsInSet = true;
+                    break;
+                }
+            }
+
+            if (!pointIsInSet){
+                segmentInSet = false;
+                break;
+            }
+        }
+
+        if (!segmentInSet){
+            trajectoryInConvexSets = false;
+            break;
+        }
+    }
+
+    return trajectoryInConvexSets;
+}
+
+bool VerifyTrajectoryInConvexSetsSampling(drake::solvers::MathematicalProgramResult result, std::vector<MatrixX<symbolic::Variable>> segment_controls, ConvexSets regions_){
+    if (!result.is_success()){
+        return false;
+    }
+
+    bool trajectoryInConvexSets = true;
+    // Iterate over each segment of the trajectory
+    for (int i = 0; i < static_cast<int>(segment_controls.size()); i++){
+        // auto optimalCoeffs = traj_control_points[i];
+        auto optimalCoeffs = result.GetSolution(segment_controls[i]);
+        auto optimalTrajectory = BezierCurve<double>(0, 1, optimalCoeffs);
+
+        bool segmentInSet = true;
+        // Iterate over FLAGS_T_check points for each segment
+        for (int j = 0; j <= FLAGS_T_check; j++){
+            // Iterate over all convex sets
+            double tStep = static_cast<double>(j) / FLAGS_T_check;
+            bool pointIsInSet = false;
+            int regionNumber = 0;
+            for (auto set : regions_)
+            {
+                bool check = set->PointInSet(optimalTrajectory.value(tStep), 1e-6);
+                // std::cout << "i: " << i << ", j: " << j << " region : " << regionNumber << ", check : " << check << std::endl;
+                regionNumber++;
+                if (check)
+                {
+                    pointIsInSet = true;
+                    break;
+                }
+            }
+
+            if (!pointIsInSet){
+                segmentInSet = false;
+                break;
+            }
+        }
+
+        if (!segmentInSet){
+            trajectoryInConvexSets = false;
+            break;
+        }
+    }
+
+    return trajectoryInConvexSets;
+}
+
 int RunExample() {
 
   const int order = 3;
@@ -752,10 +846,10 @@ int RunExample() {
       }
   }
 
-  for (int i = 0; i < numSegments; i++)
-  {
-      prog->SetInitialGuess(segment_controls[i], traj_control_points[i]);
-  }
+//   for (int i = 0; i < numSegments; i++)
+//   {
+//       prog->SetInitialGuess(segment_controls[i], traj_control_points[i]);
+//   }
 
   drake::log()->debug("Deterministic program definition complete");
 
@@ -892,8 +986,8 @@ int RunExample() {
       prog->AddConstraint(collision_chance_constraint, xvars_vectorized);
 
   // We'll seed the nonlinear solver with the solution from the minimum distance constraint problem
-  for (int i = 0; i < numSegments; i++)
-      prog->SetInitialGuess(segment_controls[i], collision_free_result.GetSolution(segment_controls[i]));
+//   for (int i = 0; i < numSegments; i++)
+//       prog->SetInitialGuess(segment_controls[i], collision_free_result.GetSolution(segment_controls[i]));
 
   // That completes our setup for the chance-constrained mathematical program
   drake::log()->debug("Chance-constrained program definition complete");
@@ -917,6 +1011,15 @@ int RunExample() {
 
   // Visualize the results of the chance-constrained optimization, and report the risk incurred
   VisualizeTrajectory(segment_controls, chance_constrained_result, execute_demo[0]);
+
+  // Verify whether the trajectory is within the convex regions.
+  // First method using the convex hull property of bezier curves
+  bool trajectoryInConvexSets = VerifyTrajectoryInConvexSetsConvexHull(chance_constrained_result, segment_controls, regions_);
+  std::cout << "Trajectory in convex sets : " << trajectoryInConvexSets << std::endl;
+
+  // Second method by sampling a bunch of points and checking if each point lies in the convex regions.
+  trajectoryInConvexSets = VerifyTrajectoryInConvexSetsSampling(chance_constrained_result, segment_controls, regions_);
+  std::cout << "Trajectory in convex sets : " << trajectoryInConvexSets << std::endl;
 
   return 0;
 }

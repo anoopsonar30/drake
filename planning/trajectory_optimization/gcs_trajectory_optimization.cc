@@ -658,7 +658,7 @@ GcsTrajectoryOptimization::SolvePath(const Subgraph& source,
   std::vector<copyable_unique_ptr<Trajectory<double>>> bezier_curves;
   std::vector<MatrixX<double>> control_points_return;
 
-  for (const Edge* edge : path_edges) {
+  for (const Edge* e : path_edges) {
     // Extract phi from the solution to rescale the control points and duration
     // in case we get the relaxed solution.
     const double phi_inv = 1 / result.GetSolution(e->phi());

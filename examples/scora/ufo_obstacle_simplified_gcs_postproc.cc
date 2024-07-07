@@ -88,7 +88,7 @@ using geometry::optimization::Point;
 using geometry::optimization::VPolytope;
 using planning::trajectory_optimization::GcsTrajectoryOptimization;
 
-DEFINE_double(function_precision, 0.001,
+DEFINE_double(function_precision, 0.0001,
               "SNOPT option.");
 DEFINE_double(delta, 0.2,
               "The maximum acceptable risk of collision over the entire trajectory.");
@@ -102,7 +102,7 @@ DEFINE_int32(num_benchmark_runs, 1,
              "The number of times which the optimization problem should be solved to measure its runtime.");
 DEFINE_bool(use_max, false,
              "If true, only the maximum waypoint risk over the entire trajectory is constrained.");
-DEFINE_int32(T, 10,
+DEFINE_int32(T, 5,
              "The number of timesteps used to define the trajectory.");
 DEFINE_int32(T_check, 100,
              "The number of timesteps used to check the trajectory.");

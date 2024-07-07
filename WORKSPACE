@@ -35,9 +35,6 @@ pkg_config_repository(
 # This needs to be in WORKSPACE or a repository rule for native.bazel_version
 # to actually be defined. The minimum_bazel_version value should match the
 # version passed to the find_package(Bazel) call in the root CMakeLists.txt.
-<<<<<<< HEAD
-versions.check(minimum_bazel_version = "4.0")
-=======
 versions.check(minimum_bazel_version = "5.1")
 
 # The cargo_universe programs are only used by Drake's new_release tooling, not
@@ -46,4 +43,3 @@ versions.check(minimum_bazel_version = "5.1")
 load("@rules_rust//crate_universe:repositories.bzl", "crate_universe_dependencies")  # noqa
 
 crate_universe_dependencies(bootstrap = True)
->>>>>>> 79b2df83452e18287fd32b75d4af77d0172a9c87
