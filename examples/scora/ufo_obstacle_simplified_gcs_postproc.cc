@@ -63,7 +63,7 @@
 #include "drake/planning/trajectory_optimization/gcs_trajectory_optimization.h"
 
 #include "drake/examples/scora/ccopt/chance_constraints.h"
-#include "drake/examples/scora/ccopt/bezier_min_dist_constraint.h"
+// #include "drake/examples/scora/ccopt/bezier_min_dist_constraint.h"
 
 namespace drake {
 namespace examples {

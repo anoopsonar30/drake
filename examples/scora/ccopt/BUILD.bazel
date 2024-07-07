@@ -9,6 +9,7 @@ load("//tools/lint:lint.bzl", "add_lint_tests")
 
 drake_cc_library(
     name = "ccopt",
+    copts = ["-Wno-error=deprecated-declarations"],
     srcs = [
         "geometry_set_tester.h",
         "chance_constraints.cpp",
@@ -19,11 +20,11 @@ drake_cc_library(
         "bullet_world_manager.h",
         "utils.h",
         "utils.cpp",
-        "bezier_min_dist_constraint.cc"
+        # "bezier_min_dist_constraint.cc"
     ],
     hdrs = [
         "chance_constraints.h",
-        "bezier_min_dist_constraint.h",
+        # "bezier_min_dist_constraint.h",
         "joint_chance_constraints.h",
         "bullet_world_manager.h",
         "utils.h",

@@ -273,6 +273,7 @@ drake_cc_binary(
     name = "ufo_obstacle_simplified_gcs_postproc",
     testonly = 1,
     srcs = ["ufo_obstacle_simplified_gcs_postproc.cc"],
+    copts = ["-Wno-error=deprecated-declarations"],
     data = ["models"],
     deps = [
         "//common/proto:call_python",
