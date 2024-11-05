@@ -122,6 +122,9 @@ PiecewiseQuaternionSlerp<T>::PiecewiseQuaternionSlerp(
 }
 
 template <typename T>
+PiecewiseQuaternionSlerp<T>::~PiecewiseQuaternionSlerp() = default;
+
+template <typename T>
 std::unique_ptr<Trajectory<T>> PiecewiseQuaternionSlerp<T>::Clone() const {
   return std::make_unique<PiecewiseQuaternionSlerp>(*this);
 }
@@ -225,4 +228,4 @@ std::unique_ptr<Trajectory<T>> PiecewiseQuaternionSlerp<T>::DoMakeDerivative(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewiseQuaternionSlerp)
+    class drake::trajectories::PiecewiseQuaternionSlerp);

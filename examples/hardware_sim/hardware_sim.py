@@ -10,9 +10,8 @@ listens for command messages.
 It is intended to operate in the "no ground truth" regime, i.e, the only LCM
 messages it knows about are the ones used by the actual hardware. The one
 messaging difference from real life is that we emit visualization messages (for
-Meldis, or the legacy ``drake-visualizer`` application of days past) so that
-you can watch a simulation on your screen while some (separate) controller
-operates the robot, without extra hassle.
+Meldis) so that you can watch a simulation on your screen while some (separate)
+controller operates the robot, without extra hassle.
 
 Drake maintainers should keep this file in sync with both hardware_sim.cc and
 scenario.h.
@@ -31,6 +30,9 @@ from pydrake.manipulation import (
     IiwaDriver,
     SchunkWsgDriver,
     ZeroForceDriver,
+)
+from pydrake.geometry import (
+    SceneGraphConfig
 )
 from pydrake.multibody.plant import (
     AddMultibodyPlant,
@@ -82,6 +84,9 @@ class Scenario:
     # Plant configuration (time step and contact parameters).
     plant_config: MultibodyPlantConfig = MultibodyPlantConfig()
 
+    # SceneGraph configuration.
+    scene_graph_config: SceneGraphConfig = SceneGraphConfig()
+
     # All of the fully deterministic elements of the simulation.
     directives: typing.List[ModelDirective] = dc.field(default_factory=list)
 
@@ -130,7 +135,8 @@ def run(*, scenario, graphviz=None):
 
     # Create the multibody plant and scene graph.
     sim_plant, scene_graph = AddMultibodyPlant(
-        config=scenario.plant_config,
+        plant_config=scenario.plant_config,
+        scene_graph_config=scenario.scene_graph_config,
         builder=builder)
 
     # Add model directives.

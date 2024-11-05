@@ -11,7 +11,6 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/pointer_cast.h"
 #include "drake/systems/framework/diagram_context.h"
 #include "drake/systems/framework/diagram_continuous_state.h"
@@ -78,7 +77,7 @@ template <typename T>
 class Diagram : public System<T>, internal::SystemParentServiceInterface {
  public:
   // Diagram objects are neither copyable nor moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Diagram)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Diagram);
 
   /// A designator for a "system + input port" pair, to uniquely refer to
   /// some input port on one of this diagram's subsystems.
@@ -117,11 +116,11 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
 
   std::multimap<int, int> GetDirectFeedthroughs() const final;
 
-  void SetDefaultState(const Context<T>& context,
-                       State<T>* state) const override;
-
   void SetDefaultParameters(const Context<T>& context,
                             Parameters<T>* params) const override;
+
+  void SetDefaultState(const Context<T>& context,
+                       State<T>* state) const override;
 
   void SetRandomState(const Context<T>& context, State<T>* state,
                       RandomGenerator* generator) const override;
@@ -232,20 +231,6 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
   /// diagram.
   const State<T>& GetSubsystemState(const System<T>& subsystem,
                                     const State<T>& state) const;
-
-  DRAKE_DEPRECATED(
-      "2024-01-01",
-      "Instead of calling this function, call GetGraphvizFragment().")
-  void GetGraphvizInputPortToken(const InputPort<T>& port,
-                                 int max_depth,
-                                 std::stringstream* dot) const final;
-
-  DRAKE_DEPRECATED(
-      "2024-01-01",
-      "Instead of calling this function, call GetGraphvizFragment()")
-  void GetGraphvizOutputPortToken(const OutputPort<T>& port,
-                                  int max_depth,
-                                  std::stringstream* dot) const final;
 
   /// Returns the index of the given @p sys in this diagram, or aborts if @p sys
   /// is not a member of the diagram.
@@ -632,4 +617,4 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::Diagram)
+    class ::drake::systems::Diagram);

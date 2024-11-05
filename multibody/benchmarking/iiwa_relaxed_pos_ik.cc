@@ -4,7 +4,6 @@
 // This benchmark is intended to analyze the performance of nonlinear
 // optimization with position constraints.
 
-#include "drake/common/find_resource.h"
 #include "drake/multibody/inverse_kinematics/inverse_kinematics.h"
 #include "drake/multibody/inverse_kinematics/position_constraint.h"
 #include "drake/multibody/parsing/parser.h"
@@ -41,15 +40,14 @@ BENCHMARK_F(RelaxedPosIkBenchmark, Iiwa)(benchmark::State& state) {  // NOLINT
   const int kNumRandInitGuess = 2;
 
   // Find the model file for Kuka iiwa.
-  const std::string iiwa_path = FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/iiwa7/"
-      "iiwa7_no_collision.sdf");
+  const std::string iiwa_url =
+      "package://drake_models/iiwa_description/sdf/iiwa7_no_collision.sdf";
   // Create a continuous-time plant.
   multibody::MultibodyPlant<double> plant(0.0);
   // Create a parser for the plant.
   multibody::Parser parser{&plant};
   // Load the model into the parser.
-  parser.AddModels(iiwa_path);
+  parser.AddModelsFromUrl(iiwa_url);
   // Attach the base of the robot into the world frame.
   plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("iiwa_link_0"));
   // Finalize the plant.
@@ -60,7 +58,8 @@ BENCHMARK_F(RelaxedPosIkBenchmark, Iiwa)(benchmark::State& state) {  // NOLINT
 
   // Define the end-effector link and get the corresponding body and frame.
   const std::string ee_link_name = "iiwa_link_7";
-  const multibody::Body<double>& ee_body = plant.GetBodyByName(ee_link_name);
+  const multibody::RigidBody<double>& ee_body =
+      plant.GetBodyByName(ee_link_name);
   const multibody::Frame<double>& ee_frame = plant.GetFrameByName(ee_link_name);
 
   // Create an IK object and get its mathetical program.

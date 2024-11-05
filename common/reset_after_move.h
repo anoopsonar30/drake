@@ -27,7 +27,7 @@ namespace drake {
 /// <pre>
 /// class Foo {
 ///  public:
-///   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Foo)
+///   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Foo);
 ///   Foo() = default;
 ///
 ///  private:
@@ -103,6 +103,13 @@ class reset_after_move {
   operator*() const {
     return *value_;
   }
+  //@}
+
+  /// @name Direct access to the T value.
+  //@{
+  T& value() { return value_; }
+
+  const T& value() const { return value_; }
   //@}
 
  private:

@@ -26,14 +26,14 @@ class MobilizerTester : public ::testing::Test {
   MobilizerTester() {
     // Spatial inertia for adding a body. The actual value is not important for
     // these tests since they are all kinematic.
-    const SpatialInertia<double> M_B;
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     owned_tree_ = std::make_unique<MultibodyTree<double>>();
     tree_ = owned_tree_.get();
 
     // Add a body so we can add a mobilizer to it.
-    body_ = &owned_tree_->AddBody<RigidBody>("body", M_B);
+    body_ = &owned_tree_->AddRigidBody("body", M_B);
   }
 
   // Adds a Joint, then finalizes to get a model using a Mobilizer and
@@ -48,13 +48,13 @@ class MobilizerTester : public ::testing::Test {
 
     // We are done adding modeling elements. Transfer tree to system,
     // finalize, and get a Context.
-    system_ = std::make_unique<MultibodyTreeSystem<double>>(
-        std::move(owned_tree_));
+    system_ =
+        std::make_unique<MultibodyTreeSystem<double>>(std::move(owned_tree_));
     context_ = system_->CreateDefaultContext();
 
     const Mobilizer<double>& mobilizer = joint_ref.GetMobilizerInUse();
     const auto* typed_mobilizer =
-      dynamic_cast<const MobilizerType<double>*>(&mobilizer);
+        dynamic_cast<const MobilizerType<double>*>(&mobilizer);
     DRAKE_DEMAND(typed_mobilizer != nullptr);
     return *typed_mobilizer;
   }
@@ -70,8 +70,8 @@ class MobilizerTester : public ::testing::Test {
 
     // We are done adding modeling elements. Transfer tree to system and get
     // a Context.
-    system_ = std::make_unique<MultibodyTreeSystem<double>>(
-        std::move(owned_tree_));
+    system_ =
+        std::make_unique<MultibodyTreeSystem<double>>(std::move(owned_tree_));
     context_ = system_->CreateDefaultContext();
 
     return mobilizer_ref;

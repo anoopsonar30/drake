@@ -157,11 +157,8 @@ GTEST_TEST(VPolytopeTest, UnitBoxTest) {
   }
 
   // Test SceneGraph constructor.
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(2.0, 2.0, 2.0), RigidTransformd::Identity());
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   VPolytope V_scene_graph(query, geom_id);
   EXPECT_EQ(V.ambient_dimension(), 3);
@@ -170,14 +167,22 @@ GTEST_TEST(VPolytopeTest, UnitBoxTest) {
   EXPECT_FALSE(V.PointInSet(out_W, kTol));
 }
 
+// Tests correct handling of the edge case for the "fail fast heuristic" in
+// PointInSet where the query point is exactly the mean of the vertices. In this
+// case, the heuristic generates a degenerate hyperplane but does not falsely
+// claim a that the mean of the vertices lies outside of the set.
+GTEST_TEST(VPolytopeTest, PointInSetFailFastEdgeCase) {
+  VPolytope V = VPolytope::MakeUnitBox(3);
+  Eigen::VectorXd vertex_mean = V.vertices().rowwise().mean();
+  const double kTol = 1e-11;
+  EXPECT_TRUE(V.PointInSet(vertex_mean, kTol));
+}
+
 GTEST_TEST(VPolytopeTest, ArbitraryBoxTest) {
   const RigidTransformd X_WG(math::RollPitchYawd(.1, .2, 3),
                              Vector3d(-4.0, -5.0, -6.0));
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Box(1.0, 2.0, 3.0), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
 
   EXPECT_EQ(V.ambient_dimension(), 3);
@@ -245,11 +250,8 @@ void CheckVertices(const Eigen::Ref<const Eigen::Matrix3Xd>& vertices,
 GTEST_TEST(VPolytopeTest, OctahedronTest) {
   const RigidTransformd X_WG(math::RollPitchYawd(.1, .2, 3),
                              Vector3d(-4.0, -5.0, -6.0));
-  auto [scene_graph, geom_id] = MakeSceneGraphWithShape(
+  auto [scene_graph, geom_id, context, query] = MakeSceneGraphWithShape(
       Convex(FindResourceOrThrow("drake/geometry/test/octahedron.obj")), X_WG);
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
   EXPECT_EQ(V.vertices().cols(), 6);
 
@@ -268,12 +270,9 @@ GTEST_TEST(VPolytopeTest, OctahedronTest) {
 }
 
 GTEST_TEST(VPolytopeTest, NonconvexMesh) {
-  auto [scene_graph, geom_id] = MakeSceneGraphWithShape(
+  auto [scene_graph, geom_id, context, query] = MakeSceneGraphWithShape(
       Mesh(FindResourceOrThrow("drake/geometry/test/non_convex_mesh.obj")),
       RigidTransformd{});
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
   VPolytope V(query, geom_id);
 
   // The non-convex mesh contains 5 vertices, but the convex hull contains only
@@ -293,31 +292,6 @@ GTEST_TEST(VPolytopeTest, NonconvexMesh) {
 
   ASSERT_TRUE(V.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(V.PointInSet(V.MaybeGetFeasiblePoint().value()));
-}
-
-// Confirm that VPolytope will complain about non-obj mesh/convex shapes even
-// if SceneGraph stops complaining. Likewise confirm that GetVertices complains.
-GTEST_TEST(VPolytopeTest, UnsupportedMeshTypes) {
-  const Convex convex("bad_extension.stl");
-  const Mesh mesh("bad_extension.stl");
-
-  for (const auto* shape : std::vector<const Shape*>{&convex, &mesh}) {
-    const RigidTransformd X_WG;
-    // We can't add proximity properties; ProximityEngine would reject it.
-    const bool add_proximity_properties = false;
-    auto [scene_graph, geom_id] =
-        MakeSceneGraphWithShape(*shape, X_WG, add_proximity_properties);
-    auto context = scene_graph->CreateDefaultContext();
-    auto query = scene_graph->get_query_output_port().Eval<QueryObject<double>>(
-        *context);
-    DRAKE_EXPECT_THROWS_MESSAGE(
-        VPolytope(query, geom_id),
-        "VPolytope can only use mesh shapes .* '.*bad_extension.stl'.");
-  }
-
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      GetVertices(convex),
-      "GetVertices\\(\\) can only use mesh shapes .* '.*bad_extension.stl'.");
 }
 
 GTEST_TEST(VPolytopeTest, UnitBox6DTest) {
@@ -465,6 +439,33 @@ GTEST_TEST(VPolytopeTest, FromUnboundedHPolytopeTest) {
   DRAKE_EXPECT_THROWS_MESSAGE(VPolytope{H}, ".*hpoly.IsBounded().*");
 }
 
+GTEST_TEST(VPolytopeTest, FromDegenerateHPolytope) {
+  // The L1 ball in three dimensions always has 4 hyperplanes actives at every
+  // vertex, but no hyperplane is degenerate in our implementation. This leads
+  // to QHull constructing an overdetermined linear system when solving for the
+  // vertices.
+  HPolyhedron H = HPolyhedron::MakeL1Ball(3);
+  VPolytope V(H);
+  Eigen::MatrixXd vertices_expected(3, 6);
+  // clang-format off
+  vertices_expected << 1, -1,  0,  0,  0,  0,
+                       0,  0,  1, -1,  0,  0,
+                       0,  0,  0,  0,  1, -1;
+  // clang-format on
+  EXPECT_EQ(vertices_expected.cols(), V.vertices().cols());
+  for (int i = 0; i < vertices_expected.cols(); ++i) {
+    bool found_match = false;
+    for (int j = 0; j < vertices_expected.cols(); ++j) {
+      if (CompareMatrices(vertices_expected.col(i), V.vertices().col(j),
+                          1e-11)) {
+        found_match = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found_match);
+  }
+}
+
 GTEST_TEST(VPolytopeTest, ConstructorFromHPolyhedronQHullProblems) {
   // Test cases of HPolyhedra that QHull cannot handle on its own.
   // Code logic in the constructor should handle these cases without any
@@ -561,6 +562,54 @@ GTEST_TEST(VPolytopeTest, ConstructorFromHPolyhedronQHullProblems) {
   EXPECT_FALSE(vpoly3.PointInSet(Eigen::Vector3d(0, 2, 0), vpolyTol));
   EXPECT_FALSE(vpoly3.PointInSet(Eigen::Vector3d(0, 0, -1), vpolyTol));
   EXPECT_FALSE(vpoly3.PointInSet(Eigen::Vector3d(0, 0, 2), vpolyTol));
+
+  // 1D ambient dimension.
+  Eigen::Matrix<double, 2, 1> A4;
+  A4 << 1, -1;
+  Eigen::Vector2d b4;
+  b4 << 1, 0;
+  HPolyhedron hpoly4(A4, b4);
+  EXPECT_NO_THROW(VPolytope{hpoly4});
+  const VPolytope vpoly4(hpoly4);
+  EXPECT_TRUE(vpoly4.PointInSet(Vector1d(1), vpolyTol));
+  EXPECT_TRUE(vpoly4.PointInSet(Vector1d(0), vpolyTol));
+  // Ensure points just outside the boundary are not in the set. Note that we
+  // use 2 * vpolyTol, since a point that is only vpolyTol outside of the set
+  // could be considered to be in the set due to the numerical tolerance.
+  EXPECT_FALSE(vpoly4.PointInSet(Vector1d(1 + 2 * vpolyTol), vpolyTol));
+  EXPECT_FALSE(vpoly4.PointInSet(Vector1d(0 - 2 * vpolyTol), vpolyTol));
+}
+
+GTEST_TEST(VPolytopeTest, ConstructorFromHPolyhedronNumericallyChallenging) {
+  // Example identified in #20985.
+  Eigen::Matrix<double, 6, 3> A;
+  Eigen::Vector<double, 6> b;
+  // clang-format off
+  A <<  1,  0,  0,
+        0,  1,  0,
+        0,  0,  1,
+       -1,  0,  0,
+        0, -1,  0,
+        0,  0, -1;
+  // clang-format on
+  b << 0.03, 0.03, 0.075, 0.03, 0.03, 0.075;
+  const HPolyhedron hpoly(A, b);
+
+  const double kTol = 1e-4;
+  const VPolytope vpoly(hpoly, kTol);
+
+  // This is a box, so it should have 8 vertices.
+  ASSERT_EQ(vpoly.vertices().cols(), 8);
+  // Check that each corner of the form (+/- 0.03, +/- 0.03, +/- 0.075) is
+  // contained within the VPolytope.
+  for (int i = -1; i < 2; i += 2) {
+    for (int j = -1; j < 2; j += 2) {
+      for (int k = -1; k < 2; k += 2) {
+        Eigen::Vector3d point(i * 0.03, j * 0.03, k * 0.075);
+        EXPECT_TRUE(vpoly.PointInSet(point, kTol));
+      }
+    }
+  }
 }
 
 GTEST_TEST(VPolytopeTest, CloneTest) {
@@ -773,7 +822,7 @@ GTEST_TEST(VPolytopeTest, GetMinimalRepresentationTest) {
 }
 
 // Confirm that WriteObj generates an Obj file that can be read back in to
-// obtain the same VPolytope. All of the geometry work is done by qhull; this
+// obtain the same VPolytope. All of the geometry work is done by Convex; this
 // test simply covers the data flow.
 GTEST_TEST(VPolytopeTest, WriteObjTest) {
   VPolytope V = VPolytope::MakeUnitBox(3);
@@ -781,11 +830,8 @@ GTEST_TEST(VPolytopeTest, WriteObjTest) {
   const std::string filename = temp_directory() + "/vpolytope.obj";
   V.WriteObj(filename);
 
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Convex(filename, 1), RigidTransformd::Identity());
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   VPolytope V_scene_graph(query, geom_id);
   CheckVertices(V.vertices(), V_scene_graph.vertices(), 1e-6);

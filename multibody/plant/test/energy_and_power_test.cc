@@ -32,8 +32,7 @@ class EnergyAndPowerTester : public ::testing::Test {
 
     // We want a free body with a general inertia matrix.
     body_ = &plant_.AddRigidBody(
-        "Lumpy",
-        SpatialInertia<double>(body_mass_, p_BBcm_, G_BBo_));
+        "Lumpy", SpatialInertia<double>(body_mass_, p_BBcm_, G_BBo_));
 
     spring_damper_ = &plant_.AddForceElement<LinearSpringDamper>(
         plant_.world_body(), p_WP_, *body_, p_BQ_, free_length_, stiffness_,
@@ -74,7 +73,7 @@ class EnergyAndPowerTester : public ::testing::Test {
   const SpatialInertia<double>& get_M_B_W() const {
     const std::vector<SpatialInertia<double>>& M_Bi_W =
         plant_.EvalSpatialInertiaInWorldCache(*context_);
-    return M_Bi_W[body_->node_index()];
+    return M_Bi_W[body_->mobod_index()];
   }
 
   // Return an appropriate tolerance to be used in checking the given quantity.

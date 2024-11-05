@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include "drake/common/ssize.h"
+#include "drake/common/test_utilities/eigen_matrix_compare.h"
+
 namespace drake {
 namespace geometry {
 namespace internal {
@@ -63,6 +66,7 @@ GTEST_TEST(DeformableContactSurface, EmptySurface) {
   EXPECT_EQ(dut.barycentric_coordinates_A().size(), 0);
   EXPECT_EQ(dut.contact_vertex_indexes_A().size(), 0);
   EXPECT_EQ(dut.nhats_W().size(), 0);
+  EXPECT_EQ(dut.R_WCs().size(), 0);
   EXPECT_FALSE(dut.is_B_deformable());
 }
 
@@ -98,6 +102,11 @@ GTEST_TEST(DeformableContactSurface, Getters) {
   EXPECT_EQ(dut.barycentric_coordinates_A(), barycentric_centroids_A);
   EXPECT_EQ(dut.barycentric_coordinates_B(), barycentric_centroids_B);
   EXPECT_EQ(dut.nhats_W(), nhats_W);
+  EXPECT_EQ(dut.R_WCs().size(), dut.nhats_W().size());
+  const std::vector<math::RotationMatrix<double>>& R_WCs = dut.R_WCs();
+  for (int i = 0; i < ssize(R_WCs); ++i) {
+    EXPECT_TRUE(CompareMatrices(R_WCs[i].col(2), -nhats_W[i]));
+  }
 }
 
 GTEST_TEST(DeformableContact, RegisterGeometry) {
@@ -161,6 +170,92 @@ GTEST_TEST(DeformableContact, Participate) {
   EXPECT_EQ(dut.contact_participation(kIdA).num_vertices_in_contact(), 0);
   dut.Participate(kIdA, {0, 1, 5});
   EXPECT_EQ(dut.contact_participation(kIdA).num_vertices_in_contact(), 3);
+}
+
+GTEST_TEST(DeformableContact, AddDeformableDeformableContactSurface) {
+  DeformableContact<double> dut;
+  constexpr int kNumVertices = 6;
+  dut.RegisterDeformableGeometry(kIdA, kNumVertices);
+  dut.RegisterDeformableGeometry(kIdB, kNumVertices);
+
+  PolygonSurfaceMesh<double> contact_mesh_W(
+      std::vector<int>{3, 0, 1, 2},  // One polygon of three vertices
+      std::vector<Vector3<double>>{
+          Vector3<double>::UnitX(),
+          Vector3<double>::UnitY(),
+          Vector3<double>::UnitZ(),
+      });
+  const std::vector<Vector3<double>> contact_points_W = {
+      {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}};
+  const std::vector<double> signed_distances = {-0.25};
+  const std::vector<Vector4<int>> contact_vertex_indexes_A = {{0, 3, 2, 5}};
+  const std::vector<Vector4<int>> contact_vertex_indexes_B = {{1, 4, 3, 0}};
+  const std::vector<Vector4<double>> barycentric_centroids_A = {
+      {0.1, 0.2, 0.3, 0.4}};
+  const std::vector<Vector4<double>> barycentric_centroids_B = {
+      {0.11, 0.19, 0.29, 0.41}};
+
+  dut.AddDeformableDeformableContactSurface(
+      kIdA, kIdB, {0, 3, 2, 5}, {1, 4, 3, 0}, contact_mesh_W, signed_distances,
+      contact_vertex_indexes_A, contact_vertex_indexes_B,
+      barycentric_centroids_A, barycentric_centroids_B);
+  // Verify that the contact surface is as expected.
+  const std::vector<DeformableContactSurface<double>>& surfaces =
+      dut.contact_surfaces();
+  ASSERT_EQ(surfaces.size(), 1);
+  const DeformableContactSurface<double>& s = surfaces[0];
+
+  // TODO(DamrongGuoy) When C++20 is available, define `default operator==`
+  //  for DeformableContactSurface (and PolygonSurfaceMesh), so we can
+  //  verify it with the following one statement instead of 12 statements.
+  //  EXPECT_EQ(dut.contact_surfaces()[0],
+  //            DeformableContactSurface<double>(
+  //                kIdA, kIdB, contact_mesh_W, signed_distances,
+  //                contact_vertex_indexes_A, barycentric_centroids_A,
+  //                contact_vertex_indexes_B, barycentric_centroids_B));
+  EXPECT_EQ(s.id_A(), kIdA);
+  EXPECT_EQ(s.id_B(), kIdB);
+  EXPECT_EQ(s.contact_mesh_W().num_faces(), 1);
+  EXPECT_EQ(s.num_contact_points(), 1);
+  EXPECT_EQ(s.signed_distances(), signed_distances);
+  EXPECT_EQ(s.contact_points_W(), contact_points_W);
+  EXPECT_EQ(s.barycentric_coordinates_A(), barycentric_centroids_A);
+  EXPECT_EQ(s.contact_vertex_indexes_A(), contact_vertex_indexes_A);
+  EXPECT_EQ(s.barycentric_coordinates_B(), barycentric_centroids_B);
+  EXPECT_EQ(s.contact_vertex_indexes_B(), contact_vertex_indexes_B);
+  EXPECT_EQ(s.nhats_W().size(), 1);
+  EXPECT_EQ(s.R_WCs().size(), 1);
+  EXPECT_TRUE(s.is_B_deformable());
+
+  // Verify that contact participation is as expected.
+  EXPECT_EQ(dut.contact_participation(kIdA).num_vertices_in_contact(), 4);
+  EXPECT_EQ(
+      dut.contact_participation(kIdA).CalcVertexPermutation().permutation(),
+      // Permutation table for contact_vertex_indexes_A = {{0, 3, 2, 5}}
+      //   |   Original       |   Permuted       |   Participating   |
+      //   |   vertex index   |   vertex index   |   in contact      |
+      //   | :--------------: | :--------------: | :---------------: |
+      //   |        0         |        0         |       yes         |
+      //   |        1         |        4         |       no          |
+      //   |        2         |        1         |       yes         |
+      //   |        3         |        2         |       yes         |
+      //   |        4         |        5         |       no          |
+      //   |        5         |        3         |       yes         |
+      std::vector<int>({0, 4, 1, 2, 5, 3}));
+  EXPECT_EQ(dut.contact_participation(kIdB).num_vertices_in_contact(), 4);
+  EXPECT_EQ(
+      dut.contact_participation(kIdB).CalcVertexPermutation().permutation(),
+      // Permutation table for contact_vertex_indexes_B = {{1, 4, 3, 0}}
+      //   |   Original       |   Permuted       |   Participating   |
+      //   |   vertex index   |   vertex index   |   in contact      |
+      //   | :--------------: | :--------------: | :---------------: |
+      //   |        0         |        0         |       yes         |
+      //   |        1         |        1         |       yes         |
+      //   |        2         |        4         |       no          |
+      //   |        3         |        2         |       yes         |
+      //   |        4         |        3         |       yes         |
+      //   |        5         |        5         |       no          |
+      std::vector<int>({0, 1, 4, 2, 3, 5}));
 }
 
 }  // namespace

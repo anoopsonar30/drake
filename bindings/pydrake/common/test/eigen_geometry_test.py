@@ -11,7 +11,6 @@ from pydrake.symbolic import Expression
 from pydrake.common.value import Value
 import pydrake.common.test.eigen_geometry_test_util as test_util
 from pydrake.common.test_utilities import numpy_compare
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.test_utilities.pickle_compare import assert_pickle
 
 
@@ -234,12 +233,6 @@ class TestEigenGeometry(unittest.TestCase):
         self.assertEqual((X_AB @ vs).shape, (3, 2))
 
         assert_pickle(self, X_AB, Isometry3.matrix, T=T)
-
-    def test_translation(self):
-        # Test `type_caster`s.
-        value = test_util.create_translation()
-        self.assertEqual(value.shape, (3,))
-        test_util.check_translation(value)
 
     @numpy_compare.check_all_types
     def test_angle_axis(self, T):

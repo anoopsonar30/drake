@@ -29,16 +29,6 @@ namespace drake {
 namespace multibody {
 namespace internal {
 
-/* Provides access to a selection of private functions in
- CompliantContactManager for testing purposes. */
-class CompliantContactManagerTester {
- public:
-  static const DeformableDriver<double>* deformable_driver(
-      const CompliantContactManager<double>& manager) {
-    return manager.deformable_driver_.get();
-  }
-};
-
 /* Deformable body parameters.  */
 constexpr double kRadius = 0.1;             // unit: m
 constexpr double kYoungsModulus = 2e3;      // unit: N/m²
@@ -64,13 +54,16 @@ class DeformableIntegrationTest : public ::testing::Test {
     systems::DiagramBuilder<double> builder;
     std::tie(plant_, scene_graph_) = AddMultibodyPlantSceneGraph(&builder, kDt);
 
-    auto deformable_model = make_unique<DeformableModel<double>>(plant_);
-    body_id_ = RegisterDeformableBall(deformable_model.get(), "deformable");
-    deformable_model->SetWallBoundaryCondition(
-        body_id_, p_WQ_, n_W_);
-    model_ = deformable_model.get();
-    plant_->AddPhysicalModel(std::move(deformable_model));
-    plant_->set_discrete_contact_solver(DiscreteContactSolver::kSap);
+    DeformableModel<double>& deformable_model =
+        plant_->mutable_deformable_model();
+    body_id_ = RegisterDeformableBall(&deformable_model, "deformable");
+    deformable_model.SetWallBoundaryCondition(body_id_, p_WQ_, n_W_);
+    model_ = &plant_->deformable_model();
+    // N.B. Deformables are only supported with the SAP solver.
+    // Thus for testing we choose one arbitrary contact approximation that uses
+    // the SAP solver.
+    plant_->set_discrete_contact_approximation(
+        DiscreteContactApproximation::kSap);
 
     /* Register a visual geometry for the "wall". */
     constexpr double box_height = 0.4;
@@ -86,13 +79,10 @@ class DeformableIntegrationTest : public ::testing::Test {
     auto contact_manager = make_unique<CompliantContactManager<double>>();
     manager_ = contact_manager.get();
     plant_->SetDiscreteUpdateManager(std::move(contact_manager));
-    driver_ = CompliantContactManagerTester::deformable_driver(*manager_);
+    driver_ = manager_->deformable_driver();
+    DRAKE_DEMAND(driver_ != nullptr);
     /* Connect visualizer. Useful for when this test is used for debugging. */
     geometry::DrakeVisualizerd::AddToBuilder(&builder, *scene_graph_);
-
-    builder.Connect(model_->vertex_positions_port(),
-                    scene_graph_->get_source_configuration_port(
-                        plant_->get_source_id().value()));
 
     diagram_ = builder.Build();
   }
@@ -105,7 +95,7 @@ class DeformableIntegrationTest : public ::testing::Test {
 
   SceneGraph<double>* scene_graph_{nullptr};
   MultibodyPlant<double>* plant_{nullptr};
-  DeformableModel<double>* model_{nullptr};
+  const DeformableModel<double>* model_{nullptr};
   const CompliantContactManager<double>* manager_{nullptr};
   const DeformableDriver<double>* driver_{nullptr};
   unique_ptr<systems::Diagram<double>> diagram_{nullptr};

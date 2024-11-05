@@ -23,7 +23,7 @@ namespace internal {
  added to this filter system (via AddGeometry()). */
 class CollisionFilter {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CollisionFilter)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CollisionFilter);
 
   CollisionFilter();
 
@@ -126,7 +126,7 @@ class CollisionFilter {
   }
 
   /* Reports if the given `id` has been added to this filter system. */
-  bool HasGeometry(GeometryId id) const { return filter_state_.count(id) > 0; }
+  bool HasGeometry(GeometryId id) const { return filter_state_.contains(id); }
 
  private:
   friend class CollisionFilterTest;

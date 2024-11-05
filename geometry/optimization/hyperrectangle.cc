@@ -13,6 +13,7 @@
 #include <Eigen/Eigenvalues>
 #include <fmt/format.h>
 
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/convex_set.h"
 #include "drake/solvers/solve.h"
 
@@ -40,8 +41,13 @@ Hyperrectangle::Hyperrectangle(const Eigen::Ref<const Eigen::VectorXd>& lb,
   CheckInvariants();
 }
 
+Hyperrectangle::~Hyperrectangle() = default;
+
 std::optional<Hyperrectangle> Hyperrectangle::MaybeCalcAxisAlignedBoundingBox(
     const ConvexSet& set) {
+  if (!set.IsBounded()) {
+    return std::nullopt;
+  }
   solvers::MathematicalProgram prog;
   int n = set.ambient_dimension();
   auto point = prog.NewContinuousVariables(n);
@@ -92,8 +98,8 @@ std::optional<Eigen::VectorXd> Hyperrectangle::DoMaybeGetFeasiblePoint() const {
   return (ub_ + lb_) / 2.0;
 }
 
-bool Hyperrectangle::DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                                  double tol) const {
+std::optional<bool> Hyperrectangle::DoPointInSetShortcut(
+    const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const {
   return (x.array() >= lb_.array() - tol).all() &&
          (x.array() <= ub_.array() + tol).all();
 }
@@ -184,6 +190,16 @@ HPolyhedron Hyperrectangle::MakeHPolyhedron() const {
   return HPolyhedron::MakeBox(lb_, ub_);
 }
 
+std::optional<Hyperrectangle> Hyperrectangle::MaybeGetIntersection(
+    const Hyperrectangle& other) const {
+  DRAKE_THROW_UNLESS(this->ambient_dimension() == other.ambient_dimension());
+  if ((lb_.array() > other.ub_.array()).any() ||
+      (ub_.array() < other.lb_.array()).any()) {
+    return std::nullopt;
+  }
+  return Hyperrectangle(lb_.cwiseMax(other.lb_), ub_.cwiseMin(other.ub_));
+}
+
 std::pair<std::unique_ptr<Shape>, math::RigidTransformd>
 Hyperrectangle::DoToShapeWithPose() const {
   if (ambient_dimension() != 3) {
@@ -193,6 +209,24 @@ Hyperrectangle::DoToShapeWithPose() const {
   }
   return std::make_pair(std::make_unique<geometry::Box>(ub_ - lb_),
                         math::RigidTransformd(Center()));
+}
+
+std::unique_ptr<ConvexSet> Hyperrectangle::DoAffineHullShortcut(
+    std::optional<double> tol) const {
+  MatrixXd basis = MatrixXd::Zero(ambient_dimension(), ambient_dimension());
+  int current_dimension = 0;
+  int num_basis_vectors = 0;
+  for (int i = 0; i < ambient_dimension(); ++i) {
+    // If the numerical tolerance was not specified, we use a reasonable
+    // default.
+    if (ub_[i] - lb_[i] > (tol ? tol.value() : 1e-12)) {
+      basis(current_dimension, num_basis_vectors) = 1;
+      ++num_basis_vectors;
+    }
+    ++current_dimension;
+  }
+  return std::make_unique<AffineSubspace>(basis.leftCols(num_basis_vectors),
+                                          lb_);
 }
 
 double Hyperrectangle::DoCalcVolume() const {

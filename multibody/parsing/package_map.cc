@@ -7,7 +7,6 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
 #include <map>
 #include <optional>
@@ -16,7 +15,6 @@
 #include <tuple>
 #include <utility>
 
-#include <picosha2.h>
 #include <tinyxml2.h>
 
 #include "drake/common/drake_assert.h"
@@ -27,8 +25,10 @@
 #include "drake/common/network_policy.h"
 #include "drake/common/never_destroyed.h"
 #include "drake/common/scope_exit.h"
+#include "drake/common/sha256.h"
 #include "drake/common/text_logging.h"
 #include "drake/common/yaml/yaml_io.h"
+#include "drake/multibody/parsing/detail_path_utils.h"
 
 namespace drake {
 namespace multibody {
@@ -255,7 +255,7 @@ std::vector<std::string> GetAllowedUrls(const std::vector<std::string>& urls) {
 fs::path PackageData::GetCacheRelativePath() const {
   DRAKE_DEMAND(is_remote());
   const std::string hashed_strip_prefix =
-      picosha2::hash256_hex_string(remote_params_->strip_prefix.value_or(""));
+      Sha256::Checksum(remote_params_->strip_prefix.value_or("")).to_string();
   return fmt::format("{}-{}", remote_params_->sha256, hashed_strip_prefix);
 }
 
@@ -367,17 +367,14 @@ const std::string& PackageData::GetPathWithAutomaticFetching(
   const int returncode = std::system(command.c_str());
   if (returncode != 0) {
     // Try to read the error message text from the downloader.
-    std::ifstream error_file(error_filename);
-    std::stringstream error_stream;
-    error_stream << error_file.rdbuf();
-    std::string error = error_stream.str();
-    if (error.empty()) {
+    std::optional<std::string> error = ReadFile(error_filename);
+    if (!error || error->empty()) {
       error = fmt::format("returncode == {}", returncode);
     }
     throw std::runtime_error(fmt::format(
         "PackageMap: when downloading '{}', the downloader experienced an "
         "error: {}",
-        package_name, error));
+        package_name, *error));
   }
 
   // Confirm that it actually fetched.
@@ -765,6 +762,11 @@ const std::string& PackageMap::GetPath(
 
   // If this is a remote package and we haven't fetched it yet, do that now.
   return data.GetPathWithAutomaticFetching(package_name);
+}
+
+std::string PackageMap::ResolveUrl(const std::string& url) const {
+  drake::internal::DiagnosticPolicy diagnostic_policy;
+  return internal::ResolveUri(diagnostic_policy, url, *this, {});
 }
 
 void PackageMap::PopulateFromFolder(const std::string& path) {

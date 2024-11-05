@@ -24,6 +24,7 @@
 namespace drake {
 namespace examples {
 namespace allegro_hand {
+namespace {
 
 using drake::multibody::MultibodyPlant;
 
@@ -57,10 +58,10 @@ void DoMain() {
 
   std::string hand_url;
   if (FLAGS_use_right_hand) {
-    hand_url = "package://drake/manipulation/models/"
+    hand_url = "package://drake_models/"
       "allegro_hand_description/sdf/allegro_hand_description_right.sdf";
   } else {
-    hand_url = "package://drake/manipulation/models/"
+    hand_url = "package://drake_models/"
       "allegro_hand_description/sdf/allegro_hand_description_left.sdf";
   }
   multibody::Parser(&plant).AddModelsFromUrl(hand_url);
@@ -123,6 +124,7 @@ void DoMain() {
   simulator.AdvanceTo(FLAGS_simulation_time);
 }
 
+}  // namespace
 }  // namespace allegro_hand
 }  // namespace examples
 }  // namespace drake

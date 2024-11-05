@@ -55,7 +55,7 @@ namespace systems {
 template <class T>
 class DiscreteDerivative final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteDerivative)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteDerivative);
 
   /// Constructor taking @p num_inputs, the size of the vector to be
   /// differentiated, and @p time_step, the sampling interval. If @p
@@ -88,6 +88,8 @@ class DiscreteDerivative final : public LeafSystem<T> {
   void set_input_history(
       systems::Context<T>* context, const Eigen::Ref<const VectorX<T>>& u_n,
       const Eigen::Ref<const VectorX<T>>& u_n_minus_1) const {
+    // N.B. The set_input_history(State* ...) overload is responsible for
+    // validating the state (context) belongs to the this System.
     set_input_history(&context->get_mutable_state(), u_n, u_n_minus_1);
   }
 
@@ -99,6 +101,7 @@ class DiscreteDerivative final : public LeafSystem<T> {
   /// to disable the suppression for this `context`.
   void set_input_history(systems::Context<T>* context,
                          const Eigen::Ref<const VectorX<T>>& u) const {
+    this->ValidateContext(context);
     set_input_history(&context->get_mutable_state(), u, u);
   }
 
@@ -147,7 +150,7 @@ class DiscreteDerivative final : public LeafSystem<T> {
 template <typename T>
 class StateInterpolatorWithDiscreteDerivative final : public Diagram<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(StateInterpolatorWithDiscreteDerivative)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(StateInterpolatorWithDiscreteDerivative);
 
   /// Constructor taking @p num_positions, the size of the position vector to
   /// be differentiated, and @p time_step, the sampling interval. If @p
@@ -195,6 +198,8 @@ class StateInterpolatorWithDiscreteDerivative final : public Diagram<T> {
   void set_initial_position(
       systems::Context<T>* context,
       const Eigen::Ref<const VectorX<T>>& position) const {
+    // N.B. The set_input_history(State* ...) overload is responsible for
+    // validating the state (context) belongs to the this System.
     set_initial_position(&context->get_mutable_state(), position);
   }
 
@@ -209,6 +214,8 @@ class StateInterpolatorWithDiscreteDerivative final : public Diagram<T> {
   void set_initial_state(systems::Context<T>* context,
                          const Eigen::Ref<const VectorX<T>>& position,
                          const Eigen::Ref<const VectorX<T>>& velocity) const {
+    // N.B. The set_input_history(State* ...) overload is responsible for
+    // validating the state (context) belongs to the this System.
     set_initial_state(&context->get_mutable_state(), position, velocity);
   }
 

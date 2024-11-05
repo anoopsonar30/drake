@@ -14,6 +14,7 @@ namespace internal {
 using Eigen::Vector3d;
 using std::unordered_set;
 
+namespace {
 /* Subdivides a virtual cube to have up to six tetrahedra such that they
  share the diagonal v0v6 (see ordering below). We allow repeated vertices in
  the virtual cube and will skip tetrahedra with repeated vertices.
@@ -61,6 +62,7 @@ std::vector<VolumeElement> SplitToTetrahedra(int v0, int v1, int v2, int v3,
   }
   return elements;
 }
+}  // namespace
 
 template <typename T>
 VolumeMesh<T> MakeBoxVolumeMeshWithMa(const Box& box) {
@@ -446,7 +448,7 @@ VolumeMesh<T> MakeBoxVolumeMesh(const Box& box, double resolution_hint) {
 }
 
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    (&MakeBoxVolumeMesh<T>, &MakeBoxVolumeMeshWithMa<T>))
+    (&MakeBoxVolumeMesh<T>, &MakeBoxVolumeMeshWithMa<T>));
 
 }  // namespace internal
 }  // namespace geometry

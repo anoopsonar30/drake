@@ -34,13 +34,13 @@ class PlanarJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
     // Add a body so we can add a joint between it and the world:
-    body_ = &model->AddBody<RigidBody>("Body", M_B);
+    body_ = &model->AddRigidBody("Body", M_B);
 
     // Add a planar joint between the world and body1:
     joint_ = &model->AddJoint<PlanarJoint>("Joint", model->world_body(),
@@ -62,7 +62,7 @@ class PlanarJointTest : public ::testing::Test {
     // We are done adding modeling elements. Transfer tree to system and get
     // a Context.
     system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
-        std::move(model), true/* is_discrete */);
+        std::move(model), true /* is_discrete */);
     context_ = system_->CreateDefaultContext();
   }
 
@@ -117,8 +117,8 @@ TEST_F(PlanarJointTest, GetJointLimits) {
 }
 
 TEST_F(PlanarJointTest, Damping) {
-  EXPECT_EQ(joint_->damping(), Vector3d::Constant(kDamping));
-  EXPECT_EQ(joint_->damping_vector(), Vector3d::Constant(kDamping));
+  EXPECT_EQ(joint_->default_damping(), Vector3d::Constant(kDamping));
+  EXPECT_EQ(joint_->default_damping_vector(), Vector3d::Constant(kDamping));
 }
 
 // Context-dependent value access.
@@ -146,6 +146,16 @@ TEST_F(PlanarJointTest, ContextDependentAccess) {
   joint_->Lock(context_.get());
   EXPECT_EQ(joint_->get_translational_velocity(*context_), Vector2d(0., 0.));
   EXPECT_EQ(joint_->get_angular_velocity(*context_), 0.);
+
+  // Damping.
+  const Vector3d different_damping = Vector3d::Constant(5.6);
+  EXPECT_EQ(joint_->GetDampingVector(*context_), Vector3d::Constant(kDamping));
+  EXPECT_NO_THROW(joint_->SetDampingVector(context_.get(), different_damping));
+  EXPECT_EQ(joint_->GetDampingVector(*context_), different_damping);
+
+  // Expect to throw on invalid damping values.
+  EXPECT_THROW(joint_->SetDampingVector(context_.get(), Vector3d::Constant(-1)),
+               std::exception);
 }
 
 // Tests API to apply torques to individual dof of joint. Ensures that adding
@@ -173,6 +183,29 @@ TEST_F(PlanarJointTest, AddInOneForce) {
     EXPECT_TRUE(F1.IsApprox(*F2++, kEpsilon));
 }
 
+// Tests API to add in damping forces.
+TEST_F(PlanarJointTest, AddInDampingForces) {
+  const Vector2d translational_velocity = Vector2d(0.1, 0.2);
+  const double angular_velocity = 0.3;
+  const double translational_damping = 0.5 * kDamping;
+  const double angular_damping = 0.4 * kDamping;
+
+  const Vector3d damping_forces_expected =
+      (Vector3d() << -translational_damping * translational_velocity,
+       -angular_damping * angular_velocity)
+          .finished();
+
+  joint_->set_translational_velocity(context_.get(), translational_velocity);
+  joint_->set_angular_velocity(context_.get(), angular_velocity);
+  joint_->SetDampingVector(
+      context_.get(),
+      Vector3d(translational_damping, translational_damping, angular_damping));
+
+  MultibodyForces<double> forces(tree());
+  joint_->AddInDamping(*context_, &forces);
+  EXPECT_EQ(forces.generalized_forces(), damping_forces_expected);
+}
+
 TEST_F(PlanarJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
   const auto& joint_clone = model_clone->get_variant(*joint_);
@@ -194,7 +227,7 @@ TEST_F(PlanarJointTest, Clone) {
             joint_->acceleration_lower_limits());
   EXPECT_EQ(joint_clone.acceleration_upper_limits(),
             joint_->acceleration_upper_limits());
-  EXPECT_EQ(joint_clone.damping(), joint_->damping());
+  EXPECT_EQ(joint_clone.default_damping(), joint_->default_damping());
   EXPECT_EQ(joint_clone.get_default_rotation(), joint_->get_default_rotation());
   EXPECT_EQ(joint_clone.get_default_translation(),
             joint_->get_default_translation());

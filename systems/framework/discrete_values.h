@@ -9,7 +9,6 @@
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/drake_throw.h"
 #include "drake/common/value.h"
 #include "drake/systems/framework/basic_vector.h"
@@ -39,7 +38,7 @@ template <typename T>
 class DiscreteValues {
  public:
   // DiscreteValues is not copyable or moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteValues)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteValues);
 
   /// Constructs an empty %DiscreteValues object containing no groups.
   DiscreteValues() {}
@@ -77,6 +76,8 @@ class DiscreteValues {
   /// Adds an additional group that owns the given @p datum, which must be
   /// non-null. Returns the assigned group number, counting up from 0 for the
   /// first group.
+  /// @warning Do not use this method to add groups to a %DiscreteValues
+  /// object that is owned by an existing Context.
   int AppendGroup(std::unique_ptr<BasicVector<T>> datum) {
     if (datum == nullptr) {
       throw std::logic_error(
@@ -289,7 +290,7 @@ class DiscreteValues {
 };
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::DiscreteValues)
+    class ::drake::systems::DiscreteValues);
 
 }  // namespace systems
 }  // namespace drake

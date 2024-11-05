@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "drake/common/drake_deprecated.h"
 #include "drake/geometry/query_results/contact_surface.h"
 #include "drake/geometry/query_results/deformable_contact.h"
 #include "drake/geometry/query_results/penetration_as_point_pair.h"
@@ -138,9 +137,7 @@ class QueryObject {
 
   /** Provides an inspector for the topological structure of the underlying
    scene graph data (see SceneGraphInspector for details).  */
-  const SceneGraphInspector<T>& inspector() const {
-    return inspector_;
-  }
+  const SceneGraphInspector<T>& inspector() const { return inspector_; }
 
   /** @name                Configuration-dependent Introspection
 
@@ -175,13 +172,25 @@ class QueryObject {
   const math::RigidTransform<T>& GetPoseInWorld(GeometryId geometry_id) const;
 
   /** Reports the configuration of the deformable geometry indicated by
-   `geometry_id` relative to the world frame.
+   `deformable_geometry_id` relative to the world frame.
    @sa GetPoseInWorld().
-   @throws std::exception if the geometry `geometry_id` is not valid or is not
-   a deformable geometry.  */
+   @throws std::exception if the geometry `deformable_geometry_id` is not valid
+   or is not a deformable geometry.  */
   const VectorX<T>& GetConfigurationsInWorld(
       GeometryId deformable_geometry_id) const;
 
+  // TODO(xuchenhan-tri): This should cross reference the concept of driven
+  // meshes when it is nicely written up somewhere (e.g., in the SceneGraph
+  // documentation).
+  /** Reports the configurations of the driven meshes associated with the given
+   role for the deformable geometry indicated by `deformable_geometry_id`
+   relative to the world frame if the deformable geometry has that role.
+   @throws std::exception if the geometry associated with
+   `deformable_geometry_id` is not a registered deformable geometry with
+   the given role.
+   @experimental */
+  std::vector<VectorX<T>> GetDrivenMeshConfigurationsInWorld(
+      GeometryId deformable_geometry_id, Role role) const;
   //@}
 
   /**
@@ -323,15 +332,21 @@ class QueryObject {
          document, for example, an appendix in Hydroelastic User Guide
          when it's ready. -->
 
-     - ᵃ For compliant Mesh, please specify a tetrahedral mesh
-         in a VTK file in Mesh(filename). This external working
-         <a href="https://docs.google.com/document/d/1VZtVsxIjOLKvgQ8SNSrF6PtWuPW5z9PP7-dQuxfmqpc/edit?usp=sharing">
-         document</a> provides guidance how to generate a tetrahedral mesh
-         in a VTK file from a surface mesh in an OBJ file.
-     - ᵇ For rigid Mesh, please specify a surface mesh
-         in an OBJ file in Mesh(filename).
-     - ᶜ For both compliant Convex and rigid Convex, please specify a surface
-         mesh in an OBJ file in Convex(filename).
+     - ᵃ The exact representation of a compliant mesh depends on the type of
+         mesh file it references:
+           - .obj: the convex hull of the mesh will be used (as if it were
+             declared to be a Convex shape).
+           - .vtk: the tetrahedral mesh will be used directly. This external
+             working
+             <a href="https://docs.google.com/document/d/1VZtVsxIjOLKvgQ8SNSrF6PtWuPW5z9PP7-dQuxfmqpc/edit?usp=sharing">
+             document</a> provides guidance how to generate a tetrahedral mesh
+             in a VTK file from a surface mesh in an OBJ file.
+     - ᵇ For rigid Mesh, please specify a surface mesh in an OBJ file in
+         Mesh(filename). A tetrahedral mesh in a VTK file can also be
+         specified.
+     - ᶜ The Convex shape can reference either an .obj or a .vtk tetrahedral
+         mesh. In both cases, its convex hull will be used to define the
+         hydroelastic representation.
 
      - We do not support contact between two rigid geometries. One geometry
        *must* be compliant, and the other could be rigid or compliant. If
@@ -411,8 +426,10 @@ class QueryObject {
       std::vector<ContactSurface<T>>* surfaces,
       std::vector<PenetrationAsPointPair<T>>* point_pairs) const;
 
-  /** Reports contact information among all deformable geometries. This function
-   only supports double as the scalar type.
+  /** Reports contact information among all deformable geometries. It includes
+   contacts between two deformable geometries or contacts between a
+   deformable geometry and a non-deformable geometry. This function only
+   supports double as the scalar type.
    @param[out] deformable_contact
      Contains all deformable contact data on output. Any data passed in is
      cleared before the computation.
@@ -593,11 +610,56 @@ class QueryObject {
    <!-- TODO(SeanCurtis-TRI): Support queries of halfspace-A, where A is _not_ a
    halfspace. See https://github.com/RobotLocomotion/drake/issues/10905 -->
 
+   @anchor query_object_compute_pairwise_distance_gradient_table
+   <h3>Characterizing the returned gradients</h3>
+
+   In most cases, the returned gradient vectors are the normalized
+   displacement vectors between two witness points. However, when two
+   geometries touch at zero distance, their witness points have a zero
+   displacement vector that we cannot normalize.
+
+   When two geometries touch at zero distance, we have special implementation
+   to choose reasonable gradients for some cases shown as "Ok" in the table
+   below. Otherwise, they are "NaN" in the table.  In general, we try to
+   choose the gradient, when two geometries touch, in the most consistent
+   way, but the problem sometimes doesn't have a unique solution. For
+   example, any direction is qualified to be the gradient for two concentric
+   spheres. Or two boxes touching at their vertices can pick a gradient from a
+   continuous family of directions.
+
+   <!-- Note to developers: there are a few places that set the gradients.
+     - shape_distance::CalcDistanceFallback<double>() in
+       distance_to_shape_callback.h for non-touching cases.
+     - DistancePairGeometry<T>::SphereShapeDistance() in
+       distance_to_shape_callback.h for Sphere-{Sphere, Box, Capsule, Cylinder,
+       Halfspace} distance. They do not give NaN gradient even with zero-radius
+       sphere.
+     - CalcGradientWhenTouching() in distance_to_shape_touching.h for
+       other touching cases.
+     This table is based on the above functions.
+   -->
+  |           | %Box | %Capsule | %Convex | %Cylinder | %Ellipsoid | %HalfSpace |  %Mesh  | %Sphere |
+  | --------: | :--: | :------: | :-----: | :-------: | :--------: | :--------: | :-----: | :-----: |
+  | Box       | Ok   |  ░░░░░░  |  ░░░░░  |  ░░░░░░░  |   ░░░░░░   |   ░░░░░░   |  ░░░░░  |  ░░░░░  |
+  | Capsule   | NaN  |  NaN     |  ░░░░░  |  ░░░░░░░  |   ░░░░░░   |   ░░░░░░   |  ░░░░░  |  ░░░░░  |
+  | Convex    | NaN  |  NaN     |  NaN    |  ░░░░░░░  |   ░░░░░░   |   ░░░░░░   |  ░░░░░  |  ░░░░░  |
+  | Cylinder  | NaN  |  NaN     |  NaN    |  NaN      |   ░░░░░░   |   ░░░░░░   |  ░░░░░  |  ░░░░░  |
+  | Ellipsoid | NaN  |  NaN     |  NaN    |  NaN      |   NaN      |   ░░░░░░   |  ░░░░░  |  ░░░░░  |
+  | HalfSpace | NaN  |  NaN     |  NaN    |  NaN      |   NaN      |   NaN      |  ░░░░░  |  ░░░░░  |
+  | Mesh      | NaN  |  NaN     |  NaN    |  NaN      |   NaN      |   NaN      |  NaN    |  ░░░░░  |
+  | Sphere    | Ok   |  Ok      |  Okᵃ    |  Ok       |   Okᵃ      |   Ok       |  Okᵃ    |  Ok     |
+  __*Table 7*__: Support for signed-distance gradients when two geometries
+   touch at zero distance.
+
+  - ᵃ Return the gradient as a Vector3d of NaN if the sphere has zero radius.
+
    @param max_distance  The maximum distance at which distance data is reported.
 
    @returns The signed distance (and supporting data) for all unfiltered
             geometry pairs whose distance is less than or equal to
-            `max_distance`.
+            `max_distance`. The ordering of the results is guaranteed to be
+            consistent -- for fixed geometry poses, the results will remain the
+            same.
    @throws std::exception as indicated in the table above.
    @warning For Mesh shapes, their convex hulls are used in this query. It is
             *not* computationally efficient or particularly accurate.  */
@@ -670,11 +732,11 @@ class QueryObject {
    as described, with the point being represented as a zero-radius sphere.
 
    |   Scalar   |   %Box  | %Capsule | %Convex | %Cylinder | %Ellipsoid | %HalfSpace |  %Mesh  | %Sphere |
-   | :----: | :-----: | :------: | :-----: | :-------: | :--------: | :--------: | :-----: | :-----: |
+   | :--------: | :-----: | :------: | :-----: | :-------: | :--------: | :--------: | :-----: | :-----: |
    |   double   |  2e-15  |   4e-15  |    ᵃ    |   3e-15   |    3e-5ᵇ   |    5e-15   |    ᵃ    |  4e-15  |
    | AutoDiffXd |  1e-15  |   4e-15  |    ᵃ    |     ᵃ     |      ᵃ     |    5e-15   |    ᵃ    |  3e-15  |
    | Expression |   ᵃ     |    ᵃ     |    ᵃ    |     ᵃ     |      ᵃ     |      ᵃ     |    ᵃ    |    ᵃ    |
-   __*Table 7*__: Worst observed error (in m) for 2mm penetration/separation
+   __*Table 8*__: Worst observed error (in m) for 2mm penetration/separation
    between geometry approximately 20cm in size and a point.
 
    - ᵃ Unsupported geometry/scalar combinations are simply ignored; no results
@@ -723,13 +785,14 @@ class QueryObject {
    @retval signed_distances   A vector populated with per-object signed distance
                               values (and supporting data) for every supported
                               geometry as shown in the table. See
-                              SignedDistanceToPoint. */
-  std::vector<SignedDistanceToPoint<T>>
-  ComputeSignedDistanceToPoint(const Vector3<T> &p_WQ,
-                               const double threshold
-                               = std::numeric_limits<double>::infinity()) const;
+                              SignedDistanceToPoint. The ordering of the
+                              results is guaranteed to be consistent -- for
+                              fixed geometry poses, the results will remain the
+                              same. */
+  std::vector<SignedDistanceToPoint<T>> ComputeSignedDistanceToPoint(
+      const Vector3<T>& p_WQ,
+      const double threshold = std::numeric_limits<double>::infinity()) const;
   //@}
-
 
   //---------------------------------------------------------------------------
   /**
@@ -784,7 +847,6 @@ class QueryObject {
   void RenderLabelImage(const render::ColorRenderCamera& camera,
                         FrameId parent_frame, const math::RigidTransformd& X_PC,
                         systems::sensors::ImageLabel16I* label_image_out) const;
-
 
   /** Returns the named render engine, if it exists. The RenderEngine is
    guaranteed to be up to date w.r.t. the poses and data in the context. */
@@ -857,9 +919,7 @@ class QueryObject {
   }
 
   // Reports if the object can be copied; it must either be callable or default.
-  bool is_copyable() const {
-    return is_callable() || is_default();
-  }
+  bool is_copyable() const { return is_callable() || is_default(); }
 
   // Throws an exception if the QueryObject is neither "live" nor "baked" (see
   // class docs for discussion).

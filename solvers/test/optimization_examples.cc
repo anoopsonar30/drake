@@ -4,7 +4,9 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/solvers/clarabel_solver.h"
 #include "drake/solvers/clp_solver.h"
+#include "drake/solvers/csdp_solver.h"
 #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/mosek_solver.h"
@@ -89,6 +91,7 @@ std::set<CostForm> quadratic_cost_form() {
   return std::set<CostForm>{CostForm::kNonSymbolic, CostForm::kSymbolic};
 }
 
+namespace {
 double EvaluateSolutionCost(const MathematicalProgram& prog,
                             const MathematicalProgramResult& result) {
   double cost{0};
@@ -97,6 +100,7 @@ double EvaluateSolutionCost(const MathematicalProgram& prog,
   }
   return cost;
 }
+}  // namespace
 
 /*
  * Expect that the optimal cost stored by the solver in the MathematicalProgram
@@ -151,6 +155,12 @@ double OptimizationProgram::GetSolverSolutionDefaultCompareTolerance(
   }
   if (solver_id == ScsSolver::id()) {
     return 1E-3;  // Scs is not very accurate.
+  }
+  if (solver_id == ClarabelSolver::id()) {
+    return 1E-5;
+  }
+  if (solver_id == CsdpSolver::id()) {
+    return 1E-5;
   }
   throw std::runtime_error("Unsupported solver type.");
 }

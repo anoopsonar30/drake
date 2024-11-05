@@ -9,6 +9,9 @@ namespace drake {
 namespace multibody {
 
 template <typename T>
+QuaternionFloatingJoint<T>::~QuaternionFloatingJoint() = default;
+
+template <typename T>
 template <typename ToScalar>
 std::unique_ptr<Joint<ToScalar>>
 QuaternionFloatingJoint<T>::TemplatedDoCloneToScalar(
@@ -21,7 +24,7 @@ QuaternionFloatingJoint<T>::TemplatedDoCloneToScalar(
   // Make the Joint<T> clone.
   auto joint_clone = std::make_unique<QuaternionFloatingJoint<ToScalar>>(
       this->name(), frame_on_parent_body_clone, frame_on_child_body_clone,
-      this->angular_damping(), this->translational_damping());
+      this->default_angular_damping(), this->default_translational_damping());
   joint_clone->set_position_limits(this->position_lower_limits(),
                                    this->position_upper_limits());
   joint_clone->set_velocity_limits(this->velocity_lower_limits(),
@@ -57,14 +60,18 @@ QuaternionFloatingJoint<T>::DoCloneToScalar(
 // in the header file.
 template <typename T>
 std::unique_ptr<typename Joint<T>::BluePrint>
-QuaternionFloatingJoint<T>::MakeImplementationBlueprint() const {
+QuaternionFloatingJoint<T>::MakeImplementationBlueprint(
+    const internal::SpanningForest::Mobod& mobod) const {
   auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+  const auto [inboard_frame, outboard_frame] =
+      this->tree_frames(mobod.is_reversed());
+  // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
   auto quaternion_floating_mobilizer =
       std::make_unique<internal::QuaternionFloatingMobilizer<T>>(
-          this->frame_on_parent(), this->frame_on_child());
+          mobod, *inboard_frame, *outboard_frame);
   quaternion_floating_mobilizer->set_default_position(
       this->default_positions());
-  blue_print->mobilizers_.push_back(std::move(quaternion_floating_mobilizer));
+  blue_print->mobilizer = std::move(quaternion_floating_mobilizer);
   return blue_print;
 }
 
@@ -85,12 +92,14 @@ void QuaternionFloatingJoint<T>::DoAddInDamping(
           &forces->mutable_generalized_forces());
   const Vector3<T>& w_FM = get_angular_velocity(context);
   const Vector3<T>& v_FM = get_translational_velocity(context);
-  t_BMo_F.template head<3>() -= angular_damping() * w_FM;
-  t_BMo_F.template tail<3>() -= translational_damping() * v_FM;
+  const T& angular_damping = this->GetDampingVector(context)[0];
+  const T& translational_damping = this->GetDampingVector(context)[3];
+  t_BMo_F.template head<3>() -= angular_damping * w_FM;
+  t_BMo_F.template tail<3>() -= translational_damping * v_FM;
 }
 
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::QuaternionFloatingJoint)
+    class ::drake::multibody::QuaternionFloatingJoint);

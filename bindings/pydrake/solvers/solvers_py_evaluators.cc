@@ -3,12 +3,12 @@
 #include "drake/bindings/pydrake/autodiff_types_pybind.h"
 #include "drake/bindings/pydrake/common/cpp_param_pybind.h"
 #include "drake/bindings/pydrake/common/cpp_template_pybind.h"
-#include "drake/bindings/pydrake/common/deprecation_pybind.h"
 #include "drake/bindings/pydrake/common/eigen_pybind.h"
 #include "drake/bindings/pydrake/common/wrap_function.h"
 #include "drake/bindings/pydrake/common/wrap_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
+#include "drake/bindings/pydrake/solvers/solvers_py.h"
 #include "drake/bindings/pydrake/symbolic_types_pybind.h"
 #include "drake/solvers/binding.h"
 #include "drake/solvers/constraint.h"
@@ -39,10 +39,6 @@ using solvers::LinearEqualityConstraint;
 using solvers::LinearMatrixInequalityConstraint;
 using solvers::LInfNormCost;
 using solvers::LorentzConeConstraint;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-using solvers::MinimumValueConstraint;
-#pragma GCC diagnostic pop
 using solvers::MinimumValueLowerBoundConstraint;
 using solvers::MinimumValueUpperBoundConstraint;
 using solvers::PerspectiveQuadraticCost;
@@ -74,7 +70,11 @@ auto RegisterBinding(py::handle* scope) {
       .def("variables", &B::variables, cls_doc.variables.doc)
       .def(
           "ToLatex", &B::ToLatex, py::arg("precision") = 3, cls_doc.ToLatex.doc)
-      .def("__str__", &B::to_string, cls_doc.to_string.doc);
+      .def("__str__", &B::to_string, cls_doc.to_string.doc)
+      .def("__hash__", [](const B& self) { return std::hash<B>{}(self); })
+      .def(
+          "__eq__", [](const B& self, const B& other) { return self == other; },
+          py::is_operator());
   if (!std::is_same_v<C, EvaluatorBase>) {
     // This is required for implicit argument conversion. See below for
     // `EvaluatorBase`'s generic constructor for attempting downcasting.
@@ -140,8 +140,6 @@ void DefTesting(py::module m) {
       .def("AcceptBindingConstraint", [](const Binding<Constraint>&) {});
 }
 
-}  // namespace
-
 void BindEvaluatorsAndBindings(py::module m) {
   constexpr auto& doc = pydrake_doc.drake.solvers;
   {
@@ -161,7 +159,9 @@ void BindEvaluatorsAndBindings(py::module m) {
             py::arg("gradient_sparsity_pattern"),
             cls_doc.SetGradientSparsityPattern.doc)
         .def("gradient_sparsity_pattern", &Class::gradient_sparsity_pattern,
-            cls_doc.gradient_sparsity_pattern.doc);
+            cls_doc.gradient_sparsity_pattern.doc)
+        .def("is_thread_safe", &Class::is_thread_safe,
+            cls_doc.is_thread_safe.doc);
     auto bind_eval = [&cls, &cls_doc](auto dummy_x, auto dummy_y) {
       using T_x = decltype(dummy_x);
       using T_y = decltype(dummy_y);
@@ -261,6 +261,8 @@ void BindEvaluatorsAndBindings(py::module m) {
           doc.LinearConstraint.UpdateCoefficients.doc_sparse_A)
       .def("RemoveTinyCoefficient", &LinearConstraint::RemoveTinyCoefficient,
           py::arg("tol"), doc.LinearConstraint.RemoveTinyCoefficient.doc)
+      .def("is_dense_A_constructed", &LinearConstraint::is_dense_A_constructed,
+          doc.LinearConstraint.is_dense_A_constructed.doc)
       .def(
           "UpdateLowerBound",
           [](LinearConstraint& self, const Eigen::VectorXd& new_lb) {
@@ -425,11 +427,11 @@ void BindEvaluatorsAndBindings(py::module m) {
       std::shared_ptr<LinearMatrixInequalityConstraint>>(m,
       "LinearMatrixInequalityConstraint",
       doc.LinearMatrixInequalityConstraint.doc)
-      .def(py::init([](const std::vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
-                        double symmetry_tolerance) {
-        return std::make_unique<LinearMatrixInequalityConstraint>(
-            F, symmetry_tolerance);
-      }),
+      .def(py::init(
+               [](std::vector<Eigen::MatrixXd> F, double symmetry_tolerance) {
+                 return std::make_unique<LinearMatrixInequalityConstraint>(
+                     std::move(F), symmetry_tolerance);
+               }),
           py::arg("F"), py::arg("symmetry_tolerance") = 1E-10,
           doc.LinearMatrixInequalityConstraint.ctor.doc)
       .def("F", &LinearMatrixInequalityConstraint::F,
@@ -477,93 +479,6 @@ void BindEvaluatorsAndBindings(py::module m) {
       .def("vars", &ExpressionConstraint::vars,
           // dtype = object arrays must be copied, and cannot be referenced.
           py_rvp::copy, doc.ExpressionConstraint.vars.doc);
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  const std::string dep_message =
-      "MinimumValueConstraint is deprecated. Use "
-      "MinimumValueLowerBoundConstraint if you want the smallest value to be "
-      "lower bounded, or MinimumValueUpperBoundConstraint if you want the "
-      "smallest value to be upper bounded. The deprecated code will be removed "
-      "from Drake on or after 2024-02-01.\n\n";
-  py::class_<MinimumValueConstraint, Constraint,
-      std::shared_ptr<MinimumValueConstraint>>(
-      m, "MinimumValueConstraint", doc.MinimumValueConstraint.doc_deprecated)
-      .def(py_init_deprecated(
-               dep_message + doc.MinimumValueConstraint.ctor.doc_6args,
-               [](int num_vars, double minimum_value,
-                   double influence_value_offset, int max_num_values,
-                   // If I pass in const Eigen::Ref<const AutoDiffVecXd>& here
-                   // then I got the RuntimeError: dtype=object arrays must be
-                   // copied, and cannot be referenced.
-                   std::function<AutoDiffVecXd(const AutoDiffVecXd&, double)>
-                       value_function,
-                   std::function<Eigen::VectorXd(
-                       const Eigen::Ref<const Eigen::VectorXd>&, double)>
-                       value_function_double) {
-                 return std::make_unique<MinimumValueConstraint>(num_vars,
-                     minimum_value, influence_value_offset, max_num_values,
-                     value_function, value_function_double);
-               }),
-          py::arg("num_vars"), py::arg("minimum_value"),
-          py::arg("influence_value_offset"), py::arg("max_num_values"),
-          py::arg("value_function"),
-          py::arg("value_function_double") = std::function<Eigen::VectorXd(
-              const Eigen::Ref<const Eigen::VectorXd>&, double)>{},
-          doc.MinimumValueConstraint.ctor.doc_6args)
-      .def(py_init_deprecated(
-               dep_message + doc.MinimumValueConstraint.ctor.doc_7args,
-               [](int num_vars, double minimum_value_lower,
-                   double minimum_value_upper, double influence_value,
-                   int max_num_values,
-                   // If I pass in const Eigen::Ref<const AutoDiffVecXd>& here
-                   // then I got the RuntimeError: dtype=object arrays must be
-                   // copied, and cannot be referenced.
-                   std::function<AutoDiffVecXd(const AutoDiffVecXd&, double)>
-                       value_function,
-                   std::function<Eigen::VectorXd(
-                       const Eigen::Ref<const Eigen::VectorXd>&, double)>
-                       value_function_double) {
-                 return std::make_unique<MinimumValueConstraint>(num_vars,
-                     minimum_value_lower, minimum_value_upper, influence_value,
-                     max_num_values, value_function, value_function_double);
-               }),
-          py::arg("num_vars"), py::arg("minimum_value_lower"),
-          py::arg("minimum_value_upper"), py::arg("influence_value"),
-          py::arg("max_num_values"), py::arg("value_function"),
-          py::arg("value_function_double") = std::function<Eigen::VectorXd(
-              const Eigen::Ref<const Eigen::VectorXd>&, double)>{},
-          doc.MinimumValueConstraint.ctor.doc_7args)
-      .def("minimum_value_lower", &MinimumValueConstraint::minimum_value_lower,
-          doc.MinimumValueConstraint.minimum_value_lower.doc)
-      .def("minimum_value_upper", &MinimumValueConstraint::minimum_value_upper,
-          doc.MinimumValueConstraint.minimum_value_upper.doc)
-      .def("influence_value", &MinimumValueConstraint::influence_value,
-          doc.MinimumValueConstraint.influence_value.doc)
-      .def(
-          "set_penalty_function",
-          [](MinimumValueConstraint* self,
-              std::function<py::tuple(double, bool)> new_penalty_function) {
-            auto penalty_fun = [new_penalty_function](double x, double* penalty,
-                                   double* dpenalty) {
-              py::tuple penalty_tuple(2);
-              penalty_tuple = new_penalty_function(x, dpenalty != nullptr);
-              *penalty = penalty_tuple[0].cast<double>();
-              if (dpenalty) {
-                *dpenalty = penalty_tuple[1].cast<double>();
-              }
-            };
-            self->set_penalty_function(penalty_fun);
-          },
-          py::arg("new_penalty_function"),
-          "Setter for the penalty function. The penalty function "
-          "new_penalty_function(x: float, compute_grad: bool) -> tuple[float, "
-          "Optional[float]] "
-          "returns [penalty_value, penalty_gradient] when "
-          "compute_grad=True, or [penalty_value, None] when "
-          "compute_grad=False. See minimum_value_constraint.h on the "
-          "requirement on MinimumValuePenaltyFunction.");
-#pragma GCC diagnostic pop
 
   py::class_<MinimumValueLowerBoundConstraint, Constraint,
       std::shared_ptr<MinimumValueLowerBoundConstraint>>(m,
@@ -687,10 +602,6 @@ void BindEvaluatorsAndBindings(py::module m) {
   RegisterBinding<LinearMatrixInequalityConstraint>(&m);
   RegisterBinding<LinearComplementarityConstraint>(&m);
   RegisterBinding<ExponentialConeConstraint>(&m);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  RegisterBinding<MinimumValueConstraint>(&m);
-#pragma GCC diagnostic pop
   RegisterBinding<MinimumValueLowerBoundConstraint>(&m);
   RegisterBinding<MinimumValueUpperBoundConstraint>(&m);
   // TODO(russt): PolynomialConstraint currently uses common::Polynomial, not
@@ -759,22 +670,39 @@ void BindEvaluatorsAndBindings(py::module m) {
           py::arg("new_A"), py::arg("new_b") = 0,
           doc.L1NormCost.UpdateCoefficients.doc);
 
-  py::class_<L2NormCost, Cost, std::shared_ptr<L2NormCost>>(
-      m, "L2NormCost", doc.L2NormCost.doc)
-      .def(py::init([](const Eigen::MatrixXd& A, const Eigen::VectorXd& b) {
-        return std::make_unique<L2NormCost>(A, b);
-      }),
-          py::arg("A"), py::arg("b"), doc.L2NormCost.ctor.doc)
-      .def("A", &L2NormCost::A, doc.L2NormCost.A.doc)
-      .def("b", &L2NormCost::b, doc.L2NormCost.b.doc)
-      .def(
-          "UpdateCoefficients",
-          [](L2NormCost& self, const Eigen::MatrixXd& new_A,
-              const Eigen::VectorXd& new_b) {
-            self.UpdateCoefficients(new_A, new_b);
-          },
-          py::arg("new_A"), py::arg("new_b") = 0,
-          doc.L2NormCost.UpdateCoefficients.doc);
+  {
+    py::class_<L2NormCost, Cost, std::shared_ptr<L2NormCost>> cls(
+        m, "L2NormCost", doc.L2NormCost.doc);
+    cls.def(py::init([](const Eigen::MatrixXd& A, const Eigen::VectorXd& b) {
+         return std::make_unique<L2NormCost>(A, b);
+       }),
+           py::arg("A"), py::arg("b"), doc.L2NormCost.ctor.doc_dense_A)
+        .def(py::init([](const Eigen::SparseMatrix<double>& A,
+                          const Eigen::VectorXd& b) {
+          return std::make_unique<L2NormCost>(A, b);
+        }),
+            py::arg("A"), py::arg("b"), doc.L2NormCost.ctor.doc_sparse_A)
+        .def("get_sparse_A", &L2NormCost::get_sparse_A,
+            doc.L2NormCost.get_sparse_A.doc)
+        .def("GetDenseA", &L2NormCost::GetDenseA, doc.L2NormCost.GetDenseA.doc)
+        .def("b", &L2NormCost::b, doc.L2NormCost.b.doc)
+        .def(
+            "UpdateCoefficients",
+            [](L2NormCost& self, const Eigen::MatrixXd& new_A,
+                const Eigen::VectorXd& new_b) {
+              self.UpdateCoefficients(new_A, new_b);
+            },
+            py::arg("new_A"), py::arg("new_b") = 0,
+            doc.L2NormCost.UpdateCoefficients.doc_dense_A)
+        .def(
+            "UpdateCoefficients",
+            [](L2NormCost& self, const Eigen::SparseMatrix<double>& new_A,
+                const Eigen::VectorXd& new_b) {
+              self.UpdateCoefficients(new_A, new_b);
+            },
+            py::arg("new_A"), py::arg("new_b") = 0,
+            doc.L2NormCost.UpdateCoefficients.doc_sparse_A);
+  }
 
   py::class_<LInfNormCost, Cost, std::shared_ptr<LInfNormCost>>(
       m, "LInfNormCost", doc.LInfNormCost.doc)
@@ -842,6 +770,8 @@ void BindEvaluatorsAndBindings(py::module m) {
 
   RegisterBinding<VisualizationCallback>(&m);
 }  // NOLINT(readability/fn_size)
+
+}  // namespace
 
 namespace internal {
 void DefineSolversEvaluators(py::module m) {

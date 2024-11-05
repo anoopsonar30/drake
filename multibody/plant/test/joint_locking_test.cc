@@ -1,5 +1,6 @@
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -7,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/geometry/proximity_properties.h"
+#include "drake/geometry/query_results/penetration_as_point_pair.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/plant/multibody_plant_config_functions.h"
@@ -31,9 +33,15 @@ class MultibodyPlantTester {
  public:
   MultibodyPlantTester() = delete;
 
-  static const internal::JointLockingCacheData<double>& EvalJointLockingCache(
+  static const internal::JointLockingCacheData<double>& EvalJointLocking(
       const MultibodyPlant<double>& plant, const Context<double>& context) {
-    return plant.EvalJointLockingCache(context);
+    return plant.EvalJointLocking(context);
+  }
+
+  template <typename T>
+  static BodyIndex FindBodyByGeometryId(const MultibodyPlant<T>& plant,
+                                        geometry::GeometryId id) {
+    return plant.FindBodyByGeometryId(id);
   }
 };
 
@@ -119,13 +127,12 @@ TEST_P(JointLockingTest, JointLockingIndicesTest) {
   RevoluteJoint<double>& body3_body4 =
       plant_->GetMutableJointByName<RevoluteJoint>("body3_body4");
 
-  const int body1_velocity_start =
-      body1.floating_velocities_start() - plant_->num_positions();
+  const int body1_velocity_start = body1.floating_velocities_start_in_v();
 
   // No joints/bodies are locked, all joint/body velocity indices should exist.
   {
     const internal::JointLockingCacheData<double>& cache =
-        MultibodyPlantTester::EvalJointLockingCache(*plant_, *context_);
+        MultibodyPlantTester::EvalJointLocking(*plant_, *context_);
     const std::vector<int>& unlocked_velocity_indices =
         cache.unlocked_velocity_indices;
     const std::vector<int>& locked_velocity_indices =
@@ -181,7 +188,7 @@ TEST_P(JointLockingTest, JointLockingIndicesTest) {
   {
     body3_body4.Lock(context_.get());
     const internal::JointLockingCacheData<double>& cache =
-        MultibodyPlantTester::EvalJointLockingCache(*plant_, *context_);
+        MultibodyPlantTester::EvalJointLocking(*plant_, *context_);
     const std::vector<int>& unlocked_velocity_indices =
         cache.unlocked_velocity_indices;
     const std::vector<int>& locked_velocity_indices =
@@ -237,7 +244,7 @@ TEST_P(JointLockingTest, JointLockingIndicesTest) {
     body1.Lock(context_.get());
 
     const internal::JointLockingCacheData<double>& cache =
-        MultibodyPlantTester::EvalJointLockingCache(*plant_, *context_);
+        MultibodyPlantTester::EvalJointLocking(*plant_, *context_);
     const std::vector<int>& unlocked_velocity_indices =
         cache.unlocked_velocity_indices;
     const std::vector<int>& locked_velocity_indices =
@@ -268,9 +275,8 @@ TEST_P(JointLockingTest, JointLockingIndicesTest) {
     EXPECT_THAT(
         unlocked_velocity_indices,
         testing::UnorderedElementsAreArray(expected_unlocked_velocity_indices));
-    EXPECT_THAT(
-        locked_velocity_indices,
-        testing::UnorderedElementsAreArray(expected_locked_velocity_indices));
+    EXPECT_THAT(locked_velocity_indices, testing::UnorderedElementsAreArray(
+                                             expected_locked_velocity_indices));
 
     const std::vector<std::vector<int>>
         expected_unlocked_velocity_indices_per_tree = {{0, 1}, {6}};
@@ -323,7 +329,18 @@ class TrajectoryTest : public ::testing::TestWithParam<TrajectoryTestConfig> {
       bool weld_elbow, DiscreteContactSolver solver) {
     std::unique_ptr<MultibodyPlant<double>> plant;
     plant = std::make_unique<MultibodyPlant<double>>(kTimestep);
-    plant->set_discrete_contact_solver(solver);
+    // N.B. We want to exercise the TAMSI and SAP code paths. Therefore we
+    // arbitrarily choose two model approximations to accomplish this.
+    switch (solver) {
+      case DiscreteContactSolver::kTamsi:
+        plant->set_discrete_contact_approximation(
+            DiscreteContactApproximation::kTamsi);
+        break;
+      case DiscreteContactSolver::kSap:
+        plant->set_discrete_contact_approximation(
+            DiscreteContactApproximation::kSap);
+        break;
+    }
 
     const RigidBody<double>& body1 =
         plant->AddRigidBody("upper_arm", SpatialInertia<double>::MakeUnitary());
@@ -461,37 +478,58 @@ INSTANTIATE_TEST_SUITE_P(JointLockingTests, TrajectoryTest,
 
 struct FilteredContactResultsConfig {
   ContactModel contact_model{ContactModel::kPoint};
-  DiscreteContactSolver solver{DiscreteContactSolver::kTamsi};
+  std::optional<DiscreteContactSolver> solver{DiscreteContactSolver::kTamsi};
 };
 
 std::ostream& operator<<(std::ostream& out,
                          const FilteredContactResultsConfig& c) {
   return out << internal::GetStringFromContactModel(c.contact_model) << "_"
-             << internal::GetStringFromDiscreteContactSolver(c.solver);
+             << (c.solver.has_value()
+                     ? internal::GetStringFromDiscreteContactSolver(*c.solver)
+                     : std::string{"continuous"});
 }
 
-// Utility testing class to construct a plant with two stacked spheres in
+// Utility testing class to construct a plant with three stacked spheres in
 // contact with the contact model specified in the parameter.
 class FilteredContactResultsTest
     : public ::testing::TestWithParam<FilteredContactResultsConfig> {
  public:
   void SetUp() {
     FilteredContactResultsConfig config = GetParam();
+    const double time_step = config.solver.has_value() ? kTimestep : 0.0;
 
     systems::DiagramBuilder<double> builder;
-    plant_ = &AddMultibodyPlantSceneGraph(&builder, 0.01 /* time_step */).plant;
+    plant_ = &AddMultibodyPlantSceneGraph(&builder, time_step).plant;
     plant_->set_contact_model(config.contact_model);
-    plant_->set_discrete_contact_solver(config.solver);
+    plant_->SetUseSampledOutputPorts(false);  // We're not stepping time.
+    if (time_step > 0) {
+      // N.B. We want to exercise the TAMSI and SAP code paths. Therefore we
+      // arbitrarily choose two model approximations to accomplish this.
+      switch (*config.solver) {
+        case DiscreteContactSolver::kTamsi:
+          plant_->set_discrete_contact_approximation(
+              DiscreteContactApproximation::kTamsi);
+          break;
+        case DiscreteContactSolver::kSap:
+          plant_->set_discrete_contact_approximation(
+              DiscreteContactApproximation::kSap);
+          break;
+      }
+    }
 
     const RigidBody<double>& ball_A = AddBall("ball_A");
     const RigidBody<double>& ball_B = AddBall("ball_B");
+    const RigidBody<double>& ball_C = AddBall("ball_C");
 
     // Position ball B above ball A in z such that they are in contact.
+    // Position ball C above ball B in z such that they are in contact.
     const math::RigidTransformd X_WA{};
-    const math::RigidTransformd X_WB{Vector3d{0, 0, radius_}};
+    const math::RigidTransformd X_WB{Vector3d{0, 0, 1.95 * radius_}};
+    const math::RigidTransformd X_WC{Vector3d{0, 0, 3.9 * radius_}};
 
     plant_->SetDefaultFreeBodyPose(ball_A, X_WA);
     plant_->SetDefaultFreeBodyPose(ball_B, X_WB);
+    plant_->SetDefaultFreeBodyPose(ball_C, X_WC);
 
     plant_->Finalize();
     diagram_ = builder.Build();
@@ -513,7 +551,7 @@ class FilteredContactResultsTest
 
     // N.B. these properties go unused if the contact model is kPoint.
     geometry::AddCompliantHydroelasticProperties(
-        0.5 * radius_, hydroelastic_modulus_, &ball_props);
+        0.1 * radius_, hydroelastic_modulus_, &ball_props);
 
     plant_->RegisterCollisionGeometry(ball, X_BS, geometry::Sphere(radius_),
                                       "collision", std::move(ball_props));
@@ -535,7 +573,13 @@ class FilteredContactResultsTest
 
 // Test that contact results are properly reported. MultibodyPlant will not
 // report contact results between bodies that are either anchored or with all of
-// their dofs locked.
+// their dofs locked. However, geometry query data from SceneGraph (e.g
+// data from MbP::CalcGeometryContactData())
+// are not automatically filtered. Thus contact results must store a reference
+// of either the point pair or hydroelastic contact surface that corresponds to
+// that result. We verify that contact results for point contact contain correct
+// references to its PointPairPenetration by checking that they store the same
+// body indices, in the same order.
 TEST_P(FilteredContactResultsTest, VerifyLockedResults) {
   // Create a context for this system:
   std::unique_ptr<systems::Context<double>> diagram_context =
@@ -545,22 +589,36 @@ TEST_P(FilteredContactResultsTest, VerifyLockedResults) {
 
   FilteredContactResultsConfig config = GetParam();
 
-  // Both spheres unlocked, expect a single contact result.
+  // All spheres unlocked, expect two contact results.
   {
     const ContactResults<double>& results =
         plant_->get_contact_results_output_port().Eval<ContactResults<double>>(
             context);
 
     if (config.contact_model == ContactModel::kPoint) {
-      EXPECT_EQ(results.num_point_pair_contacts(), 1);
+      EXPECT_EQ(results.num_point_pair_contacts(), 2);
       EXPECT_EQ(results.num_hydroelastic_contacts(), 0);
+
+      // Check that the point contact result stores the correct corresponding
+      // `PenetrationAsPointPair` from geometry queries.
+      for (int i = 0; i < results.num_point_pair_contacts(); ++i) {
+        const PointPairContactInfo<double>& info =
+            results.point_pair_contact_info(i);
+        const BodyIndex body_A = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_A);
+        const BodyIndex body_B = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_B);
+        EXPECT_EQ(body_A, info.bodyA_index());
+        EXPECT_EQ(body_B, info.bodyB_index());
+      }
+
     } else {
       EXPECT_EQ(results.num_point_pair_contacts(), 0);
-      EXPECT_GT(results.num_hydroelastic_contacts(), 0);
+      EXPECT_EQ(results.num_hydroelastic_contacts(), 2);
     }
   }
 
-  // One body of the pair is locked, expect a single contact result.
+  // One body locked, still expect two contact results.
   {
     plant_->GetBodyByName("ball_A").Lock(&context);
     // Both spheres unlocked, should expect a single contact result.
@@ -569,15 +627,28 @@ TEST_P(FilteredContactResultsTest, VerifyLockedResults) {
             context);
 
     if (config.contact_model == ContactModel::kPoint) {
-      EXPECT_EQ(results.num_point_pair_contacts(), 1);
+      EXPECT_EQ(results.num_point_pair_contacts(), 2);
       EXPECT_EQ(results.num_hydroelastic_contacts(), 0);
+
+      // Check that the point contact result stores the correct corresponding
+      // `PenetrationAsPointPair` from geometry queries.
+      for (int i = 0; i < results.num_point_pair_contacts(); ++i) {
+        auto info = results.point_pair_contact_info(i);
+        const BodyIndex body_A = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_A);
+        const BodyIndex body_B = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_B);
+        EXPECT_EQ(body_A, info.bodyA_index());
+        EXPECT_EQ(body_B, info.bodyB_index());
+      }
+
     } else {
       EXPECT_EQ(results.num_point_pair_contacts(), 0);
-      EXPECT_GT(results.num_hydroelastic_contacts(), 0);
+      EXPECT_EQ(results.num_hydroelastic_contacts(), 2);
     }
   }
 
-  // Both spheres locked, expect no contact result for the pair.
+  // Two spheres locked, expect only one contact result.
   {
     plant_->GetBodyByName("ball_A").Lock(&context);
     plant_->GetBodyByName("ball_B").Lock(&context);
@@ -588,11 +659,24 @@ TEST_P(FilteredContactResultsTest, VerifyLockedResults) {
             context);
 
     if (config.contact_model == ContactModel::kPoint) {
-      EXPECT_EQ(results.num_point_pair_contacts(), 0);
+      EXPECT_EQ(results.num_point_pair_contacts(), 1);
       EXPECT_EQ(results.num_hydroelastic_contacts(), 0);
+
+      // Check that the point contact result stores the correct corresponding
+      // `PenetrationAsPointPair` from geometry queries.
+      for (int i = 0; i < results.num_point_pair_contacts(); ++i) {
+        auto info = results.point_pair_contact_info(i);
+        const BodyIndex body_A = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_A);
+        const BodyIndex body_B = MultibodyPlantTester::FindBodyByGeometryId(
+            *plant_, info.point_pair().id_B);
+        EXPECT_EQ(body_A, info.bodyA_index());
+        EXPECT_EQ(body_B, info.bodyB_index());
+      }
+
     } else {
       EXPECT_EQ(results.num_point_pair_contacts(), 0);
-      EXPECT_EQ(results.num_hydroelastic_contacts(), 0);
+      EXPECT_EQ(results.num_hydroelastic_contacts(), 1);
     }
   }
 }
@@ -601,6 +685,8 @@ TEST_P(FilteredContactResultsTest, VerifyLockedResults) {
 std::vector<FilteredContactResultsConfig>
 MakeFilteredContactResultsTestCases() {
   return std::vector<FilteredContactResultsConfig>{
+      {.contact_model = ContactModel::kPoint, .solver = std::nullopt},
+      {.contact_model = ContactModel::kHydroelastic, .solver = std::nullopt},
       {.contact_model = ContactModel::kPoint,
        .solver = DiscreteContactSolver::kTamsi},
       {.contact_model = ContactModel::kHydroelastic,

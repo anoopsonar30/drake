@@ -4,6 +4,7 @@
 
 #include <fmt/format.h>
 
+#include "drake/common/fmt_eigen.h"
 #include "drake/common/unused.h"
 #include "drake/math/autodiff.h"
 
@@ -27,8 +28,8 @@ void ThrowIfAllElementsInQuaternionAreZero(
     const Eigen::Quaternion<T>& quaternion, const char* function_name) {
   if constexpr (scalar_predicate<T>::is_bool) {
     if (IsQuaternionZero(quaternion)) {
-      std::string message = fmt::format("{}():"
-        " All the elements in a quaternion are zero.", function_name);
+      std::string message = fmt::format(
+          "{}(): All the elements in a quaternion are zero.", function_name);
       throw std::logic_error(message);
     }
   } else {
@@ -41,9 +42,9 @@ void ThrowIfAnyElementInQuaternionIsInfinityOrNaN(
     const Eigen::Quaternion<T>& quaternion, const char* function_name) {
   if constexpr (scalar_predicate<T>::is_bool) {
     if (!quaternion.coeffs().allFinite()) {
-      std::string message = fmt::format("{}():"
-        " Quaternion contains an element that is infinity or NaN.",
-        function_name);
+      std::string message = fmt::format(
+          "{}(): Quaternion contains an element that is infinity or NaN.",
+          function_name);
       throw std::logic_error(message);
     }
   } else {
@@ -107,8 +108,8 @@ RotationMatrix<T>::RotationMatrix(const RollPitchYaw<T>& rpy) {
   const T& r = rpy.roll_angle();
   const T& p = rpy.pitch_angle();
   const T& y = rpy.yaw_angle();
-  using std::sin;
   using std::cos;
+  using std::sin;
   const T c0 = cos(r), c1 = cos(p), c2 = cos(y);
   const T s0 = sin(r), s1 = sin(p), s2 = sin(y);
   const T c2_s1 = c2 * s1, s2_s1 = s2 * s1;
@@ -121,9 +122,11 @@ RotationMatrix<T>::RotationMatrix(const RollPitchYaw<T>& rpy) {
   const T Rzx = -s1;
   const T Rzy = c1 * s0;
   const T Rzz = c1 * c0;
+  // clang-format off
   SetFromOrthonormalRows(Vector3<T>(Rxx, Rxy, Rxz),
                          Vector3<T>(Ryx, Ryy, Ryz),
                          Vector3<T>(Rzx, Rzy, Rzz));
+  // clang-format on
 }
 
 template <typename T>
@@ -131,7 +134,11 @@ RotationMatrix<T> RotationMatrix<T>::MakeFromOneUnitVector(
     const Vector3<T>& u_A, int axis_index) {
   // In Debug builds, verify axis_index is 0 or 1 or 2 and u_A is unit length.
   DRAKE_ASSERT(axis_index >= 0 && axis_index <= 2);
-  DRAKE_ASSERT_VOID(ThrowIfNotUnitLength(u_A, __func__));
+
+  // The following value of kTolerance was determined empirically and
+  // seems to guarantee a valid RotationMatrix() (see IsValid()).
+  constexpr double kTolerance = 4 * std::numeric_limits<double>::epsilon();
+  math::internal::ThrowIfNotUnitVector(u_A, __func__, kTolerance);
 
   // This method forms a right-handed orthonormal basis with u_A and two
   // internally-constructed unit vectors v_A and w_A.
@@ -295,7 +302,8 @@ void RotationMatrix<T>::ThrowIfNotValid(const Matrix3<T>& R) {
           " expensive (but not necessarily closest) rotation matrix, use"
           " RotationMatrix<T>(RotationMatrix<T>::ToQuaternion<T>(your_matrix))."
           " Alternatively, if using quaternions, ensure the quaternion is"
-          " normalized.", measure);
+          " normalized.",
+          measure);
       throw std::logic_error(message);
     }
     if (R.determinant() < 0) {
@@ -317,7 +325,7 @@ Matrix3<T> RotationMatrix<T>::ProjectMatrix3ToOrthonormalMatrix3(
     const auto singular_values = svd.singularValues();
     const T s_max = singular_values(0);  // maximum singular value.
     const T s_min = singular_values(2);  // minimum singular value.
-    const T s_f = (s_max != 0.0 && s_min < 1.0/s_max) ? s_min : s_max;
+    const T s_f = (s_max != 0.0 && s_min < 1.0 / s_max) ? s_min : s_max;
     const T det = M.determinant();
     const double sign_det = (det > 0.0) ? 1 : ((det < 0.0) ? -1 : 0);
     *quality_factor = s_f * sign_det;
@@ -382,70 +390,6 @@ double ProjectMatToRotMatWithAxis(const Eigen::Matrix3d& M,
 }
 
 template <typename T>
-void RotationMatrix<T>::ThrowIfNotUnitLength(const Vector3<T>& v,
-                                             const char* function_name) {
-  if constexpr (scalar_predicate<T>::is_bool) {
-    // The value of kTolerance was determined empirically, is well within the
-    // tolerance achieved by normalizing a vast range of non-zero vectors, and
-    // seems to guarantee a valid RotationMatrix() (see IsValid()).
-    constexpr double kTolerance = 4 * std::numeric_limits<double>::epsilon();
-    const double norm = ExtractDoubleOrThrow(v.norm());
-    const double error = std::abs(1.0 - norm);
-    // Throw an exception if error is non-finite (NaN or infinity) or too big.
-    if (!std::isfinite(error) || error > kTolerance) {
-      const double vx = ExtractDoubleOrThrow(v.x());
-      const double vy = ExtractDoubleOrThrow(v.y());
-      const double vz = ExtractDoubleOrThrow(v.z());
-      throw std::logic_error(
-          fmt::format("RotationMatrix::{}() requires a unit-length vector.\n"
-                      "         v: {} {} {}\n"
-                      "       |v|: {}\n"
-                      " |1 - |v||: {} is not less than or equal to {}.",
-                      function_name, vx, vy, vz, norm, error, kTolerance));
-    }
-  } else {
-    unused(v, function_name);
-  }
-}
-
-template <typename T>
-Vector3<T> RotationMatrix<T>::NormalizeOrThrow(const Vector3<T>& v,
-                                               const char* function_name) {
-  Vector3<T> u;
-  if constexpr (scalar_predicate<T>::is_bool) {
-    // The number 1.0E-10 is a heuristic (rule of thumb) that is guided by
-    // an expected small physical dimensions in a robotic systems.  Numbers
-    // smaller than this are probably user or developer errors.
-    constexpr double kMinMagnitude = 1e-10;
-    const double norm = ExtractDoubleOrThrow(v.norm());
-    // Normalize the vector v if norm is finite and sufficiently large.
-    // Throw an exception if norm is non-finite (NaN or infinity) or too small.
-    if (std::isfinite(norm) && norm >= kMinMagnitude) {
-      u = v/norm;
-    } else {
-      const double vx = ExtractDoubleOrThrow(v.x());
-      const double vy = ExtractDoubleOrThrow(v.y());
-      const double vz = ExtractDoubleOrThrow(v.z());
-      throw std::logic_error(
-        fmt::format("RotationMatrix::{}() cannot normalize the given vector.\n"
-                    "   v: {} {} {}\n"
-                    " |v|: {}\n"
-                    " The measures must be finite and the vector must have a"
-                    " magnitude of at least {} to automatically normalize. If"
-                    " you are confident that v's direction is meaningful, pass"
-                    " v.normalized() in place of v.",
-                    function_name, vx, vy, vz, norm, kMinMagnitude));
-    }
-  } else {
-    // Do not use u = v.normalized() with an underlying symbolic type since
-    // normalized() is incompatible with symbolic::Expression.
-    u = v / v.norm();
-    unused(function_name);
-  }
-  return u;
-}
-
-template <typename T>
 Eigen::Quaternion<T> RotationMatrix<T>::ToQuaternion(
     const Eigen::Ref<const Matrix3<T>>& M) {
   Eigen::Quaternion<T> q = RotationMatrixToUnnormalizedQuaternion(M);
@@ -469,4 +413,4 @@ Eigen::Quaternion<T> RotationMatrix<T>::ToQuaternion(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::math::RotationMatrix)
+    class ::drake::math::RotationMatrix);

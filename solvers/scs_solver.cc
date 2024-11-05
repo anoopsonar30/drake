@@ -19,114 +19,42 @@
 #include "drake/common/text_logging.h"
 #include "drake/math/eigen_sparse_triplet.h"
 #include "drake/math/quadratic_form.h"
+#include "drake/solvers/aggregate_costs_constraints.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/mathematical_program_result.h"
+#include "drake/solvers/scs_clarabel_common.h"
+
+// This function must appear in the global namespace -- the Serialize pattern
+// uses ADL (argument-dependent lookup) and the namespace for the ScsSettings
+// struct is the global namespace. (We can't even use an anonymous namespace!)
+static void Serialize(
+    drake::solvers::internal::SpecificOptions* archive,
+    // NOLINTNEXTLINE(runtime/references) to match Serialize concept.
+    ScsSettings& settings) {
+  using drake::MakeNameValue;
+  archive->Visit(MakeNameValue("normalize", &settings.normalize));
+  archive->Visit(MakeNameValue("scale", &settings.scale));
+  archive->Visit(MakeNameValue("adaptive_scale", &settings.adaptive_scale));
+  archive->Visit(MakeNameValue("rho_x", &settings.rho_x));
+  archive->Visit(MakeNameValue("max_iters", &settings.max_iters));
+  archive->Visit(MakeNameValue("eps_abs", &settings.eps_abs));
+  archive->Visit(MakeNameValue("eps_rel", &settings.eps_rel));
+  archive->Visit(MakeNameValue("eps_infeas", &settings.eps_infeas));
+  archive->Visit(MakeNameValue("alpha", &settings.alpha));
+  archive->Visit(MakeNameValue("time_limit_secs", &settings.time_limit_secs));
+  archive->Visit(MakeNameValue("verbose", &settings.verbose));
+  archive->Visit(MakeNameValue("warm_start", &settings.warm_start));
+  archive->Visit(MakeNameValue("acceleration_lookback",  // BR
+                               &settings.acceleration_lookback));
+  archive->Visit(MakeNameValue("acceleration_interval",  // BR
+                               &settings.acceleration_interval));
+  // TODO(jwnimmer-tri) Handle write_data_filename.
+  // TODO(jwnimmer-tri) Handle log_csv_filename.
+}
 
 namespace drake {
 namespace solvers {
 namespace {
-void ParseLinearCost(const MathematicalProgram& prog, std::vector<double>* c,
-                     double* constant) {
-  for (const auto& linear_cost : prog.linear_costs()) {
-    // Each linear cost is in the form of aᵀx + b
-    const auto& a = linear_cost.evaluator()->a();
-    const VectorXDecisionVariable& x = linear_cost.variables();
-    for (int i = 0; i < a.rows(); ++i) {
-      (*c)[prog.FindDecisionVariableIndex(x(i))] += a(i);
-    }
-    (*constant) += linear_cost.evaluator()->b();
-  }
-}
-
-// Add a rotated Lorentz cone constraint that A_cone * x + b_cone is in the
-// rotated Lorentz cone.
-// @param A_cone_triplets The triplets of non-zero entries in A_cone.
-// @param b_cone A_cone * x + b_cone is in the rotated Lorentz cone.
-// @param x_indices The index of the variable in SCS.
-// @param A_triplets[in/out] The non-zero entry triplet in A before and after
-// adding the Lorentz cone.
-// @param b[in/out] The right-hand side vector b before and after adding the
-// Lorentz cone.
-// @param A_row_count[in/out] The number of rows in A before and after adding
-// the Lorentz cone.
-// @param second_order_cone_length[in/out] The length of each Lorentz cone
-// before and after adding the Lorentz cone constraint.
-// @param rotated_lorentz_cone_y_start_indices[in/out] The starting index of y
-// corresponds to this rotated Lorentz cone. If set to nullopt, then we don't
-// modify rotated_lorentz_cone_y_start_indices.
-void ParseRotatedLorentzConeConstraint(
-    const std::vector<Eigen::Triplet<double>>& A_cone_triplets,
-    const Eigen::Ref<const Eigen::VectorXd>& b_cone,
-    const std::vector<int>& x_indices,
-    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, std::vector<int>* second_order_cone_length,
-    std::optional<std::vector<int>*> rotated_lorentz_cone_y_start_indices) {
-  // Our RotatedLorentzConeConstraint encodes that Ax + b is in the rotated
-  // Lorentz cone, namely
-  //  (a₀ᵀx + b₀) (a₁ᵀx + b₁) ≥ (a₂ᵀx + b₂)² + ... + (aₙ₋₁ᵀx + bₙ₋₁)²
-  //  (a₀ᵀx + b₀) ≥ 0
-  //  (a₁ᵀx + b₁) ≥ 0
-  // , where aᵢᵀ is the i'th row of A, bᵢ is the i'th row of b. Equivalently the
-  // vector
-  // [ 0.5(a₀ + a₁)ᵀx + 0.5(b₀ + b₁) ]
-  // [ 0.5(a₀ - a₁)ᵀx + 0.5(b₀ - b₁) ]
-  // [           a₂ᵀx +           b₂ ]
-  //             ...
-  // [         aₙ₋₁ᵀx +         bₙ₋₁ ]
-  // is in the Lorentz cone. We convert this to the SCS form, that
-  //  Cx + s = d
-  //  s in Lorentz cone,
-  // where C = [ -0.5(a₀ + a₁)ᵀ ]   d = [ 0.5(b₀ + b₁) ]
-  //           [ -0.5(a₀ - a₁)ᵀ ]       [ 0.5(b₀ - b₁) ]
-  //           [           -a₂ᵀ ]       [           b₂ ]
-  //                 ...                      ...
-  //           [         -aₙ₋₁ᵀ ]       [          bₙ₋₁]
-  for (const auto& Ai_triplet : A_cone_triplets) {
-    const int x_index = x_indices[Ai_triplet.col()];
-    if (Ai_triplet.row() == 0) {
-      A_triplets->emplace_back(*A_row_count, x_index,
-                               -0.5 * Ai_triplet.value());
-      A_triplets->emplace_back(*A_row_count + 1, x_index,
-                               -0.5 * Ai_triplet.value());
-    } else if (Ai_triplet.row() == 1) {
-      A_triplets->emplace_back(*A_row_count, x_index,
-                               -0.5 * Ai_triplet.value());
-      A_triplets->emplace_back(*A_row_count + 1, x_index,
-                               0.5 * Ai_triplet.value());
-    } else {
-      A_triplets->emplace_back(*A_row_count + Ai_triplet.row(), x_index,
-                               -Ai_triplet.value());
-    }
-  }
-  b->push_back(0.5 * (b_cone(0) + b_cone(1)));
-  b->push_back(0.5 * (b_cone(0) - b_cone(1)));
-  for (int i = 2; i < b_cone.rows(); ++i) {
-    b->push_back(b_cone(i));
-  }
-  if (rotated_lorentz_cone_y_start_indices.has_value()) {
-    rotated_lorentz_cone_y_start_indices.value()->push_back(*A_row_count);
-  }
-  *A_row_count += b_cone.rows();
-  second_order_cone_length->push_back(b_cone.rows());
-}
-
-void ParseQuadraticCost(const MathematicalProgram& prog,
-                        std::vector<Eigen::Triplet<double>>* P_upper_triplets,
-                        std::vector<double>* c, double* constant) {
-  for (const auto& cost : prog.quadratic_costs()) {
-    const auto var_indices = prog.FindDecisionVariableIndices(cost.variables());
-    for (int j = 0; j < cost.evaluator()->Q().cols(); ++j) {
-      for (int i = 0; i <= j; ++i) {
-        if (cost.evaluator()->Q()(i, j) != 0) {
-          P_upper_triplets->emplace_back(var_indices[i], var_indices[j],
-                                         cost.evaluator()->Q()(i, j));
-        }
-      }
-      (*c)[var_indices[j]] += cost.evaluator()->b()(j);
-    }
-    *constant += cost.evaluator()->c();
-  }
-}
 
 void ParseQuadraticCostWithRotatedLorentzCone(
     const MathematicalProgram& prog, std::vector<double>* c,
@@ -174,136 +102,12 @@ void ParseQuadraticCostWithRotatedLorentzCone(
     b_cone(0) = -cost.evaluator()->c();
     b_cone(1) = 2;
     // Add the rotated Lorentz cone constraint
-    ParseRotatedLorentzConeConstraint(Ai_triplets, b_cone, Ai_var_indices,
-                                      A_triplets, b, A_row_count,
-                                      second_order_cone_length, std::nullopt);
+    internal::ParseRotatedLorentzConeConstraint(
+        Ai_triplets, b_cone, Ai_var_indices, A_triplets, b, A_row_count,
+        second_order_cone_length, std::nullopt);
     // Add the cost y.
     c->push_back(1);
   }
-}
-
-void ParseLinearConstraint(const MathematicalProgram& prog,
-                           std::vector<Eigen::Triplet<double>>* A_triplets,
-                           std::vector<double>* b, int* A_row_count,
-                           ScsCone* cone,
-                           std::vector<std::vector<std::pair<int, int>>>*
-                               linear_constraint_dual_indices) {
-  // The linear constraint lb ≤ aᵀx ≤ ub is converted to
-  // -aᵀx + s1 = lb,
-  //  aᵀx + s2 = ub
-  // s1, s2 in the positive cone.
-  // The special cases are when ub = ∞ or lb = -∞.
-  // When ub = ∞, then we only add the constraint
-  // -aᵀx + s = lb, s in the positive cone.
-  // When lb = -∞, then we only add the constraint
-  // aᵀx + s = ub, s in the positive cone.
-  int num_linear_constraint_rows = 0;
-  linear_constraint_dual_indices->reserve(prog.linear_constraints().size());
-  for (const auto& linear_constraint : prog.linear_constraints()) {
-    linear_constraint_dual_indices->emplace_back(
-        linear_constraint.evaluator()->num_constraints());
-    const Eigen::VectorXd& ub = linear_constraint.evaluator()->upper_bound();
-    const Eigen::VectorXd& lb = linear_constraint.evaluator()->lower_bound();
-    const VectorXDecisionVariable& x = linear_constraint.variables();
-    const Eigen::SparseMatrix<double>& Ai =
-        linear_constraint.evaluator()->get_sparse_A();
-    // We store the starting row index in A_triplets for each row of
-    // linear_constraint. Namely the constraint lb(i) <= A.row(i)*x <= ub(i) is
-    // stored in A_triplets with starting_row_indices[i] (or
-    // starting_row_indices[i]+1 if both lb(i) and ub(i) are finite).
-    std::vector<int> starting_row_indices(
-        linear_constraint.evaluator()->num_constraints());
-    for (int i = 0; i < linear_constraint.evaluator()->num_constraints(); ++i) {
-      const bool needs_ub{!std::isinf(ub(i))};
-      const bool needs_lb{!std::isinf(lb(i))};
-      auto& dual_index = linear_constraint_dual_indices->back()[i];
-      // Use -1 to indicate the constraint bound is infinity.
-      dual_index.first = -1;
-      dual_index.second = -1;
-      if (!needs_ub && !needs_lb) {
-        // We use -1 to indicate that we won't add linear constraint when both
-        // bounds are infinity.
-        starting_row_indices[i] = -1;
-      } else {
-        starting_row_indices[i] = *A_row_count + num_linear_constraint_rows;
-        // We first add the constraint for lower bound, and then add the
-        // constraint for upper bound. This is consistent with the loop below
-        // when we modify A_triplets.
-        if (needs_lb) {
-          b->push_back(-lb(i));
-          dual_index.first = *A_row_count + num_linear_constraint_rows;
-          num_linear_constraint_rows++;
-        }
-        if (needs_ub) {
-          b->push_back(ub(i));
-          dual_index.second = *A_row_count + num_linear_constraint_rows;
-          num_linear_constraint_rows++;
-        }
-      }
-    }
-    for (int j = 0; j < Ai.cols(); ++j) {
-      const int xj_index = prog.FindDecisionVariableIndex(x(j));
-      for (Eigen::SparseMatrix<double>::InnerIterator it(Ai, j); it; ++it) {
-        const int Ai_row_count = it.row();
-        const bool needs_ub{!std::isinf(ub(Ai_row_count))};
-        const bool needs_lb{!std::isinf(lb(Ai_row_count))};
-        if (!needs_lb && !needs_ub) {
-          continue;
-        }
-        int row_index = starting_row_indices[Ai_row_count];
-        if (needs_lb) {
-          // If lb != -∞, then the constraint -aᵀx + s = lb will be added to
-          // the matrix A, in the row row_index.
-          A_triplets->emplace_back(row_index, xj_index, -it.value());
-          ++row_index;
-        }
-        if (needs_ub) {
-          // If ub != ∞, then the constraint aᵀx + s = ub will be added to the
-          // matrix A, in the row row_index.
-          A_triplets->emplace_back(row_index, xj_index, it.value());
-        }
-      }
-    }
-  }
-  *A_row_count += num_linear_constraint_rows;
-  cone->l += num_linear_constraint_rows;
-}
-
-void ParseLinearEqualityConstraint(
-    const MathematicalProgram& prog,
-    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, ScsCone* cone,
-    std::vector<int>* linear_eq_y_start_indices) {
-  int num_linear_equality_constraints_rows = 0;
-  linear_eq_y_start_indices->reserve(prog.linear_equality_constraints().size());
-  // The linear equality constraint A x = b is converted to
-  // A x + s = b. s in zero cone.
-  for (const auto& linear_equality_constraint :
-       prog.linear_equality_constraints()) {
-    const Eigen::SparseMatrix<double>& Ai =
-        linear_equality_constraint.evaluator()->get_sparse_A();
-    const std::vector<Eigen::Triplet<double>> Ai_triplets =
-        math::SparseMatrixToTriplets(Ai);
-    A_triplets->reserve(A_triplets->size() + Ai_triplets.size());
-    const solvers::VectorXDecisionVariable& x =
-        linear_equality_constraint.variables();
-    // x_indices[i] is the index of x(i)
-    const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-    for (const auto& Ai_triplet : Ai_triplets) {
-      A_triplets->emplace_back(Ai_triplet.row() + *A_row_count,
-                               x_indices[Ai_triplet.col()], Ai_triplet.value());
-    }
-    const int num_Ai_rows =
-        linear_equality_constraint.evaluator()->num_constraints();
-    b->reserve(b->size() + num_Ai_rows);
-    for (int i = 0; i < num_Ai_rows; ++i) {
-      b->push_back(linear_equality_constraint.evaluator()->lower_bound()(i));
-    }
-    linear_eq_y_start_indices->push_back(*A_row_count);
-    *A_row_count += num_Ai_rows;
-    num_linear_equality_constraints_rows += num_Ai_rows;
-  }
-  cone->z += num_linear_equality_constraints_rows;
 }
 
 void ParseBoundingBoxConstraint(
@@ -350,196 +154,6 @@ void ParseBoundingBoxConstraint(
     num_bounding_box_constraint_rows += num_scs_new_constraint;
   }
   cone->l += num_bounding_box_constraint_rows;
-}
-
-void ParseSecondOrderConeConstraints(
-    const MathematicalProgram& prog,
-    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, std::vector<int>* second_order_cone_length,
-    std::vector<int>* lorentz_cone_y_start_indices,
-    std::vector<int>* rotated_lorentz_cone_y_start_indices) {
-  // Our LorentzConeConstraint encodes that Ax + b is in Lorentz cone. We
-  // convert this to SCS form, as -Ax + s = b, s in Lorentz cone.
-  second_order_cone_length->reserve(
-      prog.lorentz_cone_constraints().size() +
-      prog.rotated_lorentz_cone_constraints().size());
-  lorentz_cone_y_start_indices->reserve(prog.lorentz_cone_constraints().size());
-  rotated_lorentz_cone_y_start_indices->reserve(
-      prog.rotated_lorentz_cone_constraints().size());
-  for (const auto& lorentz_cone_constraint : prog.lorentz_cone_constraints()) {
-    // x_indices[i] is the index of x(i)
-    const VectorXDecisionVariable& x = lorentz_cone_constraint.variables();
-    const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-    const Eigen::SparseMatrix<double> Ai =
-        lorentz_cone_constraint.evaluator()->A();
-    const std::vector<Eigen::Triplet<double>> Ai_triplets =
-        math::SparseMatrixToTriplets(Ai);
-    for (const auto& Ai_triplet : Ai_triplets) {
-      A_triplets->emplace_back(Ai_triplet.row() + *A_row_count,
-                               x_indices[Ai_triplet.col()],
-                               -Ai_triplet.value());
-    }
-    const int num_Ai_rows = lorentz_cone_constraint.evaluator()->A().rows();
-    for (int i = 0; i < num_Ai_rows; ++i) {
-      b->push_back(lorentz_cone_constraint.evaluator()->b()(i));
-    }
-    second_order_cone_length->push_back(num_Ai_rows);
-    lorentz_cone_y_start_indices->push_back(*A_row_count);
-    *A_row_count += num_Ai_rows;
-  }
-
-  for (const auto& rotated_lorentz_cone :
-       prog.rotated_lorentz_cone_constraints()) {
-    const VectorXDecisionVariable& x = rotated_lorentz_cone.variables();
-    const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-    const Eigen::SparseMatrix<double> Ai =
-        rotated_lorentz_cone.evaluator()->A();
-    const Eigen::VectorXd& bi = rotated_lorentz_cone.evaluator()->b();
-    const std::vector<Eigen::Triplet<double>> Ai_triplets =
-        math::SparseMatrixToTriplets(Ai);
-    ParseRotatedLorentzConeConstraint(Ai_triplets, bi, x_indices, A_triplets, b,
-                                      A_row_count, second_order_cone_length,
-                                      rotated_lorentz_cone_y_start_indices);
-  }
-}
-
-// This function parses both PositiveSemidefinite and
-// LinearMatrixInequalityConstraint.
-void ParsePositiveSemidefiniteConstraint(
-    const MathematicalProgram& prog,
-    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, ScsCone* cone) {
-  std::vector<int> psd_cone_length;
-  const double sqrt2 = std::sqrt(2);
-  for (const auto& psd_constraint : prog.positive_semidefinite_constraints()) {
-    // PositiveSemidefiniteConstraint encodes the matrix X being psd.
-    // We convert it to SCS form
-    // A * x + s = 0
-    // s in positive semidefinite cone.
-    // where A is a diagonal matrix, with its diagonal entries being the stacked
-    // column vector of the lower triangular part of matrix
-    // ⎡ -1 -√2 -√2 ... -√2⎤
-    // ⎢-√2  -1 -√2 ... -√2⎥
-    // ⎢-√2 -√2  -1 ... -√2⎥
-    // ⎢    ...            ⎥
-    // ⎣-√2 -√2 -√2 ...  -1⎦
-    // The √2 scaling factor in the off-diagonal entries are required by SCS,
-    // as it uses only the lower triangular part of the symmetric matrix, as
-    // explained in https://github.com/cvxgrp/scs
-    // x is the stacked column vector of the lower triangular part of the
-    // symmetric matrix X.
-    const int X_rows = psd_constraint.evaluator()->matrix_rows();
-    int x_index_count = 0;
-    const VectorXDecisionVariable& flat_X = psd_constraint.variables();
-    DRAKE_DEMAND(flat_X.rows() == X_rows * X_rows);
-    b->reserve(b->size() + X_rows * (X_rows + 1) / 2);
-    for (int j = 0; j < X_rows; ++j) {
-      A_triplets->emplace_back(
-          *A_row_count + x_index_count,
-          prog.FindDecisionVariableIndex(flat_X(j * X_rows + j)), -1);
-      b->push_back(0);
-      ++x_index_count;
-      for (int i = j + 1; i < X_rows; ++i) {
-        A_triplets->emplace_back(
-            *A_row_count + x_index_count,
-            prog.FindDecisionVariableIndex(flat_X(j * X_rows + i)), -sqrt2);
-        b->push_back(0);
-        ++x_index_count;
-      }
-    }
-    (*A_row_count) += X_rows * (X_rows + 1) / 2;
-    psd_cone_length.push_back(X_rows);
-  }
-  for (const auto& lmi_constraint :
-       prog.linear_matrix_inequality_constraints()) {
-    // LinearMatrixInequalityConstraint encodes
-    // F₀ + x₁*F₁ + x₂*F₂ + ... + xₙFₙ is p.s.d
-    // We convert this to SCS form as
-    // A_cone * x + s = b_cone
-    // s in SCS positive semidefinite cone.
-    // where
-    //              ⎡  F₁(0, 0)   F₂(0, 0) ...   Fₙ(0, 0)⎤
-    //              ⎢√2F₁(1, 0) √2F₂(1, 0) ... √2Fₙ(1, 0)⎥
-    //   A_cone = - ⎢√2F₁(2, 0) √2F₂(2, 0) ... √2Fₙ(2, 0)⎥,
-    //              ⎢            ...                     ⎥
-    //              ⎣  F₁(m, m)   F₂(m, m) ...   Fₙ(m, m)⎦
-    //
-    //              ⎡  F₀(0, 0)⎤
-    //              ⎢√2F₀(1, 0)⎥
-    //   b_cone =   ⎢√2F₀(2, 0)⎥,
-    //              ⎢   ...    ⎥
-    //              ⎣  F₀(m, m)⎦
-    // and
-    //   x = [x₁; x₂; ... ; xₙ].
-    // As explained above, the off-diagonal rows are scaled by √2. Please refer
-    // to https://github.com/cvxgrp/scs about the scaling factor √2.
-    const std::vector<Eigen::MatrixXd>& F = lmi_constraint.evaluator()->F();
-    const VectorXDecisionVariable& x = lmi_constraint.variables();
-    const int F_rows = lmi_constraint.evaluator()->matrix_rows();
-    const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-    int A_cone_row_count = 0;
-    b->reserve(b->size() + F_rows * (F_rows + 1) / 2);
-    for (int j = 0; j < F_rows; ++j) {
-      for (int i = j; i < F_rows; ++i) {
-        const double scale_factor = i == j ? 1 : sqrt2;
-        for (int k = 1; k < static_cast<int>(F.size()); ++k) {
-          A_triplets->emplace_back(*A_row_count + A_cone_row_count,
-                                   x_indices[k - 1],
-                                   -scale_factor * F[k](i, j));
-        }
-        b->push_back(scale_factor * F[0](i, j));
-        ++A_cone_row_count;
-      }
-    }
-    *A_row_count += F_rows * (F_rows + 1) / 2;
-    psd_cone_length.push_back(F_rows);
-  }
-  cone->ssize = psd_cone_length.size();
-  // This scs_calloc doesn't need to accompany a ScopeExit since cone->s will be
-  // cleaned up recursively by freeing up cone in scs_free_data()
-  cone->s = static_cast<scs_int*>(scs_calloc(cone->ssize, sizeof(scs_int)));
-  for (int i = 0; i < cone->ssize; ++i) {
-    cone->s[i] = psd_cone_length[i];
-  }
-}
-
-void ParseExponentialConeConstraint(
-    const MathematicalProgram& prog,
-    std::vector<Eigen::Triplet<double>>* A_triplets, std::vector<double>* b,
-    int* A_row_count, ScsCone* cone) {
-  cone->ep = static_cast<int>(prog.exponential_cone_constraints().size());
-  for (const auto& binding : prog.exponential_cone_constraints()) {
-    // drake::solvers::ExponentialConstraint enforces that z = A * x + b is in
-    // the exponential cone (z₀ ≥ z₁*exp(z₂ / z₁)). This is different from the
-    // exponential cone used in SCS. In SCS, a vector s is in the exponential
-    // cone, if s₂≥ s₁*exp(s₀ / s₁). To transform drake's Exponential cone to
-    // SCS's exponential cone, we use
-    // -[A.row(2); A.row(1); A.row(0)] * x + s = [b(2); b(1); b(0)], and s is
-    // in SCS's exponential cone, where A = binding.evaluator()->A(), b =
-    // binding.evaluator()->b().
-    const int num_bound_variables = binding.variables().rows();
-    for (int i = 0; i < num_bound_variables; ++i) {
-      A_triplets->reserve(A_triplets->size() +
-                          binding.evaluator()->A().nonZeros());
-      const int decision_variable_index =
-          prog.FindDecisionVariableIndex(binding.variables()(i));
-      for (Eigen::SparseMatrix<double>::InnerIterator it(
-               binding.evaluator()->A(), i);
-           it; ++it) {
-        // 2 - it.row() is used for reverse the row order, as mentioned in the
-        // function documentation above.
-        A_triplets->emplace_back(*A_row_count + 2 - it.row(),
-                                 decision_variable_index, -it.value());
-      }
-    }
-    // The exponential cone constraint is on a 3 x 1 vector, hence for each
-    // ExponentialConeConstraint, we append 3 rows to A and b.
-    b->reserve(b->size() + 3);
-    for (int i = 0; i < 3; ++i) {
-      b->push_back(binding.evaluator()->b()(2 - i));
-    }
-    *A_row_count += 3;
-  }
 }
 
 std::string Scs_return_info(scs_int scs_status) {
@@ -660,126 +274,10 @@ void SetScsProblemData(
     scs_problem_data->c[i] = c[i];
   }
 }
-}  // namespace
 
-bool ScsSolver::is_available() {
-  return true;
-}
-
-namespace {
-// This should be invoked only once on each unique instance of ScsSettings.
-// Namely, only call this function for once in DoSolve.
-void SetScsSettings(std::unordered_map<std::string, int>* solver_options_int,
-                    const bool print_to_console, ScsSettings* scs_settings) {
-  auto it = solver_options_int->find("normalize");
-  if (it != solver_options_int->end()) {
-    scs_settings->normalize = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("adaptive_scale;");
-  if (it != solver_options_int->end()) {
-    scs_settings->adaptive_scale = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("max_iters");
-  if (it != solver_options_int->end()) {
-    scs_settings->max_iters = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("verbose");
-  if (it != solver_options_int->end()) {
-    // The solver specific option has the highest priority.
-    scs_settings->verbose = it->second;
-    solver_options_int->erase(it);
-  } else {
-    // The common option has the second highest priority.
-    scs_settings->verbose = print_to_console ? 1 : 0;
-  }
-  it = solver_options_int->find("warm_start");
-  if (it != solver_options_int->end()) {
-    scs_settings->warm_start = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("acceleration_lookback");
-  if (it != solver_options_int->end()) {
-    scs_settings->acceleration_lookback = it->second;
-    solver_options_int->erase(it);
-  }
-  it = solver_options_int->find("acceleration_interval");
-  if (it != solver_options_int->end()) {
-    scs_settings->acceleration_interval = it->second;
-    solver_options_int->erase(it);
-  }
-  if (!solver_options_int->empty()) {
-    throw std::invalid_argument("Unsupported SCS solver options.");
-  }
-}
-
-// This should be invoked only once on each unique instance of ScsSettings.
-// Namely, only call this function for once in DoSolve.
-void SetScsSettings(
-    std::unordered_map<std::string, double>* solver_options_double,
-    ScsSettings* scs_settings) {
-  auto it = solver_options_double->find("scale");
-  if (it != solver_options_double->end()) {
-    scs_settings->scale = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("rho_x");
-  if (it != solver_options_double->end()) {
-    scs_settings->rho_x = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("eps_abs");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_abs = it->second;
-    solver_options_double->erase(it);
-  } else {
-    // SCS 3.0 uses 1E-4 as the default value, see
-    // https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_abs). This
-    // tolerance is too loose. We set the default tolerance to 1E-5 for better
-    // accuracy.
-    scs_settings->eps_abs = 1E-5;
-  }
-  it = solver_options_double->find("eps_rel");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_rel = it->second;
-    solver_options_double->erase(it);
-  } else {
-    // SCS 3.0 uses 1E-4 as the default value, see
-    // https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_rel). This
-    // tolerance is too loose. We set the default tolerance to 1E-5 for better
-    // accuracy.
-    scs_settings->eps_rel = 1E-5;
-  }
-  it = solver_options_double->find("eps_infeas");
-  if (it != solver_options_double->end()) {
-    scs_settings->eps_infeas = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("alpha");
-  if (it != solver_options_double->end()) {
-    scs_settings->alpha = it->second;
-    solver_options_double->erase(it);
-  }
-  it = solver_options_double->find("time_limit_secs");
-  if (it != solver_options_double->end()) {
-    scs_settings->time_limit_secs = it->second;
-    solver_options_double->erase(it);
-  }
-  if (!solver_options_double->empty()) {
-    throw std::invalid_argument("Unsupported SCS solver options.");
-  }
-}
-
-void SetDualSolution(
-    const MathematicalProgram& prog, const Eigen::VectorXd& y,
+void SetBoundingBoxDualSolution(
+    const MathematicalProgram& prog, const Eigen::Ref<const Eigen::VectorXd>& y,
     const std::vector<std::vector<std::pair<int, int>>>& bbcon_dual_indices,
-    const std::vector<std::vector<std::pair<int, int>>>&
-        linear_constraint_dual_indices,
-    const std::vector<int>& linear_eq_y_start_indices,
-    const std::vector<int>& lorentz_cone_y_start_indices,
-    const std::vector<int>& rotated_lorentz_cone_y_start_indices,
     MathematicalProgramResult* result) {
   for (int i = 0; i < static_cast<int>(prog.bounding_box_constraints().size());
        ++i) {
@@ -802,88 +300,18 @@ void SetDualSolution(
     }
     result->set_dual_solution(prog.bounding_box_constraints()[i], bbcon_dual);
   }
-  for (int i = 0; i < static_cast<int>(prog.linear_constraints().size()); ++i) {
-    Eigen::VectorXd lin_con_dual = Eigen::VectorXd::Zero(
-        prog.linear_constraints()[i].evaluator()->num_constraints());
-    for (int j = 0; j < lin_con_dual.rows(); ++j) {
-      if (linear_constraint_dual_indices[i][j].first != -1) {
-        // lower bound is not infinity.
-        // The shadow price for the lower bound is positive. SCS dual for the
-        // positive cone is also positive, so we add the SCS dual.
-        lin_con_dual[j] += y(linear_constraint_dual_indices[i][j].first);
-      }
-      if (linear_constraint_dual_indices[i][j].second != -1) {
-        // upper bound is not infinity.
-        // The shadow price for the upper bound is negative. SCS dual for the
-        // positive cone is positive, so we subtract the SCS dual.
-        lin_con_dual[j] -= y(linear_constraint_dual_indices[i][j].second);
-      }
-    }
-    result->set_dual_solution(prog.linear_constraints()[i], lin_con_dual);
-  }
-  for (int i = 0;
-       i < static_cast<int>(prog.linear_equality_constraints().size()); ++i) {
-    // Notice that we have a negative sign in front of y.
-    // This is because in SCS, for a problem with the linear equality constraint
-    // min cᵀx
-    // s.t A*x=b
-    // SCS formulates the dual problem as
-    // max -bᵀy
-    // s.t Aᵀy = -c
-    // Note that there is a negation sign before b and c in SCS dual problem,
-    // which is different from the standard formulation (no negation sign).
-    // Hence the dual variable y for the linear equality constraint is the
-    // negation of the shadow price.
-    result->set_dual_solution(prog.linear_equality_constraints()[i],
-                              -y.segment(linear_eq_y_start_indices[i],
-                                         prog.linear_equality_constraints()[i]
-                                             .evaluator()
-                                             ->num_constraints()));
-  }
-  for (int i = 0; i < static_cast<int>(prog.lorentz_cone_constraints().size());
-       ++i) {
-    result->set_dual_solution(
-        prog.lorentz_cone_constraints()[i],
-        y.segment(lorentz_cone_y_start_indices[i],
-                  prog.lorentz_cone_constraints()[i].evaluator()->A().rows()));
-  }
-  for (int i = 0;
-       i < static_cast<int>(prog.rotated_lorentz_cone_constraints().size());
-       ++i) {
-    // SCS doesn't provide rotated Lorentz cone constraint, it only supports
-    // Lorentz cone constraint. Hence if Drake says "x in rotated Lorentz cone
-    // constraint", we then take a linear transformation xbar = C*x such that
-    // xbar is in the Lorentz cone constraint. By duality we know that if y is
-    // the dual variable for the Lorentz cone constraint, then Cᵀy is the dual
-    // variable for the rotated Lorentz cone constraint.
-    // The linear transformation is
-    // C = [0.5  0.5 0 0 ... 0]
-    //     [0.5 -0.5 0 0 ... 0]
-    //     [  0    0 1 0 ... 0]
-    //     [  0    0 0 1 ... 0]
-    //            ...
-    //     [  0    0 0 0 ... 1]
-    // Namely if x is in the rotated Lorentz cone, then
-    // [(x₀+x₁)/2, (x₀ − x₁)/2, x₂, ..., xₙ₋₁] is in the Lorentz cone.
-    // Note that C = Cᵀ
-    const auto& lorentz_cone_dual = y.segment(
-        rotated_lorentz_cone_y_start_indices[i],
-        prog.rotated_lorentz_cone_constraints()[i].evaluator()->A().rows());
-    Eigen::VectorXd rotated_lorentz_cone_dual = lorentz_cone_dual;
-    rotated_lorentz_cone_dual(0) =
-        (lorentz_cone_dual(0) + lorentz_cone_dual(1)) / 2;
-    rotated_lorentz_cone_dual(1) =
-        (lorentz_cone_dual(0) - lorentz_cone_dual(1)) / 2;
-    result->set_dual_solution(prog.rotated_lorentz_cone_constraints()[i],
-                              rotated_lorentz_cone_dual);
-  }
 }
+
 }  // namespace
 
-void ScsSolver::DoSolve(const MathematicalProgram& prog,
-                        const Eigen::VectorXd& initial_guess,
-                        const SolverOptions& merged_options,
-                        MathematicalProgramResult* result) const {
+bool ScsSolver::is_available() {
+  return true;
+}
+
+void ScsSolver::DoSolve2(const MathematicalProgram& prog,
+                         const Eigen::VectorXd& initial_guess,
+                         internal::SpecificOptions* options,
+                         MathematicalProgramResult* result) const {
   if (!prog.GetVariableScaling().empty()) {
     static const logging::Warn log_once(
         "ScsSolver doesn't support the feature of variable scaling.");
@@ -959,6 +387,24 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
 
   // Set the parameters to default values.
   scs_set_default_settings(scs_stgs);
+  // Customize the defaults for Drake:
+  // - SCS 3.0 uses 1E-4 as the default value, see
+  //   https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_abs). This
+  //   tolerance is too loose. We set the default tolerance to 1E-5 for better
+  //   accuracy.
+  scs_stgs->eps_abs = 1E-5;
+  // - SCS 3.0 uses 1E-4 as the default value, see
+  //   https://www.cvxgrp.org/scs/api/settings.html?highlight=eps_rel). This
+  //   tolerance is too loose. We set the default tolerance to 1E-5 for better
+  //   accuracy.
+  scs_stgs->eps_rel = 1E-5;
+  // Apply the user's additional custom options (if any).
+  options->Respell([](const auto& common, auto* respelled) {
+    respelled->emplace("verbose", common.print_to_console ? 1 : 0);
+    // SCS does not support setting the number of threads so we ignore the
+    // kMaxThreads option.
+  });
+  options->CopyToSerializableStruct(scs_stgs);
 
   // A_row_count will increment, when we add each constraint.
   int A_row_count = 0;
@@ -972,7 +418,7 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   double cost_constant{0};
 
   // Parse linear cost
-  ParseLinearCost(prog, &c, &cost_constant);
+  internal::ParseLinearCosts(prog, &c, &cost_constant);
 
   // Parse linear equality constraint
   // linear_eq_y_start_indices[i] is the starting index of the dual
@@ -984,8 +430,11 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   // prog.linear_equality_constraint()(i), where y is the vector containing all
   // dual variables.
   std::vector<int> linear_eq_y_start_indices;
-  ParseLinearEqualityConstraint(prog, &A_triplets, &b, &A_row_count, cone,
-                                &linear_eq_y_start_indices);
+  int num_linear_equality_constraints_rows;
+  internal::ParseLinearEqualityConstraints(
+      prog, &A_triplets, &b, &A_row_count, &linear_eq_y_start_indices,
+      &num_linear_equality_constraints_rows);
+  cone->z += num_linear_equality_constraints_rows;
 
   // Parse bounding box constraint
   // bbcon_dual_indices[i][j][0]/bbcon_dual_indices[i][j][1] is the dual
@@ -1002,8 +451,11 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   // linear constraint prog.linear_constraint()[i], we use -1 to indicate that
   // the lower or upper bound is infinity.
   std::vector<std::vector<std::pair<int, int>>> linear_constraint_dual_indices;
-  ParseLinearConstraint(prog, &A_triplets, &b, &A_row_count, cone,
-                        &linear_constraint_dual_indices);
+  int num_linear_constraint_rows = 0;
+  internal::ParseLinearConstraints(prog, &A_triplets, &b, &A_row_count,
+                                   &linear_constraint_dual_indices,
+                                   &num_linear_constraint_rows);
+  cone->l += num_linear_constraint_rows;
 
   // Parse Lorentz cone and rotated Lorentz cone constraint
   std::vector<int> second_order_cone_length;
@@ -1021,9 +473,19 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   // transformation on the y variable to get the dual variable in the dual cone
   // of rotated Lorentz cone.
   std::vector<int> rotated_lorentz_cone_y_start_indices;
-  ParseSecondOrderConeConstraints(
+  internal::ParseSecondOrderConeConstraints(
       prog, &A_triplets, &b, &A_row_count, &second_order_cone_length,
       &lorentz_cone_y_start_indices, &rotated_lorentz_cone_y_start_indices);
+
+  // Add L2NormCost. L2NormCost should be parsed together with the other second
+  // order cone constraints, since we introduce new second order cone
+  // constraints to formulate the L2 norm cost.
+  std::vector<int> l2norm_costs_lorentz_cone_y_start_indices;
+  std::vector<int> l2norm_costs_t_slack_indices;
+  internal::ParseL2NormCosts(prog, &num_x, &A_triplets, &b, &A_row_count,
+                             &second_order_cone_length,
+                             &l2norm_costs_lorentz_cone_y_start_indices, &c,
+                             &l2norm_costs_t_slack_indices);
 
   // Parse quadratic cost. This MUST be called after parsing the second order
   // cone constraint, as we might convert quadratic cost to second order cone
@@ -1043,7 +505,7 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
                                              &A_row_count,
                                              &second_order_cone_length, &num_x);
   } else {
-    ParseQuadraticCost(prog, &P_upper_triplets, &c, &cost_constant);
+    internal::ParseQuadraticCosts(prog, &P_upper_triplets, &c, &cost_constant);
   }
 
   // Set the lorentz cone length in the SCS cone.
@@ -1054,11 +516,23 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   }
 
   // Parse PositiveSemidefiniteConstraint and LinearMatrixInequalityConstraint.
-  ParsePositiveSemidefiniteConstraint(prog, &A_triplets, &b, &A_row_count,
-                                      cone);
+  std::vector<int> psd_cone_length;
+  internal::ParsePositiveSemidefiniteConstraints(
+      prog, /* upper_triangular = */ false, &A_triplets, &b, &A_row_count,
+      &psd_cone_length);
+  // Set the psd cone length in the SCS cone.
+  cone->ssize = psd_cone_length.size();
+  // This scs_calloc doesn't need to accompany a ScopeExit since cone->s will be
+  // cleaned up recursively by freeing up cone in scs_free_data()
+  cone->s = static_cast<scs_int*>(scs_calloc(cone->ssize, sizeof(scs_int)));
+  for (int i = 0; i < cone->ssize; ++i) {
+    cone->s[i] = psd_cone_length[i];
+  }
 
   // Parse ExponentialConeConstraint.
-  ParseExponentialConeConstraint(prog, &A_triplets, &b, &A_row_count, cone);
+  internal::ParseExponentialConeConstraints(prog, &A_triplets, &b,
+                                            &A_row_count);
+  cone->ep = static_cast<int>(prog.exponential_cone_constraints().size());
 
   Eigen::SparseMatrix<double> A(A_row_count, num_x);
   A.setFromTriplets(A_triplets.begin(), A_triplets.end());
@@ -1066,13 +540,6 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
 
   SetScsProblemData(A_row_count, num_x, A, b, P_upper_triplets, c,
                     scs_problem_data);
-  std::unordered_map<std::string, int> input_solver_options_int =
-      merged_options.GetOptionsInt(id());
-  std::unordered_map<std::string, double> input_solver_options_double =
-      merged_options.GetOptionsDouble(id());
-  SetScsSettings(&input_solver_options_int,
-                 merged_options.get_print_to_console(), scs_stgs);
-  SetScsSettings(&input_solver_options_double, scs_stgs);
 
   ScsInfo scs_info{0};
 
@@ -1109,10 +576,12 @@ void ScsSolver::DoSolve(const MathematicalProgram& prog,
   result->set_x_val(
       (Eigen::Map<VectorX<scs_float>>(scs_sol->x, prog.num_vars()))
           .cast<double>());
-  SetDualSolution(prog, solver_details.y, bbcon_dual_indices,
-                  linear_constraint_dual_indices, linear_eq_y_start_indices,
-                  lorentz_cone_y_start_indices,
-                  rotated_lorentz_cone_y_start_indices, result);
+  SetBoundingBoxDualSolution(prog, solver_details.y, bbcon_dual_indices,
+                             result);
+  internal::SetDualSolution(
+      prog, solver_details.y, linear_constraint_dual_indices,
+      linear_eq_y_start_indices, lorentz_cone_y_start_indices,
+      rotated_lorentz_cone_y_start_indices, result);
   // Set the solution_result enum and the optimal cost based on SCS status.
   if (solver_details.scs_status == SCS_SOLVED ||
       solver_details.scs_status == SCS_SOLVED_INACCURATE) {

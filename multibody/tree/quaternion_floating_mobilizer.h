@@ -19,19 +19,31 @@ namespace internal {
 // This Mobilizer allows two frames to move freely relatively to one another.
 // To fully specify this mobilizer a user must provide an inboard frame F and
 // an outboard frame M. This mobilizer introduces six degrees of freedom which
-// allow frame M to freely move with respect to frame F. This mobilizer
-// introduces four generalized positions to describe the orientation `R_FM` of
-// frame M in F with a quaternion `q_FM`, and three generalized positions to
-// describe the position of frame M's origin in F with a position vector
-// `p_FM`. As generalized velocities, this mobilizer introduces the angular
-// velocity `w_FM` of frame M in F and the linear velocity `v_FM` of frame M's
-// origin in frame F.
+// allow frame M to freely move with respect to frame F.  This mobilizer
+// introduces four generalized positions to describe the orientation R_FM of
+// frame M in F with a quaternion q_FM, and three generalized positions to
+// describe the translation of frame M's origin in F with a position vector
+// p_FM. The seven entries of the configuration vector q are ordered
+// (q_FM, p_FM) with the quaternion, ordered wxyz (scalar then vector),
+// preceding the translation vector. As generalized velocities, this mobilizer
+// introduces the angular velocity w_FM of frame M in F and the linear
+// velocity v_FM of frame M's origin in frame F, ordered (w_FM, v_FM).
+//
+//   H_FM₆ₓ₆ = I₆ₓ₆     Hdot_FM₆ₓ₆ = 0₆ₓ₆
 //
 // @tparam_default_scalar
 template <typename T>
 class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuaternionFloatingMobilizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuaternionFloatingMobilizer);
+  using MobilizerBase = MobilizerImpl<T, 7, 6>;
+  using MobilizerBase::kNq, MobilizerBase::kNv, MobilizerBase::kNx;
+  template <typename U>
+  using QVector = typename MobilizerBase::template QVector<U>;
+  template <typename U>
+  using VVector = typename MobilizerBase::template VVector<U>;
+  template <typename U>
+  using HMatrix = typename MobilizerBase::template HMatrix<U>;
 
   // Constructor for a %QuaternionFloatingMobilizer granting six degrees of
   // freedom to an outboard frame M with respect to an inboard frame F. The
@@ -42,20 +54,27 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   //   the inboard frame F.
   // @param[in] outboard_frame_M
   //   the outboard frame M which can move freely with respect to frame F.
-  QuaternionFloatingMobilizer(const Frame<T>& inboard_frame_F,
-                const Frame<T>& outboard_frame_M) :
-      MobilizerBase(inboard_frame_F, outboard_frame_M) {}
+  QuaternionFloatingMobilizer(const SpanningForest::Mobod& mobod,
+                              const Frame<T>& inboard_frame_F,
+                              const Frame<T>& outboard_frame_M)
+      : MobilizerBase(mobod, inboard_frame_F, outboard_frame_M) {}
 
-  bool is_floating() const override { return true; }
+  ~QuaternionFloatingMobilizer() final;
 
-  bool has_quaternion_dofs() const override { return true; }
+  std::unique_ptr<internal::BodyNode<T>> CreateBodyNode(
+      const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+      const Mobilizer<T>* mobilizer) const final;
+
+  bool is_floating() const final { return true; }
+
+  bool has_quaternion_dofs() const final { return true; }
 
   // Overloads to define the suffix names for the position and velocity
   // elements.
   std::string position_suffix(int position_index_in_mobilizer) const final;
   std::string velocity_suffix(int velocity_index_in_mobilizer) const final;
 
-  bool can_rotate() const final    { return true; }
+  bool can_rotate() const final { return true; }
   bool can_translate() const final { return true; }
 
   // @name Methods to get and set the state for a QuaternionFloatingMobilizer
@@ -79,7 +98,7 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   //   belongs to.
   // @retval p_FM
   //   The position vector of frame M's origin in frame F.
-  Vector3<T> get_position(const systems::Context<T>& context) const;
+  Vector3<T> get_translation(const systems::Context<T>& context) const;
 
   // Sets `context` so that the orientation of frame M in F is given by the
   // input quaternion `q_FM`.
@@ -89,14 +108,14 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @param[in] q_FM
   //   The desired orientation of M in F to be stored in `context`.
   // @returns a constant reference to `this` mobilizer.
-  const QuaternionFloatingMobilizer<T>& set_quaternion(
+  const QuaternionFloatingMobilizer<T>& SetQuaternion(
       systems::Context<T>* context, const Quaternion<T>& q_FM) const;
 
-  // Alternative signature to set_quaternion(context, q_FM) to set `state` to
+  // Alternative signature to SetQuaternion(context, q_FM) to set `state` to
   // store the orientation of M in F given by the quaternion `q_FM`.
-  const QuaternionFloatingMobilizer<T>& set_quaternion(
-      const systems::Context<T>& context,
-      const Quaternion<T>& q_FM, systems::State<T>* state) const;
+  const QuaternionFloatingMobilizer<T>& SetQuaternion(
+      const systems::Context<T>& context, const Quaternion<T>& q_FM,
+      systems::State<T>* state) const;
 
   // Sets the distribution governing the random samples of the rotation
   // component of the mobilizer state.
@@ -111,19 +130,19 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @param[in] p_FM
   //   The desired position of frame M in F to be stored in `context`.
   // @returns a constant reference to `this` mobilizer.
-  const QuaternionFloatingMobilizer<T>& set_position(
+  const QuaternionFloatingMobilizer<T>& SetTranslation(
       systems::Context<T>* context, const Vector3<T>& p_FM) const;
 
-  // Alternative signature to set_position(context, p_FM) to set `state` to
+  // Alternative signature to SetTranslation(context, p_FM) to set `state` to
   // store the position `p_FM` of M in F.
-  const QuaternionFloatingMobilizer<T>& set_position(
+  const QuaternionFloatingMobilizer<T>& SetTranslation(
       const systems::Context<T>& context, const Vector3<T>& p_FM,
       systems::State<T>* state) const;
 
   // Sets the distribution governing the random samples of the position
   // component of the mobilizer state.
-  void set_random_position_distribution(const Vector3<symbolic::Expression>&
-      position);
+  void set_random_translation_distribution(
+      const Vector3<symbolic::Expression>& position);
 
   // Sets `context` so this mobilizer's generalized coordinates (its quaternion
   // q_FM) are consistent with the given `R_FM` rotation matrix.
@@ -132,16 +151,10 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @param[in] R_FM
   //   The rotation matrix relating the orientation of frame F and frame M.
   // @returns a constant reference to `this` mobilizer.
-  // @note: To create a RotationMatrix R_FM (which is inherently orthonormal)
-  // from a non-orthonormal Matrix3<T> m (e.g., m is approximate data), use
-  // R_FM = math::RotationMatrix<T>::ProjectToRotationMatrix( m ).
-  // Alternatively, set this mobilizer's orientation with the two statements:
-  // const Eigen::Quaternion<T> q_FM = RotationMatrix<T>::ToQuaternion( m );
-  // set_quaternion(context, q_FM);
-  const QuaternionFloatingMobilizer<T>& SetFromRotationMatrix(
+  const QuaternionFloatingMobilizer<T>& SetOrientation(
       systems::Context<T>* context, const math::RotationMatrix<T>& R_FM) const {
     const Eigen::Quaternion<T> q_FM = R_FM.ToQuaternion();
-    return set_quaternion(context, q_FM);
+    return SetQuaternion(context, q_FM);
   }
 
   // Returns the angular velocity `w_FM` of frame M in F stored in `context`.
@@ -157,12 +170,12 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @param[in] w_FM
   //   The desired angular velocity of frame M in F, expressed in F.
   // @returns a constant reference to `this` mobilizer.
-  const QuaternionFloatingMobilizer<T>& set_angular_velocity(
+  const QuaternionFloatingMobilizer<T>& SetAngularVelocity(
       systems::Context<T>* context, const Vector3<T>& w_FM) const;
 
-  // Alternative signature to set_angular_velocity(context, w_FM) to set
+  // Alternative signature to SetAngularVelocity(context, w_FM) to set
   // `state` to store the angular velocity `w_FM` of M in F.
-  const QuaternionFloatingMobilizer<T>& set_angular_velocity(
+  const QuaternionFloatingMobilizer<T>& SetAngularVelocity(
       const systems::Context<T>&, const Vector3<T>& w_FM,
       systems::State<T>* state) const;
 
@@ -183,12 +196,12 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @param[in] v_FM
   //   The desired translational velocity of frame M in F, expressed in F.
   // @returns a constant reference to `this` mobilizer.
-  const QuaternionFloatingMobilizer<T>& set_translational_velocity(
+  const QuaternionFloatingMobilizer<T>& SetTranslationalVelocity(
       systems::Context<T>* context, const Vector3<T>& v_FM) const;
 
-  // Alternative signature to set_translational_velocity(context, v_FM) to set
+  // Alternative signature to SetTranslationalVelocity(context, v_FM) to set
   // `state` to store the translational velocity `v_FM` of M in F.
-  const QuaternionFloatingMobilizer<T>& set_translational_velocity(
+  const QuaternionFloatingMobilizer<T>& SetTranslationalVelocity(
       const systems::Context<T>&, const Vector3<T>& v_FM,
       systems::State<T>* state) const;
 
@@ -198,39 +211,66 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
   // @name Mobilizer overrides
   // Refer to the Mobilizer class documentation for details.
   // @{
+
+  math::RigidTransform<T> calc_X_FM(const T* q) const {
+    DRAKE_ASSERT(q != nullptr);
+    // The first 4 elements in q contain a quaternion, ordered as w, x, y, z.
+    // The last 3 elements in q contain position from Fo to Mo.
+    return math::RigidTransform<T>(Eigen::Quaternion<T>(q[0], q[1], q[2], q[3]),
+                                   Vector3<T>(q[4], q[5], q[6]));
+  }
+
+  SpatialVelocity<T> calc_V_FM(const T*, const T* v) const {
+    DRAKE_ASSERT(v != nullptr);
+    const Eigen::Map<const VVector<T>> V_FM(v);
+    return SpatialVelocity<T>(V_FM);  // w_FM, v_FM
+  }
+
+  // We chose the generalized velocities for this mobilizer so that H=I, Hdot=0.
+  // Therefore A_FM = H⋅vdot + Hdot⋅v = vdot.
+  SpatialAcceleration<T> calc_A_FM(const T*, const T*, const T* vdot) const {
+    DRAKE_ASSERT(vdot != nullptr);
+    const Eigen::Map<const VVector<T>> A_FM(vdot);
+    return SpatialAcceleration<T>(A_FM);
+  }
+
+  // Returns tau = H_FMᵀ⋅F. H is identity for this mobilizer.
+  void calc_tau(const T*, const SpatialForce<T>& F_BMo_F, T* tau) const {
+    DRAKE_ASSERT(tau != nullptr);
+    Eigen::Map<VVector<T>> tau_as_vector(tau);
+    tau_as_vector = F_BMo_F.get_coeffs();
+  }
+
   math::RigidTransform<T> CalcAcrossMobilizerTransform(
-      const systems::Context<T>& context) const override;
+      const systems::Context<T>& context) const final;
 
   SpatialVelocity<T> CalcAcrossMobilizerSpatialVelocity(
       const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v) const override;
+      const Eigen::Ref<const VectorX<T>>& v) const final;
 
   SpatialAcceleration<T> CalcAcrossMobilizerSpatialAcceleration(
       const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& vdot) const override;
+      const Eigen::Ref<const VectorX<T>>& vdot) const final;
 
-  void ProjectSpatialForce(
-      const systems::Context<T>& context,
-      const SpatialForce<T>& F_Mo_F,
-      Eigen::Ref<VectorX<T>> tau) const override;
+  void ProjectSpatialForce(const systems::Context<T>& context,
+                           const SpatialForce<T>& F_Mo_F,
+                           Eigen::Ref<VectorX<T>> tau) const final;
 
-  bool is_velocity_equal_to_qdot() const override { return false; }
+  bool is_velocity_equal_to_qdot() const final { return false; }
 
-  void MapVelocityToQDot(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v,
-      EigenPtr<VectorX<T>> qdot) const override;
+  void MapVelocityToQDot(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& v,
+                         EigenPtr<VectorX<T>> qdot) const final;
 
-  void MapQDotToVelocity(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& qdot,
-      EigenPtr<VectorX<T>> v) const override;
+  void MapQDotToVelocity(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& qdot,
+                         EigenPtr<VectorX<T>> v) const final;
   // @}
 
  protected:
   // Sets `state` to store a configuration in which M coincides with F (i.e.
   // q_FM is the identity quaternion).
-  Vector<double, 7> get_zero_position() const override;
+  QVector<double> get_zero_position() const final;
 
   void DoCalcNMatrix(const systems::Context<T>& context,
                      EigenPtr<MatrixX<T>> N) const final;
@@ -239,25 +279,15 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
                          EigenPtr<MatrixX<T>> Nplus) const final;
 
   std::unique_ptr<Mobilizer<double>> DoCloneToScalar(
-      const MultibodyTree<double>& tree_clone) const override;
+      const MultibodyTree<double>& tree_clone) const final;
 
   std::unique_ptr<Mobilizer<AutoDiffXd>> DoCloneToScalar(
-      const MultibodyTree<AutoDiffXd>& tree_clone) const override;
+      const MultibodyTree<AutoDiffXd>& tree_clone) const final;
 
   std::unique_ptr<Mobilizer<symbolic::Expression>> DoCloneToScalar(
-      const MultibodyTree<symbolic::Expression>& tree_clone) const override;
+      const MultibodyTree<symbolic::Expression>& tree_clone) const final;
 
  private:
-  typedef MobilizerImpl<T, 7, 6> MobilizerBase;
-  // Bring the handy number of position and velocities MobilizerImpl enums into
-  // this class' scope. This is useful when writing mathematical expressions
-  // with fixed-sized vectors since we can do things like Vector<T, nq>.
-  // Operations with fixed-sized quantities can be optimized at compile time
-  // and therefore they are highly preferred compared to the very slow dynamic
-  // sized quantities.
-  using MobilizerBase::kNq;
-  using MobilizerBase::kNv;
-
   // Helper to compute the kinematic map N(q). L ∈ ℝ⁴ˣ³.
   static Eigen::Matrix<T, 4, 3> CalcLMatrix(const Quaternion<T>& q);
   // Helper to compute the kinematic map N(q) from angular velocity to
@@ -287,4 +317,4 @@ class QuaternionFloatingMobilizer final : public MobilizerImpl<T, 7, 6> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::QuaternionFloatingMobilizer)
+    class ::drake::multibody::internal::QuaternionFloatingMobilizer);

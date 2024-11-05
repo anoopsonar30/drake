@@ -1,19 +1,16 @@
-load(
-    "//tools/skylark:drake_cc.bzl",
-    "drake_cc_binary",
-    "drake_cc_googletest",
-    "drake_cc_library",
-    "drake_cc_package_library",
-)
-load(
-    "//tools/vector_gen:vector_gen.bzl",
-    "drake_cc_vector_gen_library",
-)
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:alias.bzl",
     "drake_cc_library_aliases",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_googletest_linux_only",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
 package(default_visibility = ["//visibility:public"])
@@ -28,16 +25,14 @@ drake_cc_package_library(
         ":camera_config",
         ":camera_config_functions",
         ":camera_info",
-        ":color_palette",
         ":gyroscope",
         ":image",
         ":image_file_format",
+        ":image_io",
         ":image_to_lcm_image_array_t",
         ":image_writer",
         ":lcm_image_array_to_images",
         ":lcm_image_traits",
-        ":optitrack_receiver",
-        ":optitrack_sender",
         ":rgbd_sensor",
         ":rgbd_sensor_async",
         ":rotary_encoders",
@@ -58,9 +53,21 @@ drake_cc_library(
     ],
 )
 
-drake_cc_vector_gen_library(
+drake_cc_library(
     name = "beam_model_params",
-    srcs = ["beam_model_params_named_vector.yaml"],
+    srcs = [
+        "beam_model_params.cc",
+    ],
+    hdrs = [
+        "beam_model_params.h",
+    ],
+    deps = [
+        "//common:dummy_value",
+        "//common:essential",
+        "//common:name_value",
+        "//common/symbolic:expression",
+        "//systems/framework:vector",
+    ],
 )
 
 drake_cc_library(
@@ -94,7 +101,7 @@ drake_cc_library(
     name = "camera_config_functions",
     srcs = ["camera_config_functions.cc"],
     hdrs = ["camera_config_functions.h"],
-    interface_deps = [
+    deps = [
         ":camera_config",
         "//geometry:scene_graph",
         "//lcm:interface",
@@ -102,11 +109,12 @@ drake_cc_library(
         "//systems/framework:diagram_builder",
         "//systems/lcm:lcm_buses",
     ],
-    deps = [
+    implementation_deps = [
         ":camera_info",
         ":rgbd_sensor",
         ":rgbd_sensor_async",
         ":sim_rgbd_sensor",
+        "//common:overloaded",
         "//geometry/render_gl",
         "//geometry/render_gltf_client",
         "//geometry/render_vtk",
@@ -169,6 +177,37 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "image_io",
+    srcs = [
+        "image_io_internal.cc",
+        "image_io_load.cc",
+        "image_io_save.cc",
+    ],
+    hdrs = [
+        "image_io.h",
+        "image_io_internal.h",
+    ],
+    install_hdrs_exclude = [
+        "image_io_internal.h",
+    ],
+    deps = [
+        ":image",
+        ":image_file_format",
+        "//common:diagnostic_policy",
+        "//common:essential",
+        "//common:name_value",
+    ],
+    implementation_deps = [
+        ":vtk_diagnostic_event_observer",
+        ":vtk_image_reader_writer",
+        "//common:drake_export",
+        "@vtk_internal//:vtkCommonCore",
+        "@vtk_internal//:vtkCommonDataModel",
+        "@vtk_internal//:vtkIOImage",
+    ],
+)
+
+drake_cc_library(
     name = "lcm_image_traits",
     srcs = [
         "lcm_image_traits.cc",
@@ -207,12 +246,12 @@ drake_cc_library(
     hdrs = [
         "lcm_image_array_to_images.h",
     ],
-    interface_deps = [
+    deps = [
         ":image",
         "//common:essential",
         "//systems/framework:leaf_system",
     ],
-    deps = [
+    implementation_deps = [
         ":lcm_image_traits",
         ":vtk_image_reader_writer",
         "//lcmtypes:image_array",
@@ -235,12 +274,6 @@ drake_cc_binary(
         "//systems/lcm:lcm_pubsub_system",
         "@gflags",
     ],
-)
-
-drake_cc_library(
-    name = "color_palette",
-    hdrs = ["color_palette.h"],
-    deps = ["//common"],
 )
 
 drake_cc_library(
@@ -289,41 +322,16 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "optitrack_receiver",
-    srcs = ["optitrack_receiver.cc"],
-    hdrs = ["optitrack_receiver.h"],
-    deps = [
-        "//math:geometric_transform",
-        "//systems/framework:leaf_system",
-        "@optitrack_driver//lcmtypes:optitrack_lcmtypes",
-    ],
-)
-
-drake_cc_library(
-    name = "optitrack_sender",
-    srcs = ["optitrack_sender.cc"],
-    hdrs = ["optitrack_sender.h"],
-    deps = [
-        "//geometry:kinematics_vector",
-        "//systems/framework:leaf_system",
-        "@optitrack_driver//lcmtypes:optitrack_lcmtypes",
-    ],
-)
-
-drake_cc_library(
     name = "image_writer",
     srcs = ["image_writer.cc"],
     hdrs = ["image_writer.h"],
-    interface_deps = [
+    deps = [
         ":image",
         "//common:essential",
         "//systems/framework:leaf_system",
     ],
-    deps = [
-        ":vtk_image_reader_writer",
-        "@vtk_internal//:vtkCommonCore",
-        "@vtk_internal//:vtkCommonDataModel",
-        "@vtk_internal//:vtkIOImage",
+    implementation_deps = [
+        ":image_io",
     ],
 )
 
@@ -338,6 +346,22 @@ drake_cc_library(
         "//multibody/plant",
         "//systems/framework:diagram_builder",
         "//systems/lcm:lcm_publisher_system",
+    ],
+)
+
+drake_cc_library(
+    name = "vtk_diagnostic_event_observer",
+    srcs = ["vtk_diagnostic_event_observer.cc"],
+    hdrs = ["vtk_diagnostic_event_observer.h"],
+    internal = True,
+    visibility = [
+        "//geometry/proximity:__pkg__",
+        "//geometry/render_vtk:__pkg__",
+    ],
+    deps = [
+        "//common:diagnostic_policy",
+        "//common:drake_export",
+        "@vtk_internal//:vtkCommonCore",
     ],
 )
 
@@ -398,6 +422,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "camera_config_functions_test",
     allow_network = ["render_gltf_client"],
+    display = True,
     tags = vtk_test_tags(),
     deps = [
         ":camera_config_functions",
@@ -446,6 +471,51 @@ drake_cc_googletest(
     name = "image_test",
     deps = [
         ":image",
+    ],
+)
+
+drake_cc_library(
+    name = "image_io_test_params",
+    testonly = True,
+    srcs = ["test/image_io_test_params.cc"],
+    hdrs = ["test/image_io_test_params.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":image",
+        ":image_file_format",
+        "@gtest//:without_main",
+        "@vtk_internal//:vtkCommonCore",
+        "@vtk_internal//:vtkCommonDataModel",
+    ],
+)
+
+drake_cc_googletest(
+    name = "image_io_internal_test",
+    data = [
+        "test/jpeg_test.jpg",
+        "test/png_color_test.png",
+        "test/tiff_32f_test.tif",
+    ],
+    deps = [
+        ":image_io",
+        "//common:find_resource",
+        "@vtk_internal//:vtkCommonCore",
+    ],
+)
+
+drake_cc_googletest(
+    name = "image_io_test",
+    data = [
+        "test/png_color16_test.png",
+        "test/tiff_rgb32f_test.tif",
+    ],
+    deps = [
+        ":image_io",
+        ":image_io_test_params",
+        "//common:find_resource",
+        "//common:temp_directory",
+        "//common/test_utilities:expect_throws_message",
+        "//systems/sensors/test_utilities:image_compare",
     ],
 )
 
@@ -507,20 +577,16 @@ drake_cc_googletest(
     ],
 )
 
-drake_cc_googletest(
+drake_cc_googletest_linux_only(
     name = "rgbd_sensor_async_gl_test",
     timeout = "moderate",
-    args = select({
-        "//tools/cc_toolchain:apple": [
-            # The GL render engine is not available on macOS.
-            "--gtest_filter=-*",
-        ],
-        "//conditions:default": [],
-    }),
     data = [
         ":test/rgbd_sensor_async_gl_test.dmd.yaml",
-        "//examples/manipulation_station:models",
+        "@drake_models//:manipulation_station",
     ],
+    display = True,
+    # TODO(#21420) This test is currently broken on Ubuntu 24.04 ("Noble").
+    enable_condition = "//tools:ubuntu_jammy",
     tags = vtk_test_tags() + [
         # Similar to #7520, the GL vendor's libraries are not sufficiently
         # instrumented for compatibility with TSan.
@@ -567,26 +633,6 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
-    name = "optitrack_receiver_test",
-    copts = ["-Wno-deprecated-declarations"],
-    deps = [
-        ":optitrack_receiver",
-        "//common/test_utilities:eigen_matrix_compare",
-        "//common/test_utilities:expect_throws_message",
-        "@optitrack_driver//lcmtypes:optitrack_lcmtypes",
-    ],
-)
-
-drake_cc_googletest(
-    name = "optitrack_sender_test",
-    copts = ["-Wno-deprecated-declarations"],
-    deps = [
-        ":optitrack_sender",
-        "@optitrack_driver//lcmtypes:optitrack_lcmtypes",
-    ],
-)
-
-drake_cc_googletest(
     name = "sim_rgbd_sensor_test",
     deps = [
         ":image_to_lcm_image_array_t",
@@ -602,8 +648,16 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "vtk_diagnostic_event_observer_test",
+    deps = [
+        ":vtk_diagnostic_event_observer",
+    ],
+)
+
+drake_cc_googletest(
     name = "vtk_image_reader_writer_test",
     deps = [
+        ":image_io_test_params",
         ":vtk_image_reader_writer",
         "//common:temp_directory",
         "//common/test_utilities:expect_throws_message",

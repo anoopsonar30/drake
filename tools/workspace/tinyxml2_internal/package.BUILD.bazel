@@ -1,7 +1,7 @@
 # -*- bazel -*-
 
-load("@drake//tools/skylark:cc.bzl", "cc_library")
 load("@drake//tools/install:install.bzl", "install")
+load("@drake//tools/skylark:cc.bzl", "cc_library")
 
 licenses(["notice"])  # zlib
 
@@ -11,7 +11,7 @@ cc_library(
     name = "tinyxml2",
     hdrs = ["tinyxml2.h"],
     srcs = ["tinyxml2.cpp"],
-    strip_include_prefix = "/",
+    includes = ["."],
     linkstatic = 1,
     visibility = ["//visibility:public"],
 )

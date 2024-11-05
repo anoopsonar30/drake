@@ -54,9 +54,9 @@ so that you can easily refer back to it as you proceed.
   bazel run //tools/workspace:new_release
 ```
 
-For each external in the report, add a commit that upgrades it, as follows:
-
-Run the script to perform one upgrade (for some external "foo"):
+For each external in the report, add a commit that upgrades it.  Typically,
+this can be done by running the script to perform one upgrade (for some
+external "foo"):
 
 ```
   bazel run //tools/workspace:new_release -- --lint --commit foo
@@ -78,7 +78,11 @@ If any edits are needed, stage the changes and amend the commit using
 Repeat this process for all upgrades.  You can re-run the ``new_release``
 report anytime, to get the remaining items that need attention.  You can also
 list several externals to try to update at once, although this will complicate
-making changes to those commits if needed.
+making changes to those commits if needed.  Note that some externals are
+reported as "may need upgrade".  This means that ``new_release`` is not able
+to automatically determine whether an upgrade is needed; therefore, these
+should always be upgraded.  (If no upgrade is needed, the upgrade will do
+nothing and will not create a commit.)
 
 Each external being upgraded should have exactly one commit that does the
 upgrade, and each commit should either a) only impact exactly one external, or
@@ -185,18 +189,23 @@ this will be susceptible to Ubuntu vs macOS differences, so please opt-in to
 the macOS build(s) in Jenkins before merging, using the instructions at
 https://drake.mit.edu/jenkins.html#running-an-on-demand-build.
 
-## Updating pypi_archive software versions
+### Using patch files
 
-To lock in a new version, change the `version` argument of the `pypi_archive`
-call, comment out the `sha256` argument, and then run `bazel build`.  Bazel's
-fetch step will attempt to download the new version but then complain about a
-checksum mismatch.  Paste the new checksum into the `sha256` argument and
-remove its commenting-out.  Then, `bazel build` should succeed.
+When we need to adjust an upstream source release for our purposes, we do that
+with `*.patch` files in Drake, not by forking the repository and pointing to
+the fork.
 
-Commit and pull-request the changed lines to Drake as usual.  Many changes like
-this will be susceptible to Ubuntu vs macOS differences, so please opt-in to
-the macOS build(s) in Jenkins before merging, using the instructions at
-https://drake.mit.edu/jenkins.html#running-an-on-demand-build.
+Patches should live at tools/workspace/foobar/patches/quux.patch. In case the
+change should be upstreamed (even if we haven't filed that pull request yet),
+put the patch in tools/workspace/foobar/patches/upstream/quux.patch to make
+it easier to search for patches that require follow-up action. In case the
+patch should not be upstreamed, you should probably explain why in a comment.
+
+If a change should be upstreamed but our current patch isn't yet groomed to be
+good enough, still place it into `.../patches/upstream/quux.patch`; the idea is
+to separate patches where some further work is required (whether that be opening
+a pull request, or grooming the patch, or even just opening an issue for
+discussion) from patches that are quiescent.
 
 ## Updating pkg_config_repository software versions
 
@@ -245,6 +254,7 @@ it into Drake are roughly:
   `foo_repository()` macro or rule.  The details are given below.
 - Edit `tools/workspace/default.bzl` to load and conditionally call the new
   `foo_repository()` macro or rule.
+- Add a courtesy mention of the software in `doc/_pages/credits.md`.
 
 When indicating licenses in the source, use the identifier from the
 [SPDX License List](https://spdx.org/licenses/).
@@ -255,9 +265,9 @@ See `glib` for an example.
 
 Update the package setup lists to mention the new package:
 
-- `setup/ubuntu/binary_distribution/packages-focal.txt` with the `libfoo0`
+- `setup/ubuntu/binary_distribution/packages-DIST.txt` with the `libfoo0`
   runtime library;
-- `setup/ubuntu/source_distribution/packages-focal.txt` with the `libfoo-dev`
+- `setup/ubuntu/source_distribution/packages-DIST.txt` with the `libfoo-dev`
   library;
 - `setup/mac/binary_distribution/Brewfile` if used in Drake's installed copy;
 - `setup/mac/source_distribution/Brewfile` if only used during development (not

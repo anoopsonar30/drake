@@ -76,7 +76,7 @@ void MaybeOffsetNamedIndexInTree(json* j_ptr, std::string_view name,
 // Merges *names* of extensions from j2 into j1 (preventing duplicates). This
 // should not be used for merging an "extensions" property which contains
 // arbitrary objects.
-void MergeExtensionNames(json* j1, json&& j2, const std::string& array_name) {
+void MergeExtensionNames(json* j1, json&& j2, const string& array_name) {
   if (j2.contains(array_name)) {
     json& extensions1 = (*j1)[array_name];
     for (auto& extension2 : j2[array_name]) {
@@ -116,28 +116,28 @@ std::string_view to_string(ContainerType x) {
 }
 
 // Attempts to merge the key-value pairs from j2 into j1. To merge successfully,
-// all every key in j2 that appears in j1 must have the same value. If
-// successful, every key-value pair in j2 is in j1 upon return.
+// every key in j2 that appears in j1 must have the same value. If successful,
+// every key-value pair in j2 is in j1 upon return.
 //
 // Note: a "successful" merge could still leave j1 unchanged, because either
 // there was nothing in j2, or j2's contents were already present in j1.
 //
 // @throws if merge was not successful.
 // @pre j1->is_object() && j2.is_object().
-void MergeTrees(json* j1, json&& j2, const std::string& blob_name,
-                ContainerType container_type,
-                const std::filesystem::path& j2_path, MergeRecord* record) {
+void MergeTrees(json* j1, json&& j2, const string& blob_name,
+                ContainerType container_type, const string& j2_name,
+                MergeRecord* record) {
   DRAKE_DEMAND(j1->is_object() && j2.is_object());
   // First confirm there are no collisions.
   for (auto& [key, value] : j2.items()) {
     if (j1->contains(key)) {
       if ((*j1)[key] != value) {
-        const std::filesystem::path& j1_path = record->FindSourcePath(*j1);
+        const string& j1_name = record->FindSourceName(*j1);
         throw std::runtime_error(fmt::format(
             "Error in merging '{}.{}.{}'; two glTF files have different "
             "values. '{}' defines it as {}, but '{}' defines it as {}.",
-            to_string(container_type), blob_name, key, j1_path.string(),
-            fmt_streamed((*j1)[key]), j2_path.string(), fmt_streamed(value)));
+            to_string(container_type), blob_name, key, j1_name,
+            fmt_streamed((*j1)[key]), j2_name, fmt_streamed(value)));
       }
     }
   }
@@ -146,16 +146,16 @@ void MergeTrees(json* j1, json&& j2, const std::string& blob_name,
   for (auto& [key, value] : j2.items()) {
     if (j1->contains(key)) continue;
     (*j1)[key] = std::move(value);
-    record->AddElementTree((*j1)[key], j2_path);
+    record->AddElementTree((*j1)[key], j2_name);
   }
 }
 
 // Merge user data. This can be used for merging the arbitrary collection of
 // objects contained in either "extras" or "extensions". As documented, if there
 // is a collision between the two json trees, we will throw with helpful info.
-void MergeBlobs(json* j1, json&& j2, const std::string& blob_name,
-                ContainerType container_type,
-                const std::filesystem::path& j2_path, MergeRecord* record) {
+void MergeBlobs(json* j1, json&& j2, const string& blob_name,
+                ContainerType container_type, const string& j2_name,
+                MergeRecord* record) {
   if (j2.contains(blob_name)) {
     json& blob2 = j2[blob_name];
     if (blob2.is_null()) {
@@ -170,19 +170,19 @@ void MergeBlobs(json* j1, json&& j2, const std::string& blob_name,
     //     We can simply take blob2 verbatim (whether object or primitive).
     //  3. In all other cases, merging is not possible.
     if (blob1.is_object() && blob2.is_object()) {
-      MergeTrees(&blob1, std::move(blob2), blob_name, container_type, j2_path,
+      MergeTrees(&blob1, std::move(blob2), blob_name, container_type, j2_name,
                  record);
     } else if (blob1.is_null()) {
       // j1 doesn't have the blob, go ahead and replace it with j2's.
       blob1 = std::move(blob2);
-      record->AddElementTree(blob1, j2_path);
+      record->AddElementTree(blob1, j2_name);
     } else {
-      const std::filesystem::path& j1_path = record->FindSourcePath(blob1);
+      const string& j1_name = record->FindSourceName(blob1);
       throw std::runtime_error(fmt::format(
           "Error in merging '{}.{}'. To merge, the must both be objects. "
           "'{}' has {} and '{}' has {}.",
-          to_string(container_type), blob_name, j1_path.string(),
-          blob1.is_object() ? "an object" : "a primitive", j2_path.string(),
+          to_string(container_type), blob_name, j1_name,
+          blob1.is_object() ? "an object" : "a primitive", j2_name,
           blob2.is_object() ? "an object" : "a primitive"));
     }
   }
@@ -193,29 +193,28 @@ void MergeBlobs(json* j1, json&& j2, const std::string& blob_name,
 // the root glTF node and Scene nodes. All other nodes simply get concatenated
 // to lists.
 void MergeExtrasAndExtensions(json* j1, json&& j2, ContainerType container_type,
-                              const std::filesystem::path& j2_path,
-                              MergeRecord* record) {
-  MergeBlobs(j1, std::move(j2), "extras", container_type, j2_path, record);
-  MergeBlobs(j1, std::move(j2), "extensions", container_type, j2_path, record);
+                              const string& j2_name, MergeRecord* record) {
+  MergeBlobs(j1, std::move(j2), "extras", container_type, j2_name, record);
+  MergeBlobs(j1, std::move(j2), "extensions", container_type, j2_name, record);
 }
 
 }  // namespace
 
-MergeRecord::MergeRecord(std::filesystem::path initial_path) {
-  source_paths_.push_back(std::move(initial_path));
+MergeRecord::MergeRecord(string initial_name) {
+  source_names_.push_back(std::move(initial_name));
 }
 
-const std::filesystem::path& MergeRecord::FindSourcePath(
-    const json& element) const {
+MergeRecord::~MergeRecord() = default;
+
+const string& MergeRecord::FindSourceName(const json& element) const {
   const auto iter = merged_trees_.find(&element);
   DRAKE_DEMAND(iter != merged_trees_.end());
-  return source_paths_.at(iter->second);
+  return source_names_.at(iter->second);
 }
 
-void MergeRecord::AddElementTree(const json& root,
-                                 const std::filesystem::path& source_path) {
-  const int source_index = ssize(source_paths_);
-  source_paths_.push_back(source_path);
+void MergeRecord::AddElementTree(const json& root, const string& source_name) {
+  const int source_index = ssize(source_names_);
+  source_names_.push_back(source_name);
   // Recursively register all of the json elements in the tree rooted at
   // `subtree`.
   std::function<void(const json&)> add_tree_recurse = [&](const json& subtree) {
@@ -229,9 +228,14 @@ void MergeRecord::AddElementTree(const json& root,
   add_tree_recurse(root);
 }
 
-json ReadJsonFile(const std::filesystem::path& json_path) {
-  std::ifstream f(json_path);
-  return json::parse(f);
+json ReadJsonFile(const MeshSource& mesh_source) {
+  if (mesh_source.is_path()) {
+    std::ifstream f(mesh_source.path());
+    return json::parse(f);
+  } else {
+    DRAKE_DEMAND(mesh_source.is_in_memory());
+    return json::parse(mesh_source.in_memory().mesh_file.contents());
+  }
 }
 
 json GltfMatrixFromEigenMatrix(const Matrix4<double>& matrix) {
@@ -257,8 +261,7 @@ Matrix4<double> EigenMatrixFromGltfMatrix(const json& matrix_json) {
   return T;
 }
 
-void MergeDefaultScenes(json* j1, json&& j2,
-                        const std::filesystem::path& j2_path,
+void MergeDefaultScenes(json* j1, json&& j2, const string& j2_name,
                         MergeRecord* record) {
   int index_1 = j1->contains("scene") ? (*j1)["scene"].get<int>() : 0;
   int index_2 = j2.contains("scene") ? j2["scene"].get<int>() : 0;
@@ -275,7 +278,7 @@ void MergeDefaultScenes(json* j1, json&& j2,
     }
   }
   MergeExtrasAndExtensions(&scene_1, std::move(scene_2),
-                           ContainerType::kDefaultScene, j2_path, record);
+                           ContainerType::kDefaultScene, j2_name, record);
 }
 
 void MergeNodes(json* j1, json&& j2) {
@@ -384,9 +387,9 @@ void MergeBufferViews(json* j1, json&& j2) {
 void MergeBuffers(json* j1, json&& j2) {
   if (j2.contains("buffers")) {
     json& buffers = (*j1)["buffers"];
-    for (auto& bv : j2["buffers"]) {
+    for (auto& buffer : j2["buffers"]) {
       // Buffers can simply be copied over.
-      buffers.push_back(std::move(bv));
+      buffers.push_back(std::move(buffer));
     }
   }
 }
@@ -431,7 +434,7 @@ void MergeSamplers(json* j1, json&& j2) {
   }
 }
 
-void MergeGltf(json* j1, json&& j2, const std::filesystem::path& j2_path,
+void MergeGltf(json* j1, json&& j2, const string& j2_name,
                MergeRecord* record) {
   json& asset1 = (*j1)["asset"];
   json& asset2 = j2["asset"];
@@ -441,16 +444,16 @@ void MergeGltf(json* j1, json&& j2, const std::filesystem::path& j2_path,
   // TODO(SeanCurtis-TRI): We're not doing anything to the copyright. Should we?
   DRAKE_DEMAND(asset1["version"].get<string>() == "2.0");
   DRAKE_DEMAND(asset2["version"].get<string>() == "2.0");
-  MergeExtrasAndExtensions(j1, std::move(j2), ContainerType::kGltf, j2_path,
+  MergeExtrasAndExtensions(j1, std::move(j2), ContainerType::kGltf, j2_name,
                            record);
   MergeExtrasAndExtensions(&asset1, std::move(asset2), ContainerType::kAsset,
-                           j2_path, record);
+                           j2_name, record);
 
   // Don't change the order. Because we mutate j1 as we go, we need to make sure
   // we only mutate something after we've processed everything that depends on
   // it.
   // https://github.com/KhronosGroup/glTF-Tutorials/blob/master/gltfTutorial/gltfTutorial_002_BasicGltfStructure.md
-  MergeDefaultScenes(j1, std::move(j2), j2_path, record);
+  MergeDefaultScenes(j1, std::move(j2), j2_name, record);
   MergeNodes(j1, std::move(j2));
   MergeMeshes(j1, std::move(j2));
   MergeMaterials(j1, std::move(j2));

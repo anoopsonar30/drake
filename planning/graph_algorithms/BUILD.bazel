@@ -1,0 +1,157 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_googletest",
+    "drake_cc_library",
+    "drake_cc_package_library",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+drake_cc_package_library(
+    name = "graph_algorithms",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":graph_algorithms_internal",
+        ":max_clique_solver_base",
+        ":max_clique_solver_via_greedy",
+        ":max_clique_solver_via_mip",
+        ":min_clique_cover_solver_base",
+        ":min_clique_cover_solver_via_greedy",
+    ],
+)
+
+drake_cc_library(
+    name = "max_clique_solver_base",
+    srcs = ["max_clique_solver_base.cc"],
+    hdrs = [
+        "max_clique_solver_base.h",
+    ],
+    deps = [
+        "//common:essential",
+        "@eigen",
+    ],
+)
+
+drake_cc_library(
+    name = "max_clique_solver_via_mip",
+    srcs = ["max_clique_solver_via_mip.cc"],
+    hdrs = ["max_clique_solver_via_mip.h"],
+    deps = [
+        ":max_clique_solver_base",
+        "//solvers:choose_best_solver",
+        "//solvers:mathematical_program",
+        "//solvers:mathematical_program_result",
+        "//solvers:solve",
+    ],
+)
+
+drake_cc_library(
+    name = "max_clique_solver_via_greedy",
+    srcs = ["max_clique_solver_via_greedy.cc"],
+    hdrs = ["max_clique_solver_via_greedy.h"],
+    deps = [
+        ":max_clique_solver_base",
+    ],
+)
+
+drake_cc_library(
+    name = "min_clique_cover_solver_base",
+    srcs = ["min_clique_cover_solver_base.cc"],
+    hdrs = [
+        "min_clique_cover_solver_base.h",
+    ],
+    deps = [
+        "//common:essential",
+        "@eigen",
+    ],
+)
+
+drake_cc_library(
+    name = "min_clique_cover_solver_via_greedy",
+    srcs = ["min_clique_cover_solver_via_greedy.cc"],
+    hdrs = [
+        "min_clique_cover_solver_via_greedy.h",
+    ],
+    deps = [
+        ":max_clique_solver_base",
+        ":max_clique_solver_via_greedy",
+        ":max_clique_solver_via_mip",
+        ":min_clique_cover_solver_base",
+        "//common:essential",
+        "@eigen",
+    ],
+)
+
+drake_cc_library(
+    name = "graph_algorithms_internal",
+    srcs = ["graph_algorithms_internal.cc"],
+    hdrs = [
+        "graph_algorithms_internal.h",
+    ],
+    deps = [
+        "//common:essential",
+        "@eigen",
+    ],
+)
+
+# === test/ ===
+
+drake_cc_library(
+    name = "common_graphs",
+    testonly = True,
+    srcs = ["test/common_graphs.cc"],
+    hdrs = ["test/common_graphs.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":graph_algorithms_internal",
+        "@eigen",
+    ],
+)
+
+drake_cc_googletest(
+    name = "max_clique_solver_via_mip_test",
+    srcs = ["test/max_clique_solver_via_mip_test.cc"],
+    deps = [
+        ":common_graphs",
+        ":max_clique_solver_via_mip",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
+        "//solvers:gurobi_solver",
+        "//solvers:mosek_solver",
+    ],
+)
+
+drake_cc_googletest(
+    name = "max_clique_solver_via_greedy_test",
+    srcs = ["test/max_clique_solver_via_greedy_test.cc"],
+    deps = [
+        ":common_graphs",
+        ":max_clique_solver_via_greedy",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
+    ],
+)
+
+drake_cc_googletest(
+    name = "min_clique_cover_solver_via_greedy_test",
+    srcs = ["test/min_clique_cover_solver_via_greedy_test.cc"],
+    deps = [
+        ":common_graphs",
+        ":min_clique_cover_solver_via_greedy",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_throws_message",
+    ],
+)
+
+drake_cc_googletest(
+    name = "graph_algorithms_internal_test",
+    srcs = ["test/graph_algorithms_internal_test.cc"],
+    deps = [
+        ":common_graphs",
+        ":graph_algorithms_internal",
+        "//common/test_utilities:eigen_matrix_compare",
+    ],
+)
+
+add_lint_tests()

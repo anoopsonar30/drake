@@ -7,7 +7,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/planning/robot_diagram_builder.h"
 #include "drake/systems/primitives/shared_pointer_system.h"
@@ -18,6 +17,7 @@ namespace {
 
 using geometry::SceneGraph;
 using multibody::MultibodyPlant;
+using multibody::MultibodyPlantConfig;
 using multibody::Parser;
 using symbolic::Expression;
 using systems::Context;
@@ -27,13 +27,19 @@ using systems::System;
 
 std::unique_ptr<RobotDiagramBuilder<double>> MakeSampleDut() {
   auto builder = std::make_unique<RobotDiagramBuilder<double>>();
-  builder->parser().AddModels(
-      FindResourceOrThrow("drake/manipulation/models/iiwa_description/urdf/"
-                          "iiwa14_spheres_dense_collision.urdf"));
+  builder->parser().AddModelsFromUrl(
+      "package://drake_models/iiwa_description/urdf/"
+      "iiwa14_spheres_dense_collision.urdf");
   return builder;
 }
 
-GTEST_TEST(RobotDiagramBuilderTest, TimeStep) {
+GTEST_TEST(RobotDiagramBuilderTest, TimeStepDefault) {
+  const MultibodyPlantConfig default_plant_config;
+  auto builder = std::make_unique<RobotDiagramBuilder<double>>();
+  EXPECT_EQ(builder->plant().time_step(), default_plant_config.time_step);
+}
+
+GTEST_TEST(RobotDiagramBuilderTest, TimeStepExplicit) {
   const double time_step = 0.01;
   auto builder = std::make_unique<RobotDiagramBuilder<double>>(time_step);
   EXPECT_EQ(builder->plant().time_step(), time_step);
@@ -109,6 +115,44 @@ GTEST_TEST(RobotDiagramBuilderTest, NoDefaultExportCustomSystems) {
     auto diagram = dut->Build();
     EXPECT_EQ(diagram->num_input_ports(), 0);
     EXPECT_EQ(diagram->num_output_ports(), 0);
+  }
+}
+
+// All exported ports must be non-deprecated.
+GTEST_TEST(RobotDiagramBuilderTest, NoExportDeprecatedPorts) {
+  std::unique_ptr<RobotDiagramBuilder<double>> dut = MakeSampleDut();
+  auto diagram = dut->Build();
+  for (int i = 0; i < diagram->num_input_ports(); ++i) {
+    const auto& diagram_port = diagram->get_input_port(i);
+    const std::string& diagram_port_name = diagram_port.get_name();
+    if (diagram_port_name.starts_with("plant_")) {
+      const auto& leaf_port =
+          diagram->plant().GetInputPort(diagram_port_name.substr(6));
+      EXPECT_EQ(leaf_port.get_deprecation(), std::nullopt)
+          << leaf_port.get_name();
+    } else if (diagram_port_name.starts_with("scene_graph_")) {
+      const auto& leaf_port =
+          diagram->scene_graph().GetInputPort(diagram_port_name.substr(12));
+      EXPECT_EQ(leaf_port.get_deprecation(), std::nullopt)
+          << leaf_port.get_name();
+    } else {
+      GTEST_FAIL() << diagram_port_name;
+    }
+  }
+  for (int i = 0; i < diagram->num_output_ports(); ++i) {
+    const auto& diagram_port = diagram->get_output_port(i);
+    const std::string& diagram_port_name = diagram_port.get_name();
+    if (diagram_port_name.starts_with("plant_")) {
+      const auto& leaf_port =
+          diagram->plant().GetOutputPort(diagram_port_name.substr(6));
+      EXPECT_EQ(leaf_port.get_deprecation(), std::nullopt);
+    } else if (diagram_port_name.starts_with("scene_graph_")) {
+      const auto& leaf_port =
+          diagram->scene_graph().GetOutputPort(diagram_port_name.substr(12));
+      EXPECT_EQ(leaf_port.get_deprecation(), std::nullopt);
+    } else {
+      GTEST_FAIL() << diagram_port_name;
+    }
   }
 }
 

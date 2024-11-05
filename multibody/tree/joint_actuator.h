@@ -18,7 +18,8 @@ namespace drake {
 namespace multibody {
 
 // Forward declaration for JointActuator<T>.
-template<typename T> class Joint;
+template <typename T>
+class Joint;
 
 /// PD controller gains. This enables the modeling of a simple low level PD
 /// controllers, see JointActuator::set_controller_gains().
@@ -39,7 +40,7 @@ struct PdControllerGains {
 template <typename T>
 class JointActuator final : public MultibodyElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(JointActuator)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(JointActuator);
 
   /// Creates an actuator for `joint` with the given `name`.
   /// The name must be unique within the given multibody model. This is
@@ -57,6 +58,8 @@ class JointActuator final : public MultibodyElement<T> {
   ///   for prismatic joints.
   JointActuator(const std::string& name, const Joint<T>& joint,
                 double effort_limit = std::numeric_limits<double>::infinity());
+
+  ~JointActuator() final;
 
   /// Returns this element's unique index.
   JointActuatorIndex index() const {
@@ -84,7 +87,7 @@ class JointActuator final : public MultibodyElement<T> {
   ///   `this` joint belongs.
   /// @param[in] joint_dof
   ///   Index specifying one of the degrees of freedom for this joint. The index
-  ///   must be in the range `0 <= joint_dof < num_velocities()` or otherwise
+  ///   must be in the range `0 <= joint_dof < num_inputs()` or otherwise
   ///   this method will throw an exception.
   /// @param[in] joint_tau
   ///   Generalized force corresponding to the degree of freedom indicated by
@@ -97,14 +100,11 @@ class JointActuator final : public MultibodyElement<T> {
   ///   `forces` is `nullptr` or if `forces` doest not have the right sizes to
   ///   accommodate a set of forces for the model to which this actuator
   ///   belongs.
-  void AddInOneForce(
-      const systems::Context<T>& context,
-      int joint_dof,
-      const T& tau,
-      MultibodyForces<T>* forces) const;
+  void AddInOneForce(const systems::Context<T>& context, int joint_dof,
+                     const T& tau, MultibodyForces<T>* forces) const;
 
   /// Gets the actuation values for `this` actuator from the actuation vector u
-  /// for the entire model.
+  /// for the entire plant model.
   /// @return a reference to a nv-dimensional vector, where nv is the number
   ///         of velocity variables of joint().
   const Eigen::Ref<const VectorX<T>> get_actuation_vector(
@@ -113,25 +113,25 @@ class JointActuator final : public MultibodyElement<T> {
     return u.segment(topology_.actuator_index_start, joint().num_velocities());
   }
 
-  /// Given the actuation values u_instance for `this` actuator, this method
-  /// sets the actuation vector u for the entire MultibodyTree model
-  /// to which this actuator belongs to.
-  /// @param[in] u_instance
-  ///   Actuation values for `this` actuator. It must be of size equal to the
-  ///   number of degrees of freedom of the actuated Joint, see
-  ///   Joint::num_velocities(). For units and sign conventions refer to the
-  ///   specific Joint sub-class documentation.
-  /// @param[out] u
-  ///   The vector containing the actuation values for the entire MultibodyTree
-  ///   model to which `this` actuator belongs to.
+  /// Given the actuation values `u_actuator` for `this` actuator, updates the
+  /// actuation vector `u` for the entire multibody model to which this actuator
+  /// belongs to.
+  /// @param[in] u_actuator
+  ///   Actuation values for `this` actuator. It must be of size equal to
+  ///   num_inputs(). For units and sign conventions refer to the specific Joint
+  ///   sub-class documentation.
+  /// @param[in,out] u
+  ///   Actuation values for the entire plant model to which `this` actuator
+  ///   belongs to. The actuation value in `u` for `this` actuator must be found
+  ///   at offset input_start(). Only values corresponding to this actuator are
+  ///   changed.
   /// @throws std::exception if
-  ///   `u_instance.size() != this->joint().num_velocities()`.
+  ///   `u_actuator.size() != this->num_inputs()`.
   /// @throws std::exception if u is nullptr.
   /// @throws std::exception if
-  ///   `u.size() != this->get_parent_tree().num_actuated_dofs()`.
-  void set_actuation_vector(
-      const Eigen::Ref<const VectorX<T>>& u_instance,
-      EigenPtr<VectorX<T>> u) const;
+  ///   `u.size() != this->GetParentPlant().num_actuated_dofs()`.
+  void set_actuation_vector(const Eigen::Ref<const VectorX<T>>& u_actuator,
+                            EigenPtr<VectorX<T>> u) const;
 
   /// Returns the index to the first element for this joint actuator / within
   /// the vector of actuation inputs for the full multibody / system.
@@ -147,6 +147,8 @@ class JointActuator final : public MultibodyElement<T> {
   /// Returns the actuator effort limit.
   double effort_limit() const { return effort_limit_; }
 
+  // Don't let clang-format wrap long @image lines.
+  // clang-format off
   /// @anchor reflected_inertia
   /// @name                 Reflected Inertia
   ///
@@ -194,6 +196,7 @@ class JointActuator final : public MultibodyElement<T> {
   /// The gear ratio is defined ρ ≝ wR / vB (units of 1/m). Typically, ρ >> 1.
   /// For the gear-motor here, reflected inertia Iᵣᵢ = ρ² ⋅ Iᵣ (units of kg).
   ///@{
+  // clang-format on
 
   /// Gets the default value for this actuator's rotor inertia.
   /// See @ref reflected_inertia.
@@ -226,6 +229,8 @@ class JointActuator final : public MultibodyElement<T> {
   /// Returns the associated rotor inertia value for this actuator, stored in
   /// `context`.
   /// See @ref reflected_inertia.
+  /// Note that this ONLY depends on the Parameters in the context; it does
+  /// not depend on time, input, state, etc.
   const T& rotor_inertia(const systems::Context<T>& context) const {
     return context.get_numeric_parameter(rotor_inertia_parameter_index_)[0];
   }
@@ -233,6 +238,8 @@ class JointActuator final : public MultibodyElement<T> {
   /// Returns the associated gear ratio value for this actuator, stored in
   /// `context`.
   /// See @ref reflected_inertia.
+  /// Note that this ONLY depends on the Parameters in the context; it does
+  /// not depend on time, input, state, etc.
   const T& gear_ratio(const systems::Context<T>& context) const {
     return context.get_numeric_parameter(gear_ratio_parameter_index_)[0];
   }
@@ -254,6 +261,8 @@ class JointActuator final : public MultibodyElement<T> {
 
   /// Calculates the reflected inertia value for this actuator in `context`.
   /// See @ref reflected_inertia.
+  /// Note that this ONLY depends on the Parameters in the context; it does
+  /// not depend on time, input, state, etc.
   T calc_reflected_inertia(const systems::Context<T>& context) const {
     const T& rho = gear_ratio(context);
     const T& Ir = rotor_inertia(context);
@@ -268,8 +277,7 @@ class JointActuator final : public MultibodyElement<T> {
   /// modeling of PD controlled actuators.
   ///@{
 
-  // TODO(amcastro-tri): Place gains in the context as parameters to allow
-  // changing them post-finalize.
+  // TODO(amcastro-tri): Place gains in the context as parameters.
   /// Set controller gains for this joint actuator.
   /// This enables the modeling of a simple PD controller of the form:
   ///   ũ = -Kp⋅(q − qd) - Kd⋅(v − vd) + u_ff
@@ -283,10 +291,15 @@ class JointActuator final : public MultibodyElement<T> {
   /// velocity are specified through
   /// MultibodyPlant::get_desired_state_input_port().
   ///
+  /// @pre The MultibodyPlant associated with this actuator has not yet
+  /// allocated a Context. In other words, although gains can be changed
+  /// post-Finalize, they cannot be changed during simulation.
+  ///
   /// @throws iff the proportional gain is not strictly positive or if the
   /// derivative gain is negative.
-  /// @throws iff the owning MultibodyPlant is finalized. See
-  /// MultibodyPlant::Finalize().
+  /// @throws iff the owning MultibodyPlant is finalized and no gains were set
+  /// pre-finalize. In other words, *editing* gains post-finalize is fine, but
+  /// *adding* gains post-finalize is an error. See MultibodyPlant::Finalize().
   void set_controller_gains(PdControllerGains gains);
 
   /// Returns `true` if controller gains have been specified with a call to
@@ -308,7 +321,7 @@ class JointActuator final : public MultibodyElement<T> {
   // MultibodyTree::CloneToScalar().
   template <typename ToScalar>
   std::unique_ptr<JointActuator<ToScalar>> CloneToScalar(
-  const internal::MultibodyTree<ToScalar>& cloned_tree) const {
+      const internal::MultibodyTree<ToScalar>& cloned_tree) const {
     return DoCloneToScalar(cloned_tree);
   }
   /// @endcond
@@ -316,7 +329,8 @@ class JointActuator final : public MultibodyElement<T> {
  private:
   // Allow different specializations to access each other's private constructor
   // for scalar conversion.
-  template <typename U> friend class JointActuator;
+  template <typename U>
+  friend class JointActuator;
 
   // Private constructor used for cloning.
   JointActuator(const std::string& name, JointIndex joint_index,
@@ -348,13 +362,25 @@ class JointActuator final : public MultibodyElement<T> {
   // Implementation for MultibodyElement::DoDeclareParameters().
   void DoDeclareParameters(
       internal::MultibodyTreeSystem<T>* tree_system) final {
-    // Declare parent classes' parameters
-    MultibodyElement<T>::DoDeclareParameters(tree_system);
-    rotor_inertia_parameter_index_ = this->DeclareNumericParameter(
-        tree_system,
-        systems::BasicVector<T>(Vector1<T>(default_rotor_inertia_)));
-    gear_ratio_parameter_index_ = this->DeclareNumericParameter(
-        tree_system, systems::BasicVector<T>(Vector1<T>(default_gear_ratio_)));
+    // Sets model values to dummy values to indicate that the model values are
+    // not used. This class stores the the default values of the parameters.
+    rotor_inertia_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(1));
+    gear_ratio_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(1));
+  }
+
+  // Implementation for MultibodyElement::DoSetDefaultParameters().
+  void DoSetDefaultParameters(systems::Parameters<T>* parameters) const final {
+    // Set the default rotor inertia.
+    systems::BasicVector<T>& rotor_inertia_parameter =
+        parameters->get_mutable_numeric_parameter(
+            rotor_inertia_parameter_index_);
+    rotor_inertia_parameter.set_value(Vector1<T>(default_rotor_inertia_));
+    // Set the default gear ratio.
+    systems::BasicVector<T>& gear_ratio_parameter =
+        parameters->get_mutable_numeric_parameter(gear_ratio_parameter_index_);
+    gear_ratio_parameter.set_value(Vector1<T>(default_gear_ratio_));
   }
 
   // The actuator's unique name in the MultibodyTree model
@@ -393,4 +419,4 @@ class JointActuator final : public MultibodyElement<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::JointActuator)
+    class ::drake::multibody::JointActuator);

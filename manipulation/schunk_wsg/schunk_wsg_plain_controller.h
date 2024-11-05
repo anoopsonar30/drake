@@ -125,7 +125,7 @@ class SchunkWsgPlainController
     : public systems::Diagram<double>,
       public systems::controllers::StateFeedbackControllerInterface<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SchunkWsgPlainController)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SchunkWsgPlainController);
   /** Specify control gains and mode. Mode defaults to position control. */
   explicit SchunkWsgPlainController(
       ControlMode control_mode = ControlMode::kPosition, double kp = 2000,
@@ -134,8 +134,7 @@ class SchunkWsgPlainController
   /** Returns the feed-forward force input port.
    * @pre `this` was constructed with `control_mode` set to
    * `ControlMode::kForce`.*/
-  const systems::InputPort<double>&
-  get_input_port_feed_forward_force() const {
+  const systems::InputPort<double>& get_input_port_feed_forward_force() const {
     DRAKE_ASSERT(feed_forward_force_input_port_ >= 0);
     return this->get_input_port(feed_forward_force_input_port_);
   }

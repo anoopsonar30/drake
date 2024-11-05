@@ -2,7 +2,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/multibody/parsing/parser.h"
@@ -17,11 +16,10 @@ using Eigen::Vector3d;
 
 GTEST_TEST(WingTest, BasicTest) {
   MultibodyPlant<double> plant(0.0);
-  Parser(&plant).AddModels(
-      FindResourceOrThrow("drake/multibody/models/box.urdf"));
+  Parser(&plant).AddModelsFromUrl("package://drake/multibody/models/box.urdf");
   plant.Finalize();
 
-  const Body<double>& body = plant.GetBodyByName("box");
+  const RigidBody<double>& body = plant.GetBodyByName("box");
   Wing<double> wing(body.index(), 1.0);
 
   EXPECT_EQ(wing.num_input_ports(), 4);
@@ -35,11 +33,10 @@ GTEST_TEST(WingTest, FallingFlatPlate) {
   systems::DiagramBuilder<double> builder;
 
   auto* plant = builder.AddSystem<MultibodyPlant<double>>(0);
-  Parser(plant).AddModels(
-      FindResourceOrThrow("drake/multibody/models/box.urdf"));
+  Parser(plant).AddModelsFromUrl("package://drake/multibody/models/box.urdf");
   plant->Finalize();
 
-  const Body<double>& body = plant->GetBodyByName("box");
+  const RigidBody<double>& body = plant->GetBodyByName("box");
   Wing<double>* wing = Wing<double>::AddToBuilder(
       &builder, plant, body.index(), kSurfaceArea,
       math::RigidTransform<double>::Identity(), kRho);
@@ -105,9 +102,9 @@ GTEST_TEST(WingTest, FallingFlatPlate) {
     plant->SetFreeBodySpatialVelocity(&plant_context, body, V_WB);
 
     Vector6<double> vdot_expected = vdot_gravity_only;
-    Vector3<double> v_WindBody_Wing  = R_WB.transpose()*V_WB.translational();
+    Vector3<double> v_WindBody_Wing = R_WB.transpose() * V_WB.translational();
     const double longitudinal_velocity_norm =
-      Eigen::Vector2d(v_WindBody_Wing[0], v_WindBody_Wing[2]).norm();
+        Eigen::Vector2d(v_WindBody_Wing[0], v_WindBody_Wing[2]).norm();
     vdot_expected.tail<3>() +=
         R_WB * Vector3d{0, 0,
                         -kRho * kSurfaceArea * v_WindBody_Wing[2] *
@@ -147,11 +144,10 @@ GTEST_TEST(WingTest, ScalarConversion) {
   systems::DiagramBuilder<double> builder;
 
   auto* plant = builder.AddSystem<MultibodyPlant<double>>(0);
-  Parser(plant).AddModels(
-      FindResourceOrThrow("drake/multibody/models/box.urdf"));
+  Parser(plant).AddModelsFromUrl("package://drake/multibody/models/box.urdf");
   plant->Finalize();
 
-  const Body<double>& body = plant->GetBodyByName("box");
+  const RigidBody<double>& body = plant->GetBodyByName("box");
   Wing<double>::AddToBuilder(&builder, plant, body.index(), 1.0);
 
   auto diagram = builder.Build();
@@ -167,12 +163,11 @@ GTEST_TEST(WingTest, DerivativesAtZeroVelocity) {
   systems::DiagramBuilder<double> builder;
 
   auto* plant = builder.AddSystem<MultibodyPlant<double>>(0);
-  Parser(plant).AddModels(
-      FindResourceOrThrow("drake/multibody/models/box.urdf"));
+  Parser(plant).AddModelsFromUrl("package://drake/multibody/models/box.urdf");
   plant->Finalize();
   plant->set_name("plant");
 
-  const Body<double>& body = plant->GetBodyByName("box");
+  const RigidBody<double>& body = plant->GetBodyByName("box");
   Wing<double>::AddToBuilder(&builder, plant, body.index(), kSurfaceArea,
                              math::RigidTransform<double>::Identity());
 
@@ -186,7 +181,7 @@ GTEST_TEST(WingTest, DerivativesAtZeroVelocity) {
   EXPECT_TRUE(plant_ad != nullptr);
   systems::Context<AutoDiffXd>& plant_context_ad =
       plant_ad->GetMyMutableContextFromRoot(context_ad.get());
-  const Body<AutoDiffXd>& body_ad = plant_ad->GetBodyByName("box");
+  const RigidBody<AutoDiffXd>& body_ad = plant_ad->GetBodyByName("box");
   const SpatialVelocity<AutoDiffXd> V_WB(
       math::InitializeAutoDiff(Vector6d::Zero()));
   plant_ad->SetFreeBodySpatialVelocity(&plant_context_ad, body_ad, V_WB);
@@ -197,8 +192,7 @@ GTEST_TEST(WingTest, DerivativesAtZeroVelocity) {
       plant_ad->EvalTimeDerivatives(plant_context_ad)
           .get_generalized_velocity()
           .CopyToVector();
-  EXPECT_TRUE(CompareMatrices(vdot,
-                              vdot_gravity_only, 1e-14));
+  EXPECT_TRUE(CompareMatrices(vdot, vdot_gravity_only, 1e-14));
   // This next line would fail before the fix:
   EXPECT_FALSE(math::ExtractGradient(vdot).hasNaN());
 }

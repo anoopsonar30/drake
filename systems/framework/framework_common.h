@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "drake/common/drake_assert.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/identifier.h"
 #include "drake/common/type_safe_index.h"
 #include "drake/common/value.h"
@@ -119,7 +118,7 @@ using SystemId = drake::Identifier<class SystemIdTag>;
 // A utility to call the package-private constructor of some framework classes.
 class FrameworkFactory {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FrameworkFactory)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FrameworkFactory);
   FrameworkFactory() = delete;
   ~FrameworkFactory() = delete;
 

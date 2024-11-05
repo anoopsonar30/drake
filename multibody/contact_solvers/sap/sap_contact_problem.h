@@ -4,6 +4,7 @@
 #include <set>
 #include <vector>
 
+#include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
 #include "drake/multibody/contact_solvers/sap/contact_problem_graph.h"
@@ -92,6 +93,11 @@ class SapContactProblem {
 
   /* Returns a deep-copy of `this` instance. */
   std::unique_ptr<SapContactProblem<T>> Clone() const;
+
+  /* When T = double, this method returns the result of Clone().
+     When T = AutoDiffXd this method returns a deep copy where gradients were
+     discarded. */
+  std::unique_ptr<SapContactProblem<double>> ToDouble() const;
 
   /* Makes a "reduced" contact problem given the DOFs specified in
     `known_free_motion_dofs` are known to equal the free-motion velocities.
@@ -270,6 +276,26 @@ class SapContactProblem {
   void CalcConstraintMultibodyForces(
       const VectorX<T>& gamma, VectorX<T>* generalized_forces,
       std::vector<SpatialForce<T>>* spatial_forces) const;
+
+  /* Computes the generalized forces given a known vector of impulses `gamma`,
+   for constraints with index i in the inclusive range constraint_start <= i &&
+   i <= constraint_end.
+
+   @param[in] gamma Constraint impulses for this full problem. Of size
+   num_constraint_equations().
+   @param[out] generalized_forces On output, the set of generalized forces
+   result of the combined action of all constraints in `this` problem given the
+   known impulses `gamma`.
+
+   @throws if gamma.size() != num_constraint_equations().
+   @throws if constraint_start is not in [0, num_constraints()).
+   @throws if constraint_end is not in [0, num_constraints()).
+   @throws if constraint_end < constraint_start.
+   @throws if generalized_forces is nullptr.
+   @throws if generalized_forces.size() != num_velocities(). */
+  void CalcConstraintGeneralizedForces(const VectorX<T>& gamma,
+                                       int constraint_start, int constraint_end,
+                                       VectorX<T>* generalized_forces) const;
 
  private:
   int nv_{0};           // Total number of generalized velocities.

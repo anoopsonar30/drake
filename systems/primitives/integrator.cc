@@ -9,7 +9,8 @@ namespace systems {
 
 template <typename T>
 Integrator<T>::Integrator(int size)
-    : VectorSystem<T>(SystemTypeTag<Integrator>{}, size, size) {
+    : VectorSystem<T>(SystemTypeTag<Integrator>{}, size, size,
+                      /* direct_feedthrough = */ false) {
   this->DeclareContinuousState(size);
 }
 
@@ -24,6 +25,7 @@ Integrator<T>::~Integrator() = default;
 template <typename T>
 void Integrator<T>::set_integral_value(
     Context<T>* context, const Eigen::Ref<const VectorX<T>>& value) const {
+  this->ValidateContext(context);
   VectorBase<T>& state_vector = context->get_mutable_continuous_state_vector();
   // Asserts that the input value is a column vector of the appropriate size.
   DRAKE_DEMAND(value.rows() == state_vector.size() && value.cols() == 1);
@@ -54,4 +56,4 @@ void Integrator<T>::DoCalcVectorOutput(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::Integrator)
+    class ::drake::systems::Integrator);

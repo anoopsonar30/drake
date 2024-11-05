@@ -96,6 +96,14 @@
  *     <td align="center">⟡</td>
  *     <td align="center">⟡</td>
  * </tr>
+ * <tr><td><a href="https://github.com/oxfordcontrol/Clarabel.rs">
+ *    Clarabel</a></td>
+ *    <td align="center">♦</td>
+ *    <td align="center">♦</td>
+ *    <td align="center">♦</td>
+ *    <td align="center">♦</td>
+ *    <td align="center">♦</td>
+ * </tr>
  * <tr><td><a href="https://github.com/cvxgrp/scs">
  *    SCS</a></td>
  *    <td align="center">△</td>

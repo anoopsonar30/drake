@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/contact_solvers/contact_solver_results.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
@@ -18,7 +17,13 @@
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/revolute_joint.h"
 
-/* @file This file tests SapDriver's support for joint limits. */
+/* @file This file tests SapDriver's support for joint limits.
+
+  Constraints are only supported by the SAP solver. Therefore, to exercise the
+  relevant code paths, we arbitrarily choose one contact approximation that uses
+  the SAP solver. More precisely, in the unit tests below we call
+  set_discrete_contact_approximation(DiscreteContactApproximation::kSap) on the
+  MultibodyPlant used for testing, before constraints are added. */
 
 using drake::multibody::contact_solvers::internal::ContactSolverResults;
 using drake::multibody::contact_solvers::internal::SapContactProblem;
@@ -87,7 +92,8 @@ class KukaIiwaArmTests : public ::testing::Test {
   // arbitrary non-zero values.
   void SetSingleRobotModel() {
     // Only SAP supports the modeling of constraints.
-    plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+    plant_.set_discrete_contact_approximation(
+        DiscreteContactApproximation::kSap);
 
     // Load robot model from files.
     const std::vector<ModelInstanceIndex> models = SetUpArmModel(&plant_);
@@ -145,20 +151,8 @@ class KukaIiwaArmTests : public ::testing::Test {
     const int nv = plant_.num_velocities();
     MatrixXd A(nv, nv);
     plant_.CalcMassMatrix(*context_, &A);
-    // Include term due to the implicit treatment of dissipation.
-    VectorXd damping = VectorXd::Zero(plant_.num_velocities());
-    for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-         ++joint_index) {
-      const Joint<double>& joint = plant_.get_joint(joint_index);
-      if (joint.num_velocities() > 0) {  // skip welds.
-        const VectorXd& joint_damping = joint.damping_vector();
-        // For this model we expect 1 DOF revolute and prismatic joints only.
-        EXPECT_EQ(joint_damping.size(), 1);
-        EXPECT_EQ(joint.num_velocities(), 1);
-        damping(joint.velocity_start()) = joint_damping(0);
-      }
-    }
-    A.diagonal() += plant_.time_step() * damping;
+    A.diagonal() +=
+        plant_.time_step() * plant_.EvalJointDampingCache(*context_);
     return A;
   }
 
@@ -178,8 +172,7 @@ class KukaIiwaArmTests : public ::testing::Test {
     VectorXd v0(plant.num_velocities());
     VectorXd q0(plant.num_positions());
 
-    for (JointIndex joint_index(0); joint_index < plant.num_joints();
-         ++joint_index) {
+    for (JointIndex joint_index : plant.GetJointIndices()) {
       const Joint<double>& joint = plant.get_joint(joint_index);
 
       if (joint.num_velocities() == 1) {  // skip welds in the model.
@@ -251,21 +244,17 @@ class KukaIiwaArmTests : public ::testing::Test {
   std::vector<ModelInstanceIndex> LoadIiwaWithGripper(
       MultibodyPlant<double>* plant) const {
     DRAKE_DEMAND(plant != nullptr);
-    const char kArmFilePath[] =
-        "drake/manipulation/models/iiwa_description/urdf/"
-        "iiwa14_no_collision.urdf";
-
-    const char kWsg50FilePath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmUrl[] =
+        "package://drake_models/iiwa_description/urdf/iiwa14_no_collision.urdf";
+    const char kWsg50Url[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(plant);
     parser.SetAutoRenaming(true);
-    ModelInstanceIndex arm_model =
-        parser.AddModels(FindResourceOrThrow(kArmFilePath)).at(0);
+    ModelInstanceIndex arm_model = parser.AddModelsFromUrl(kArmUrl).at(0);
 
     // Add the gripper.
-    ModelInstanceIndex gripper_model =
-        parser.AddModels(FindResourceOrThrow(kWsg50FilePath)).at(0);
+    ModelInstanceIndex gripper_model = parser.AddModelsFromUrl(kWsg50Url).at(0);
 
     const auto& base_body = plant->GetBodyByName("base", arm_model);
     const auto& end_effector = plant->GetBodyByName("iiwa_link_7", arm_model);
@@ -282,7 +271,7 @@ class KukaIiwaArmTests : public ::testing::Test {
                              const VectorX<double>& gear_ratios) const {
     DRAKE_DEMAND(plant != nullptr);
     int local_joint_index = 0;
-    for (JointActuatorIndex index(0); index < plant->num_actuators(); ++index) {
+    for (JointActuatorIndex index : plant->GetJointActuatorIndices()) {
       JointActuator<double>& joint_actuator =
           plant->get_mutable_joint_actuator(index);
       if (std::count(models.begin(), models.end(),
@@ -298,32 +287,39 @@ class KukaIiwaArmTests : public ::testing::Test {
   // Set arbitrary state, though within joint limits.
   void SetArbitraryState(const MultibodyPlant<double>& plant,
                          Context<double>* context) {
-    for (JointIndex joint_index(0); joint_index < plant.num_joints();
-         ++joint_index) {
+    for (JointIndex joint_index : plant.GetJointIndices()) {
       const Joint<double>& joint = plant.get_joint(joint_index);
       // This model only has weld, prismatic, and revolute joints.
-      if (joint.type_name() == "revolute") {
+      if (joint.type_name() == RevoluteJoint<double>::kTypeName) {
         const RevoluteJoint<double>& revolute_joint =
             dynamic_cast<const RevoluteJoint<double>&>(joint);
         // Arbitrary position within position limits.
         const double ql = revolute_joint.position_lower_limit();
         const double qu = revolute_joint.position_upper_limit();
-        const double w = joint_index / kNumJoints;  // Number in (0,1).
-        const double q = w * ql + (1.0 - w) * qu;   // q in (ql, qu)
+        const double w = 1. * revolute_joint.velocity_start() /
+                         kNumJoints;               // Number in [0,1).
+        const double q = w * ql + (1.0 - w) * qu;  // q in (ql, qu)
         revolute_joint.set_angle(context, q);
         // Arbitrary velocity.
         revolute_joint.set_angular_rate(context, 0.5 * joint_index);
-      } else if (joint.type_name() == "prismatic") {
+        // Set damping.
+        revolute_joint.SetDamping(
+            context, kJointDamping(revolute_joint.velocity_start()));
+      } else if (joint.type_name() == PrismaticJoint<double>::kTypeName) {
         const PrismaticJoint<double>& prismatic_joint =
             dynamic_cast<const PrismaticJoint<double>&>(joint);
         // Arbitrary position within position limits.
         const double ql = prismatic_joint.position_lower_limit();
         const double qu = prismatic_joint.position_upper_limit();
-        const double w = joint_index / kNumJoints;  // Number in (0,1).
-        const double q = w * ql + (1.0 - w) * qu;   // q in (ql, qu)
+        const double w = 1. * prismatic_joint.velocity_start() /
+                         kNumJoints;               // Number in [0,1).
+        const double q = w * ql + (1.0 - w) * qu;  // q in (ql, qu)
         prismatic_joint.set_translation(context, q);
         // Arbitrary velocity.
         prismatic_joint.set_translation_rate(context, 0.5 * joint_index);
+        // Set damping.
+        prismatic_joint.SetDamping(
+            context, kJointDamping(prismatic_joint.velocity_start()));
       }
     }
   }
@@ -333,6 +329,7 @@ class KukaIiwaArmTests : public ::testing::Test {
   const double kTimeStep{0.015};
   const VectorXd kRotorInertias{VectorXd::LinSpaced(kNumJoints, 0.1, 12.0)};
   const VectorXd kGearRatios{VectorXd::LinSpaced(kNumJoints, 1.5, 100.0)};
+  const VectorXd kJointDamping{VectorXd::LinSpaced(kNumJoints, 0.3, 30)};
   const double kCouplerGearRatio{-1.5};
   const double kCouplerOffset{3.1};
   MultibodyPlant<double> plant_{kTimeStep};
@@ -351,7 +348,7 @@ TEST_F(KukaIiwaArmTests, CalcLinearDynamicsMatrix) {
   const MultibodyTreeTopology& topology =
       CompliantContactManagerTester::topology(*manager_);
   for (TreeIndex t(0); t < topology.num_trees(); ++t) {
-    const int tree_start = topology.tree_velocities_start(t);
+    const int tree_start = topology.tree_velocities_start_in_v(t);
     const int tree_nv = topology.num_tree_velocities(t);
     Adense.block(tree_start, tree_start, tree_nv, tree_nv) = A[t];
   }
@@ -407,7 +404,7 @@ TEST_F(KukaIiwaArmTests, CalcAccelerationKinematicsCache) {
   EXPECT_TRUE(CompareMatrices(ac.get_vdot(), a_expected));
   for (BodyIndex b(0); b < plant_.num_bodies(); ++b) {
     const auto& body = plant_.get_body(b);
-    EXPECT_TRUE(ac.get_A_WB(body.node_index()).IsApprox(A_WB_expected[b]));
+    EXPECT_TRUE(ac.get_A_WB(body.mobod_index()).IsApprox(A_WB_expected[b]));
   }
 }
 
@@ -435,8 +432,7 @@ TEST_F(KukaIiwaArmTests, LimitConstraints) {
                                            context_.get());
 
   const DiscreteContactData<DiscreteContactPair<double>>& discrete_pairs =
-      CompliantContactManagerTester::EvalDiscreteContactPairs(*manager_,
-                                                              *context_);
+      manager_->EvalDiscreteContactPairs(*context_);
   const int num_contacts = discrete_pairs.size();
   // We are assuming there is no contact. Assert this.
   ASSERT_EQ(num_contacts, 0);
@@ -458,8 +454,7 @@ TEST_F(KukaIiwaArmTests, LimitConstraints) {
   int num_constraints = 0;  // count number of constraints visited.
   // The manager adds limit constraints in the order joints are specified.
   // Therefore we verify the limit constraint for each joint.
-  for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     const Joint<double>& joint = plant_.get_joint(joint_index);
     if (joint.num_velocities() == 1) {
       const int v_index = joint.velocity_start();
@@ -533,7 +528,7 @@ TEST_F(KukaIiwaArmTests, LimitConstraints) {
 // the coupler constraints specified in the MultibodyPlant model.
 TEST_F(KukaIiwaArmTests, CouplerConstraints) {
   // Only SAP supports the modeling of constraints.
-  plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
 
   // Load two robot models.
   std::vector<ModelInstanceIndex> arm_gripper1 = SetUpArmModel(&plant_);
@@ -575,8 +570,7 @@ TEST_F(KukaIiwaArmTests, CouplerConstraints) {
 
   // We are assuming there is no contact. Assert this.
   const DiscreteContactData<DiscreteContactPair<double>>& discrete_pairs =
-      CompliantContactManagerTester::EvalDiscreteContactPairs(*manager_,
-                                                              *context_);
+      manager_->EvalDiscreteContactPairs(*context_);
   const int num_contacts = discrete_pairs.size();
   ASSERT_EQ(num_contacts, 0);
 

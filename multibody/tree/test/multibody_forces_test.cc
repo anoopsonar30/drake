@@ -28,15 +28,16 @@ class MultibodyForcesTests : public ::testing::Test {
   // Creates a simple MultibodyTree model so that we can instantiate
   // MultibodyForces objects for this model.
   void SetUp() override {
-    SpatialInertia<double> M;
-    const RigidBody<double>& body1 = model_.AddBody<RigidBody>("Body1", M);
-    const RigidBody<double>& body2 = model_.AddBody<RigidBody>("Body2", M);
+    const auto M = SpatialInertia<double>::NaN();
+    const RigidBody<double>& body1 = model_.AddRigidBody("Body1", M);
+    const RigidBody<double>& body2 = model_.AddRigidBody("Body2", M);
     model_.AddJoint<RevoluteJoint>("Joint1", model_.world_body(), std::nullopt,
                                    body1, std::nullopt, Vector3d::UnitZ());
     model_.AddJoint<RevoluteJoint>("Joint2", body1, std::nullopt, body2,
                                    std::nullopt, Vector3d::UnitZ());
     model_.Finalize();
   }
+
  protected:
   internal::MultibodyTree<double> model_;
 };
@@ -48,7 +49,7 @@ TEST_F(MultibodyForcesTests, Construction) {
   // forces would not be zero if the constructor had not explicitly zeroed them.
   std::array<char, sizeof(MultibodyForces<double>)> mem;  // memory buffer.
   mem.fill(1);  // fill in with garbage.
-  auto forces = new(&mem) MultibodyForces<double>(model_);  // placement new.
+  auto forces = new (&mem) MultibodyForces<double>(model_);  // placement new.
   ASSERT_NE(forces, nullptr);
 
   // Forces object should be compatible with the original model.
@@ -99,18 +100,18 @@ TEST_F(MultibodyForcesTests, NonZeroForces) {
 
   // Check the results:
   EXPECT_EQ(generalized_forces, Vector2d(4, 6));
-  EXPECT_TRUE(CompareMatrices(
-      spatial_forces[0].get_coeffs(),
-      (Vector6<double>() << 6, 7, 8, 9, 10, 11).finished(),
-      kEpsilon, MatrixCompareType::absolute));
-  EXPECT_TRUE(CompareMatrices(
-      spatial_forces[1].get_coeffs(),
-      (Vector6<double>() << 0, 1, 2, 3, 4, 5).finished(),
-      kEpsilon, MatrixCompareType::absolute));
-  EXPECT_TRUE(CompareMatrices(
-      spatial_forces[2].get_coeffs(),
-      (Vector6<double>() << 6, 8, 10, 12, 14, 16).finished(),
-      kEpsilon, MatrixCompareType::absolute));
+  EXPECT_TRUE(
+      CompareMatrices(spatial_forces[0].get_coeffs(),
+                      (Vector6<double>() << 6, 7, 8, 9, 10, 11).finished(),
+                      kEpsilon, MatrixCompareType::absolute));
+  EXPECT_TRUE(
+      CompareMatrices(spatial_forces[1].get_coeffs(),
+                      (Vector6<double>() << 0, 1, 2, 3, 4, 5).finished(),
+                      kEpsilon, MatrixCompareType::absolute));
+  EXPECT_TRUE(
+      CompareMatrices(spatial_forces[2].get_coeffs(),
+                      (Vector6<double>() << 6, 8, 10, 12, 14, 16).finished(),
+                      kEpsilon, MatrixCompareType::absolute));
 
   // Set to zero and assess the result:
   forces1.SetZero();

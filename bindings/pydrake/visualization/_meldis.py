@@ -1,5 +1,10 @@
+# Remove once we have Python >= 3.10.
+from __future__ import annotations
+
+import base64
 import copy
 import hashlib
+import json
 import logging
 import numpy as np
 from pathlib import Path
@@ -18,6 +23,7 @@ from drake import (
 )
 from pydrake.common import (
     configure_logging,
+    MemoryFile,
 )
 from pydrake.common.eigen_geometry import (
     Quaternion,
@@ -27,9 +33,11 @@ from pydrake.geometry import (
     Capsule,
     Cylinder,
     Ellipsoid,
+    InMemoryMesh,
     Mesh,
     Meshcat,
     MeshcatParams,
+    MeshSource,
     Rgba,
     Sphere,
     SurfaceTriangle,
@@ -56,6 +64,11 @@ from pydrake.perception import (
 )
 
 _logger = logging.getLogger("drake")
+
+_DEFAULT_MESHCAT_PARAMS = MeshcatParams(
+    host="localhost",
+    show_stats_plot=True,
+)
 
 
 def _to_pose(position, quaternion):
@@ -92,6 +105,48 @@ class _Slider:
         value_changed = (value != self._value)
         self._value = value
         return value, value_changed
+
+
+def _json_to_memory_file(json):
+    """Converts a json representation of a MemoryFile to an instance of
+    same."""
+    return MemoryFile(contents=base64.b64decode(json["contents"]),
+                      extension=json["extension"],
+                      filename_hint=json["filename_hint"])
+
+
+def _json_to_file_source(json):
+    """Converts the json representation of a file source to an instance of
+    same."""
+    if "path" in json:
+        return json["path"]
+    else:
+        return _json_to_memory_file(json)
+
+
+def _make_mesh_source_from_json(json_str):
+    """Given the json representation of a mesh, create a mesh source for it."""
+    # Generally, we assume that if it is legitimate json, then it is an
+    # an in-memory representation.
+    try:
+        payload = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        _logger.warning(f"Received message with malformed json: {e}")
+        return None
+
+    if ("in_memory_mesh" not in payload
+            or "mesh_file" not in payload["in_memory_mesh"]):
+        _logger.warning("Received Mesh with unexpected json content")
+        return None
+
+    mesh_data = payload["in_memory_mesh"]
+    supporting_files = {}
+    for name, coded in mesh_data.get("supporting_files", {}).items():
+        supporting_files[name] = _json_to_file_source(coded)
+
+    return MeshSource(
+        InMemoryMesh(mesh_file=_json_to_memory_file(mesh_data["mesh_file"]),
+                     supporting_files=supporting_files))
 
 
 class _GeometryFileHasher:
@@ -135,34 +190,89 @@ class _GeometryFileHasher:
         assert isinstance(message, lcmt_viewer_geometry_data)
         if (message.type == lcmt_viewer_geometry_data.MESH
                 and message.string_data):
-            self.on_mesh(Path(message.string_data))
+            self.on_mesh(message.string_data)
 
-    def on_mesh(self, path: Path):
-        assert isinstance(path, Path)
+    def on_mesh(self, string_data: str):
+        if string_data[0] == '{':
+            self.on_mesh_in_memory(string_data)
+        else:
+            self.on_mesh_from_disk(Path(string_data))
+
+    def on_mesh_in_memory(self, string_data: str):
+        json_str = string_data.encode()
+        source = _make_mesh_source_from_json(json_str)
+        if source is None:
+            # While the json won't produce a source that will instantiate
+            # geometry in the _ViewerApplet, we'll hash the contents of the
+            # json so that if it's corrected, we'll redraw on it.
+            self._hasher.update(json_str)
+            return
+
+        assert source.is_in_memory()
+
+        # Note: we only need to hash *supporting* files that are defined by
+        # their path. The main mesh file and all in-memory supporting files
+        # appear in the message body itself, and, as such, changes to that data
+        # gets detected *outside* of the hasher.
+        for file_source in source.in_memory().supporting_files.values():
+            if isinstance(file_source, Path):
+                self._read_file(file_source)
+
+    def on_mesh_from_disk(self, path: Path):
+        # Hash the file contents, even if we don't know how to interpret it.
         content = self._read_file(path)
         if path.suffix.lower() == ".obj":
-            for mtl_names in re.findall(rb"^\s*mtllib\s+(.*?)\s*$", content,
-                                        re.MULTILINE):
-                for mtl_name in mtl_names.decode("utf-8").split():
-                    self.on_mtl(path.parent / mtl_name)
+            self.on_obj_from_disk(path, content)
+        elif path.suffix.lower() == ".gltf":
+            self.on_gltf_from_disk(path, content)
+        else:
+            _logger.warning(f"Unsupported mesh file: '{path}'\n"
+                            "Update Meldis's hasher to trigger reloads on "
+                            "this kind of file.")
 
-    def on_mtl(self, path: Path):
+    def on_obj_from_disk(self, path: Path, content: bytes):
+        assert isinstance(path, Path)
+        for mtl_names in re.findall(rb"^\s*mtllib\s+(.*?)\s*$", content,
+                                    re.MULTILINE):
+            for mtl_name in mtl_names.decode("utf-8").split():
+                self.on_mtl_from_disk(path.parent / mtl_name)
+
+    def on_mtl_from_disk(self, path: Path):
         assert isinstance(path, Path)
         content = self._read_file(path)
         for tex_name in re.findall(rb"^\s*map_.*?\s+(\S+)\s*$", content,
                                    re.MULTILINE):
-            self.on_texture(path.parent / tex_name.decode("utf-8"))
+            self.on_texture_from_disk(path.parent / tex_name.decode("utf-8"))
 
-    def on_texture(self, path: Path):
+    def on_texture_from_disk(self, path: Path):
         assert isinstance(path, Path)
         self._read_file(path)
+
+    def on_gltf_from_disk(self, path: Path, content: bytes):
+        assert isinstance(path, Path)
+        try:
+            document = json.loads(content.decode(encoding="utf-8"))
+        except json.JSONDecodeError:
+            _logger.warning(f"glTF file is not valid JSON: {path}")
+            return
+
+        # Handle the images
+        for image in document.get("images", []):
+            if not image.get("uri", "").startswith("data:"):
+                self.on_texture_from_disk(path.parent / image["uri"])
+
+        # Handle the .bin files.
+        for buffer in document.get("buffers", []):
+            if not buffer.get("uri", "").startswith("data:"):
+                self._read_file(path.parent / buffer["uri"])
 
 
 class _ViewerApplet:
     """Displays lcmt_viewer_load_robot and lcmt_viewer_draw into MeshCat."""
 
     def __init__(self, *, meshcat, path, alpha_slider_name,
-                 should_accept_link=None, start_visible=True):
+                 should_accept_link=None, start_visible=True,
+                 initial_alpha_value=1):
         """Constructs an applet.
 
         If should_accept_link is given, only links where
@@ -174,11 +284,13 @@ class _ViewerApplet:
         self._path = path
         self._load_message = None
         self._load_message_mesh_checksum = None
-        self._alpha_slider = _Slider(meshcat, alpha_slider_name)
+        self._alpha_slider = _Slider(meshcat, f"{alpha_slider_name} α")
+        self._alpha_slider._value = initial_alpha_value
         if should_accept_link is not None:
             self._should_accept_link = should_accept_link
         else:
             self._should_accept_link = lambda _: True
+        self._applet_name = alpha_slider_name
         self._start_visible = start_visible
         self._geom_paths = []
 
@@ -198,7 +310,8 @@ class _ViewerApplet:
             if (message.num_links == self._load_message.num_links
                     and message.encode() == self._load_message.encode()
                     and mesh_checksum == self._load_message_mesh_checksum):
-                _logger.info("Ignoring duplicate load message")
+                _logger.info("Ignoring duplicate load message for "
+                             f"{self._applet_name}.")
                 return
 
         # The semantics of a load message is to reset the entire scene.
@@ -249,6 +362,7 @@ class _ViewerApplet:
             link_path = f"{self._path}/{robot_num}/{link_name}"
             pose = _to_pose(message.position[i], message.quaternion[i])
             self._meshcat.SetTransform(path=link_path, X_ParentPath=pose)
+        self._meshcat.SetSimulationTime(sim_time=message.timestamp * 1e-3)
         if self._waiting_for_first_draw_message:
             self._waiting_for_first_draw_message = False
             self._build_links()
@@ -336,11 +450,18 @@ class _ViewerApplet:
             (a, b, c) = geom.float_data
             shape = Ellipsoid(a=a, b=b, c=c)
         elif geom.type == lcmt_viewer_geometry_data.MESH and geom.string_data:
-            # A mesh to be loaded from a file.
             (scale_x, scale_y, scale_z) = geom.float_data
-            filename = geom.string_data
             assert scale_x == scale_y and scale_y == scale_z
-            shape = Mesh(filename=filename, scale=scale_x)
+            if geom.string_data[0] == "{":
+                mesh_source = _make_mesh_source_from_json(geom.string_data)
+                if mesh_source is None:
+                    # Warning has already been emitted by _make_mesh_source...
+                    return (None, None, None)
+                shape = Mesh(source=mesh_source, scale=scale_x)
+            else:
+                # A mesh to be loaded from a file.
+                filename = geom.string_data
+                shape = Mesh(filename=filename, scale=scale_x)
         elif geom.type == lcmt_viewer_geometry_data.MESH:
             assert not geom.string_data
             shape = self._make_triangle_mesh(geom.float_data)
@@ -554,7 +675,8 @@ class _PointCloudApplet:
             # Throttle warning messages to one per channel.
             if channel not in self._already_warned_channel_names:
                 self._already_warned_channel_names.add(channel)
-                _logger.warn(f"Unsupported point cloud data from {channel}.")
+                _logger.warning(
+                    f"Unsupported point cloud data from {channel}.")
             return
 
         # Transform the raw data into an N x num_fields array.
@@ -660,8 +782,16 @@ class Meldis:
     Refer to the pydrake.visualization.meldis module docs for details.
     """
 
-    def __init__(self, *, meshcat_host=None, meshcat_port=None,
-                 environment_map: Path = None):
+    def __init__(self, *,
+                 meshcat_host: str | None = None,
+                 meshcat_port: int | None = None,
+                 meshcat_params: MeshcatParams | None = None,
+                 environment_map: Path | None = None):
+        """Constructs a new Meldis instance. The meshcat_host (when given)
+        takes precedence over meshcat_params.host. The meshcat_post (when
+        given) takes precedence over meshcat_params.port.
+        """
+
         # Bookkeeping for update throttling.
         self._last_update_time = time.time()
 
@@ -676,9 +806,14 @@ class Meldis:
         lcm_url = self._lcm.get_lcm_url()
         _logger.info(f"Meldis is listening for LCM messages at {lcm_url}")
 
-        params = MeshcatParams(host=meshcat_host or "localhost",
-                               port=meshcat_port,
-                               show_stats_plot=False)
+        # Create our meshcat object, merging all of the params goop into one.
+        if meshcat_params is None:
+            meshcat_params = _DEFAULT_MESHCAT_PARAMS
+        params = copy.deepcopy(meshcat_params)
+        if meshcat_host is not None:
+            params.host = meshcat_host
+        if meshcat_port is not None:
+            params.port = meshcat_port
         self.meshcat = Meshcat(params=params)
         if environment_map is not None:
             self.meshcat.SetEnvironmentMap(environment_map)
@@ -691,7 +826,7 @@ class Meldis:
 
         default_viewer = _ViewerApplet(meshcat=self.meshcat,
                                        path="/DRAKE_VIEWER",
-                                       alpha_slider_name="Viewer α",
+                                       alpha_slider_name="Viewer",
                                        should_accept_link=is_not_inertia_link)
         self._subscribe(channel="DRAKE_VIEWER_LOAD_ROBOT",
                         message_type=lcmt_viewer_load_robot,
@@ -706,7 +841,7 @@ class Meldis:
 
         inertia_viewer = _ViewerApplet(meshcat=self.meshcat,
                                        path="/Inertia Visualizer",
-                                       alpha_slider_name="Inertia α",
+                                       alpha_slider_name="Inertia",
                                        should_accept_link=is_inertia_link,
                                        start_visible=False)
         inertia_viewer._alpha_slider._value = 0.5
@@ -720,25 +855,32 @@ class Meldis:
 
         illustration_viewer = _ViewerApplet(meshcat=self.meshcat,
                                             path="/Visual Geometry",
-                                            alpha_slider_name="Visual α")
+                                            alpha_slider_name="Visual")
         self._subscribe(channel="DRAKE_VIEWER_LOAD_ROBOT_ILLUSTRATION",
                         message_type=lcmt_viewer_load_robot,
                         handler=illustration_viewer.on_viewer_load)
         self._subscribe(channel="DRAKE_VIEWER_DRAW_ILLUSTRATION",
                         message_type=lcmt_viewer_draw,
                         handler=illustration_viewer.on_viewer_draw)
+        self._subscribe(channel="DRAKE_VIEWER_DEFORMABLE_ILLUSTRATION",
+                        message_type=lcmt_viewer_link_data,
+                        handler=default_viewer.on_viewer_draw_deformable)
         self._poll(handler=illustration_viewer.on_poll)
 
         proximity_viewer = _ViewerApplet(meshcat=self.meshcat,
                                          path="/Collision Geometry",
-                                         alpha_slider_name="Collision α",
-                                         start_visible=False)
+                                         alpha_slider_name="Collision",
+                                         start_visible=False,
+                                         initial_alpha_value=0.5)
         self._subscribe(channel="DRAKE_VIEWER_LOAD_ROBOT_PROXIMITY",
                         message_type=lcmt_viewer_load_robot,
                         handler=proximity_viewer.on_viewer_load)
         self._subscribe(channel="DRAKE_VIEWER_DRAW_PROXIMITY",
                         message_type=lcmt_viewer_draw,
                         handler=proximity_viewer.on_viewer_draw)
+        self._subscribe(channel="DRAKE_VIEWER_DEFORMABLE_PROXIMITY",
+                        message_type=lcmt_viewer_link_data,
+                        handler=default_viewer.on_viewer_draw_deformable)
         self._poll(handler=proximity_viewer.on_poll)
 
         contact = _ContactApplet(meshcat=self.meshcat)

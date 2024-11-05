@@ -151,7 +151,7 @@ For an explanation of `!Uniform`, `!UniformVector`, and other available options
 /// details, especially the unusually public member fields.
 class Transform {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Transform)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Transform);
 
   /// Constructs the Identity transform.
   Transform() = default;
@@ -187,6 +187,10 @@ class Transform {
   /// Samples this Transform.  If this is deterministic, the result is the same
   /// as GetDeterministicValue.
   math::RigidTransformd Sample(RandomGenerator* generator) const;
+
+  /// Samples this Transform; the returned value is deterministic and has the
+  /// same base frame.
+  Transform SampleAsTransform(RandomGenerator* generator) const;
 
   template <typename Archive>
   void Serialize(Archive* a) {

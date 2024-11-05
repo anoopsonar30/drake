@@ -1,6 +1,7 @@
 #include "drake/systems/framework/diagram.h"
 
 #include <Eigen/Dense>
+#include <fmt/ranges.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -169,6 +170,8 @@ class EmptySystemDiagram : public Diagram<double> {
     }
     builder.BuildInto(this);
     EXPECT_FALSE(IsDifferenceEquationSystem());
+    // There are periodic updates, but no discrete state.
+    EXPECT_TRUE(IsDifferentialEquationSystem());
   }
 };
 
@@ -370,7 +373,7 @@ kitchen sink"!) */
 template <typename T>
 class KitchenSinkStateAndParameters final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(KitchenSinkStateAndParameters)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(KitchenSinkStateAndParameters);
 
   KitchenSinkStateAndParameters() :
       LeafSystem<T>(systems::SystemTypeTag<KitchenSinkStateAndParameters>{}) {
@@ -1901,7 +1904,6 @@ class TestPublishingSystem final : public LeafSystem<double> {
   TestPublishingSystem() {
     this->DeclarePeriodicPublishEvent(
         kTestPublishPeriod, 0.0, &TestPublishingSystem::HandlePeriodPublish);
-    this->DeclarePeriodicPublishNoHandler(kTestPublishPeriod);
 
     // Verify that no periodic discrete updates are registered.
     EXPECT_FALSE(this->GetUniquePeriodicDiscreteUpdateAttribute());
@@ -1934,6 +1936,7 @@ class DiscreteStateDiagram : public Diagram<double> {
     builder.ExportInput(hold2_->get_input_port());
     builder.BuildInto(this);
     EXPECT_FALSE(IsDifferenceEquationSystem());
+    EXPECT_FALSE(IsDifferentialEquationSystem());
   }
 
   ZeroOrderHold<double>* hold1() { return hold1_; }
@@ -2448,6 +2451,21 @@ class ForcedPublishingSystemDiagramTest : public ::testing::Test {
   std::unique_ptr<Context<double>> context_;
 };
 
+GTEST_TEST(ContinuousStateDiagramTest, IsDifferentialEquationSystem) {
+  DiagramBuilder<double> builder;
+  builder.template AddSystem<Integrator>(1);
+  builder.template AddSystem<Integrator>(2);
+  const auto two_integrator_diagram = builder.Build();
+  EXPECT_TRUE(two_integrator_diagram->IsDifferentialEquationSystem());
+
+  DiagramBuilder<double> builder2;
+  builder2.template AddSystem<Integrator>(1);
+  builder2.template AddSystem<SystemWithDiscreteState>(1, 0.1);
+  const auto mixed_discrete_continuous_diagram = builder2.Build();
+  EXPECT_FALSE(
+      mixed_discrete_continuous_diagram->IsDifferentialEquationSystem());
+}
+
 // Tests that a forced publish is processed through the event handler.
 TEST_F(ForcedPublishingSystemDiagramTest, ForcedPublish) {
   auto* forced_publishing_system_one = diagram_.publishing_system_one();
@@ -2462,7 +2480,8 @@ TEST_F(ForcedPublishingSystemDiagramTest, ForcedPublish) {
 class SystemWithAbstractState : public LeafSystem<double> {
  public:
   SystemWithAbstractState(int id, double update_period) : id_(id) {
-    DeclarePeriodicUnrestrictedUpdateNoHandler(update_period, 0);
+    DeclarePeriodicUnrestrictedUpdateEvent(
+        update_period, 0, &SystemWithAbstractState::CalcUnrestrictedUpdate);
     DeclareAbstractState(Value<double>(id_));
 
     // Verify that no periodic discrete updates are registered.
@@ -2471,11 +2490,13 @@ class SystemWithAbstractState : public LeafSystem<double> {
 
   ~SystemWithAbstractState() override {}
 
+  int get_id() const { return id_; }
+
+ private:
   // Abstract state is set to input state value + time.
-  void DoCalcUnrestrictedUpdate(
+  void CalcUnrestrictedUpdate(
       const Context<double>& context,
-      const std::vector<const UnrestrictedUpdateEvent<double>*>& events,
-      State<double>* state) const override {
+      State<double>* state) const {
     double& state_num = state->get_mutable_abstract_state()
                             .get_mutable_value(0)
                             .get_mutable_value<double>();
@@ -2485,9 +2506,6 @@ class SystemWithAbstractState : public LeafSystem<double> {
     state_num += context.get_time();
   }
 
-  int get_id() const { return id_; }
-
- private:
   int id_{0};
 };
 

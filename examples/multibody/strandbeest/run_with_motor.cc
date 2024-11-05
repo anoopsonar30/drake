@@ -77,7 +77,7 @@ DEFINE_bool(with_constraints, true,
 template <typename T>
 class DesiredVelocityMotor final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DesiredVelocityMotor)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DesiredVelocityMotor);
 
   DesiredVelocityMotor(const MultibodyPlant<T>& plant, const Joint<T>& joint,
                        double omega_desired, double proportional)
@@ -127,8 +127,8 @@ int do_main() {
                               : "package://drake/examples/multibody/"
                                 "strandbeest/model/StrandbeestBushings.urdf");
   if (FLAGS_with_constraints) {
-    strandbeest.set_discrete_contact_solver(
-        drake::multibody::DiscreteContactSolver::kSap);
+    strandbeest.set_discrete_contact_approximation(
+        drake::multibody::DiscreteContactApproximation::kSap);
   }
   Parser parser(&strandbeest);
   parser.AddModelsFromUrl(urdf_url);
@@ -212,7 +212,8 @@ int do_main() {
     for (const auto& [id, spec] : strandbeest.get_ball_constraint_specs()) {
       ik.AddPointToPointDistanceConstraint(
           strandbeest.get_body(spec.body_A).body_frame(), spec.p_AP,
-          strandbeest.get_body(spec.body_B).body_frame(), spec.p_BQ, 0, 0);
+          strandbeest.get_body(spec.body_B).body_frame(), spec.p_BQ.value(), 0,
+          0);
     }
   } else {
     // Add a position constraint for each bushing element. The origins of the

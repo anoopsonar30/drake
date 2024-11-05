@@ -79,6 +79,7 @@ void SdpaFreeFormat::DeclareXforPositiveSemidefiniteConstraints(
   }
 }
 
+namespace {
 void AddTermToTriplets(const EntryInX& entry_in_X, double coeff,
                        std::vector<Eigen::Triplet<double>>* triplets) {
   if (entry_in_X.row_index_in_block == entry_in_X.column_index_in_block) {
@@ -94,6 +95,7 @@ void AddTermToTriplets(const EntryInX& entry_in_X, double coeff,
         entry_in_X.X_start_row + entry_in_X.row_index_in_block, coeff / 2);
   }
 }
+}  // namespace
 
 void SdpaFreeFormat::AddLinearEqualityConstraint(
     const std::vector<double>& coeff_prog_vars,
@@ -390,6 +392,7 @@ void SdpaFreeFormat::AddLinearConstraintsHelper(
     X_entries.reserve(1);
     std::vector<int> s_indices;
     for (int j = 0; j < linear_constraint.variables().rows(); ++j) {
+      // TODO(Alexandre.Amice) fix this to only access the sparse version of A.
       if (linear_constraint.evaluator()->GetDenseA()(i, j) != 0) {
         a.push_back(linear_constraint.evaluator()->GetDenseA()(i, j));
         decision_var_indices_in_X.push_back(var_indices[j]);
@@ -953,6 +956,18 @@ bool GenerateSdpaImpl(const std::vector<BlockInX>& X_blocks,
 }  // namespace
 
 }  // namespace internal
+
+std::string to_string(const RemoveFreeVariableMethod& x) {
+  switch (x) {
+    case RemoveFreeVariableMethod::kTwoSlackVariables:
+      return "kTwoSlackVariables";
+    case RemoveFreeVariableMethod::kNullspace:
+      return "kNullspace";
+    case RemoveFreeVariableMethod::kLorentzConeSlack:
+      return "kLorentzConeSlack";
+  }
+  DRAKE_UNREACHABLE();
+}
 
 bool GenerateSDPA(const MathematicalProgram& prog, const std::string& file_name,
                   RemoveFreeVariableMethod method) {

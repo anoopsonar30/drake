@@ -71,6 +71,24 @@ string MathematicalProgram::to_string() const {
   return os.str();
 }
 
+bool MathematicalProgram::IsThreadSafe() const {
+  const std::vector<Binding<Cost>> costs = GetAllCosts();
+  const std::vector<Binding<Constraint>> constraints = GetAllConstraints();
+  return std::all_of(visualization_callbacks_.begin(),
+                     visualization_callbacks_.end(),
+                     [](const Binding<VisualizationCallback>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     }) &&
+         std::all_of(costs.begin(), costs.end(),
+                     [](const Binding<Cost>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     }) &&
+         std::all_of(constraints.begin(), constraints.end(),
+                     [](const Binding<Constraint>& c) {
+                       return c.evaluator()->is_thread_safe();
+                     });
+}
+
 std::string MathematicalProgram::ToLatex(int precision) {
   if (num_vars() == 0) {
     return "\\text{This MathematicalProgram has no decision variables.}";
@@ -536,6 +554,11 @@ Binding<L2NormCost> MathematicalProgram::AddL2NormCost(
   return AddCost(std::make_shared<L2NormCost>(A, b), vars);
 }
 
+Binding<L2NormCost> MathematicalProgram::AddL2NormCost(
+    const symbolic::Expression& e, double psd_tol, double coefficient_tol) {
+  return AddCost(internal::ParseL2NormCost(e, psd_tol, coefficient_tol));
+}
+
 std::tuple<symbolic::Variable, Binding<LinearCost>,
            Binding<LorentzConeConstraint>>
 MathematicalProgram::AddL2NormCostUsingConicConstraint(
@@ -571,42 +594,64 @@ Binding<Cost> MathematicalProgram::AddCost(const Expression& e) {
   return AddCost(internal::ParseCost(e));
 }
 
-std::tuple<Binding<LinearCost>, VectorX<symbolic::Variable>,
-           MatrixX<symbolic::Expression>>
-MathematicalProgram::AddMaximizeLogDeterminantCost(
-    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+namespace {
+void CreateLogDetermiant(
+    MathematicalProgram* prog,
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X,
+    VectorX<symbolic::Variable>* t, MatrixX<symbolic::Expression>* Z) {
   DRAKE_DEMAND(X.rows() == X.cols());
   const int X_rows = X.rows();
-  auto Z_lower = NewContinuousVariables(X_rows * (X_rows + 1) / 2);
-  MatrixX<symbolic::Expression> Z(X_rows, X_rows);
-  Z.setZero();
+  auto Z_lower = prog->NewContinuousVariables(X_rows * (X_rows + 1) / 2);
+  Z->resize(X_rows, X_rows);
+  Z->setZero();
   // diag_Z is the diagonal matrix that only contains the diagonal entries of Z.
   MatrixX<symbolic::Expression> diag_Z(X_rows, X_rows);
   diag_Z.setZero();
   int Z_lower_index = 0;
   for (int j = 0; j < X_rows; ++j) {
     for (int i = j; i < X_rows; ++i) {
-      Z(i, j) = Z_lower(Z_lower_index++);
+      (*Z)(i, j) = Z_lower(Z_lower_index++);
     }
-    diag_Z(j, j) = Z(j, j);
+    diag_Z(j, j) = (*Z)(j, j);
   }
 
   MatrixX<symbolic::Expression> psd_mat(2 * X_rows, 2 * X_rows);
   // clang-format off
-  psd_mat << X,             Z,
-             Z.transpose(), diag_Z;
+  psd_mat << X,             *Z,
+             Z->transpose(), diag_Z;
   // clang-format on
-  AddPositiveSemidefiniteConstraint(psd_mat);
+  prog->AddPositiveSemidefiniteConstraint(psd_mat);
   // Now introduce the slack variable t.
-  auto t = NewContinuousVariables(X_rows);
+  *t = prog->NewContinuousVariables(X_rows);
   // Introduce the constraint log(Z(i, i)) >= t(i).
   for (int i = 0; i < X_rows; ++i) {
-    AddExponentialConeConstraint(
-        Vector3<symbolic::Expression>(Z(i, i), 1, t(i)));
+    prog->AddExponentialConeConstraint(
+        Vector3<symbolic::Expression>((*Z)(i, i), 1, (*t)(i)));
   }
+}
+}  // namespace
+std::tuple<Binding<LinearCost>, VectorX<symbolic::Variable>,
+           MatrixX<symbolic::Expression>>
+MathematicalProgram::AddMaximizeLogDeterminantCost(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  VectorX<symbolic::Variable> t;
+  MatrixX<symbolic::Expression> Z;
+  CreateLogDetermiant(this, X, &t, &Z);
 
   const auto cost = AddLinearCost(-Eigen::VectorXd::Ones(t.rows()), t);
   return std::make_tuple(cost, std::move(t), std::move(Z));
+}
+
+std::tuple<Binding<LinearConstraint>, VectorX<symbolic::Variable>,
+           MatrixX<symbolic::Expression>>
+MathematicalProgram::AddLogDeterminantLowerBoundConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X, double lower) {
+  VectorX<symbolic::Variable> t;
+  MatrixX<symbolic::Expression> Z;
+  CreateLogDetermiant(this, X, &t, &Z);
+  const auto constraint =
+      AddLinearConstraint(Eigen::RowVectorXd::Ones(t.rows()), lower, kInf, t);
+  return std::make_tuple(constraint, std::move(t), std::move(Z));
 }
 
 Binding<LinearCost> MathematicalProgram::AddMaximizeGeometricMeanCost(
@@ -860,7 +905,7 @@ Binding<LinearConstraint> MathematicalProgram::AddConstraint(
   } else {
     // TODO(eric.cousineau): This is a good assertion... But seems out of place,
     // possibly redundant w.r.t. the binding infrastructure.
-    DRAKE_ASSERT(binding.evaluator()->GetDenseA().cols() ==
+    DRAKE_ASSERT(binding.evaluator()->get_sparse_A().cols() ==
                  static_cast<int>(binding.GetNumElements()));
     if (!CheckBinding(binding)) {
       return binding;
@@ -879,9 +924,17 @@ Binding<LinearConstraint> MathematicalProgram::AddLinearConstraint(
   return AddConstraint(make_shared<LinearConstraint>(A, lb, ub), vars);
 }
 
+Binding<LinearConstraint> MathematicalProgram::AddLinearConstraint(
+    const Eigen::SparseMatrix<double>& A,
+    const Eigen::Ref<const Eigen::VectorXd>& lb,
+    const Eigen::Ref<const Eigen::VectorXd>& ub,
+    const Eigen::Ref<const VectorXDecisionVariable>& vars) {
+  return AddConstraint(make_shared<LinearConstraint>(A, lb, ub), vars);
+}
+
 Binding<LinearEqualityConstraint> MathematicalProgram::AddConstraint(
     const Binding<LinearEqualityConstraint>& binding) {
-  DRAKE_ASSERT(binding.evaluator()->GetDenseA().cols() ==
+  DRAKE_ASSERT(binding.evaluator()->get_sparse_A().cols() ==
                static_cast<int>(binding.GetNumElements()));
   if (!CheckBinding(binding)) {
     return binding;
@@ -910,6 +963,14 @@ MathematicalProgram::AddLinearEqualityConstraint(
   return AddConstraint(make_shared<LinearEqualityConstraint>(Aeq, beq), vars);
 }
 
+Binding<LinearEqualityConstraint>
+MathematicalProgram::AddLinearEqualityConstraint(
+    const Eigen::SparseMatrix<double>& Aeq,
+    const Eigen::Ref<const Eigen::VectorXd>& beq,
+    const Eigen::Ref<const VectorXDecisionVariable>& vars) {
+  return AddConstraint(make_shared<LinearEqualityConstraint>(Aeq, beq), vars);
+}
+
 Binding<BoundingBoxConstraint> MathematicalProgram::AddConstraint(
     const Binding<BoundingBoxConstraint>& binding) {
   if (!CheckBinding(binding)) {
@@ -928,6 +989,13 @@ Binding<LorentzConeConstraint> MathematicalProgram::AddConstraint(
   required_capabilities_.insert(ProgramAttribute::kLorentzConeConstraint);
   lorentz_cone_constraint_.push_back(binding);
   return lorentz_cone_constraint_.back();
+}
+
+Binding<LorentzConeConstraint> MathematicalProgram::AddLorentzConeConstraint(
+    const symbolic::Formula& f, LorentzConeConstraint::EvalType eval_type,
+    double psd_tol, double coefficient_tol) {
+  return AddConstraint(internal::ParseLorentzConeConstraint(
+      f, eval_type, psd_tol, coefficient_tol));
 }
 
 Binding<LorentzConeConstraint> MathematicalProgram::AddLorentzConeConstraint(
@@ -1108,6 +1176,38 @@ MathematicalProgram::AddPositiveSemidefiniteConstraint(
   return AddConstraint(constraint, symmetric_matrix_var);
 }
 
+Binding<PositiveSemidefiniteConstraint>
+MathematicalProgram::AddPositiveSemidefiniteConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& e) {
+  DRAKE_THROW_UNLESS(e.rows() == e.cols());
+  DRAKE_ASSERT(CheckStructuralEquality(e, e.transpose().eval()));
+  const MatrixXDecisionVariable M = NewSymmetricContinuousVariables(e.rows());
+  // Adds the linear equality constraint that M = e.
+  AddLinearEqualityConstraint(e - M, Eigen::MatrixXd::Zero(e.rows(), e.rows()),
+                              true);
+  return AddPositiveSemidefiniteConstraint(M);
+}
+
+Binding<PositiveSemidefiniteConstraint>
+MathematicalProgram::AddPrincipalSubmatrixIsPsdConstraint(
+    const Eigen::Ref<const MatrixXDecisionVariable>& symmetric_matrix_var,
+    const std::set<int>& minor_indices) {
+  // This function relies on AddPositiveSemidefiniteConstraint to validate the
+  // documented symmetry prerequisite.
+  return AddPositiveSemidefiniteConstraint(
+      math::ExtractPrincipalSubmatrix(symmetric_matrix_var, minor_indices));
+}
+
+Binding<PositiveSemidefiniteConstraint>
+MathematicalProgram::AddPrincipalSubmatrixIsPsdConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& e,
+    const std::set<int>& minor_indices) {
+  // This function relies on AddPositiveSemidefiniteConstraint to validate the
+  // documented symmetry prerequisite.
+  return AddPositiveSemidefiniteConstraint(
+      math::ExtractPrincipalSubmatrix(e, minor_indices));
+}
+
 Binding<LinearMatrixInequalityConstraint> MathematicalProgram::AddConstraint(
     const Binding<LinearMatrixInequalityConstraint>& binding) {
   if (!CheckBinding(binding)) {
@@ -1123,9 +1223,9 @@ Binding<LinearMatrixInequalityConstraint> MathematicalProgram::AddConstraint(
 
 Binding<LinearMatrixInequalityConstraint>
 MathematicalProgram::AddLinearMatrixInequalityConstraint(
-    const vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
+    vector<Eigen::MatrixXd> F,
     const Eigen::Ref<const VectorXDecisionVariable>& vars) {
-  auto constraint = make_shared<LinearMatrixInequalityConstraint>(F);
+  auto constraint = make_shared<LinearMatrixInequalityConstraint>(std::move(F));
   return AddConstraint(constraint, vars);
 }
 
@@ -1170,6 +1270,132 @@ MathematicalProgram::AddPositiveDiagonallyDominantMatrixConstraint(
     AddLinearConstraint(X(i, i) >= y_sum);
   }
   return Y;
+}
+
+MatrixX<symbolic::Expression> MathematicalProgram::TightenPsdConstraintToDd(
+    const Binding<PositiveSemidefiniteConstraint>& constraint) {
+  RemoveConstraint(constraint);
+  // Variables are flattened by the Flatten method, which flattens in
+  // column-major order. This is the same convention as Eigen, so we can use the
+  // map methods.
+  const int n = constraint.evaluator()->matrix_rows();
+  const MatrixXDecisionVariable mat_vars =
+      Eigen::Map<const MatrixXDecisionVariable>(constraint.variables().data(),
+                                                n, n);
+  return AddPositiveDiagonallyDominantMatrixConstraint(
+      mat_vars.cast<Expression>());
+}
+
+namespace {
+
+// Constructs the matrices A, lb, ub for the linear constraint lb <= A * X <= ub
+// encoding that X is in DD* for a matrix of size n. Returns the tuple
+// (A, lb, ub).
+std::tuple<Eigen::SparseMatrix<double>, Eigen::VectorXd, Eigen::VectorXd>
+ConstructPositiveDiagonallyDominantDualConeConstraintMatricesForN(const int n) {
+  // Return the index of Xᵢⱼ in the vector created by stacking the column of X
+  // into a vector.
+  auto compute_flat_index = [&n](int i, int j) {
+    return i + n * j;
+  };
+
+  // The DD dual cone constraint is a sparse linear constraint. We instantiate
+  // the A matrix using this triplet list.
+  std::vector<Eigen::Triplet<double>> A_triplet_list;
+  // There are n rows with one non-zero entry in the row, and 2 * (n choose 2)
+  // rows with 4 non-zero entries in the row. This requires 4*n*n-3*n non-zero
+  // entries.
+  A_triplet_list.reserve(4 * n * n - 3 * n);
+
+  const Eigen::VectorXd lb = Eigen::VectorXd::Zero(n * n);
+  const Eigen::VectorXd ub = kInf * Eigen::VectorXd::Ones(n * n);
+
+  // vᵢᵀXvᵢ ≥ 0 is equivalent to Xᵢᵢ ≥ 0 when vᵢ is a vector with exactly one
+  // entry equal to 1.
+  for (int i = 0; i < n; ++i) {
+    // Variable Xᵢᵢ is in position i*(n+1)
+    A_triplet_list.emplace_back(i, compute_flat_index(i, i), 1);
+  }
+  // When vᵢ is a vector with two non-zero at entries k and j, we can choose
+  // without loss of generality that the jth entry to be 1, and the kth entry be
+  // either +1 or -1. This enumerates over all the parities of vᵢ. Under this
+  // choice vᵢᵀXvᵢ = Xₖₖ + sign(vᵢ(k))* (Xₖⱼ+ Xⱼₖ) +  Xⱼⱼ
+  int row_ctr = n;
+  for (int j = 0; j < n; ++j) {
+    for (int k = j + 1; k < n; ++k) {
+      // X(k, k) + X(k, j) + X(j, k) + X(j, j)
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(k, k), 1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(j, j), 1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(j, k), 1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(k, j), 1);
+      ++row_ctr;
+
+      // X(k, k) - X(k, j) - X(j, k) + X(j, j)
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(k, k), 1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(j, j), 1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(j, k), -1);
+      A_triplet_list.emplace_back(row_ctr, compute_flat_index(k, j), -1);
+      ++row_ctr;
+    }
+  }
+  DRAKE_ASSERT(row_ctr == n * n);
+  DRAKE_ASSERT(ssize(A_triplet_list) == 4 * n * n - 3 * n);
+  Eigen::SparseMatrix<double> A(row_ctr, n * n);
+  A.setFromTriplets(A_triplet_list.begin(), A_triplet_list.end());
+  return std::make_tuple(std::move(A), std::move(lb), std::move(ub));
+}
+}  // namespace
+
+Binding<LinearConstraint>
+MathematicalProgram::AddPositiveDiagonallyDominantDualConeMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  const int n = X.rows();
+  DRAKE_DEMAND(X.cols() == n);
+  Eigen::MatrixXd A_expr;
+  Eigen::VectorXd b_expr;
+  VectorX<Variable> variables;
+  symbolic::DecomposeAffineExpressions(
+      Eigen::Map<const VectorX<symbolic::Expression>>(X.data(), X.size()),
+      &A_expr, &b_expr, &variables);
+  const std::tuple<Eigen::SparseMatrix<double>, Eigen::VectorXd,
+                   Eigen::VectorXd>
+      constraint_mats{
+          ConstructPositiveDiagonallyDominantDualConeConstraintMatricesForN(n)};
+  return AddLinearConstraint(
+      (std::get<0>(constraint_mats) * A_expr).sparseView(),  // A * A_expr
+      std::get<1>(constraint_mats) -
+          std::get<0>(constraint_mats) * b_expr,  // lb - A * b_expr
+      std::get<2>(constraint_mats),  // ub - A * b_expr, but since ub is kInf no
+                                     // need to do the operations
+      variables);
+}
+
+Binding<LinearConstraint>
+MathematicalProgram::AddPositiveDiagonallyDominantDualConeMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Variable>>& X) {
+  const int n = X.rows();
+  DRAKE_DEMAND(X.cols() == n);
+  const std::tuple<Eigen::SparseMatrix<double>, Eigen::VectorXd,
+                   Eigen::VectorXd>
+      constraint_mats{
+          ConstructPositiveDiagonallyDominantDualConeConstraintMatricesForN(n)};
+  return AddLinearConstraint(
+      std::get<0>(constraint_mats), std::get<1>(constraint_mats),
+      std::get<2>(constraint_mats),
+      Eigen::Map<const VectorXDecisionVariable>(X.data(), X.size()));
+}
+
+Binding<LinearConstraint> MathematicalProgram::RelaxPsdConstraintToDdDualCone(
+    const Binding<PositiveSemidefiniteConstraint>& constraint) {
+  RemoveConstraint(constraint);
+  // Variables are flattened by the Flatten method, which flattens in
+  // column-major order. This is the same convention as Eigen, so we can use the
+  // map methods.
+  const int n = constraint.evaluator()->matrix_rows();
+  const MatrixXDecisionVariable mat_vars =
+      Eigen::Map<const MatrixXDecisionVariable>(constraint.variables().data(),
+                                                n, n);
+  return AddPositiveDiagonallyDominantDualConeMatrixConstraint(mat_vars);
 }
 
 namespace {
@@ -1286,6 +1512,67 @@ MathematicalProgram::AddScaledDiagonallyDominantMatrixConstraint(
   AddLinearEqualityConstraint(A_diagonal_sum, Eigen::VectorXd::Zero(n),
                               diagonal_sum_var);
   return M;
+}
+
+std::vector<std::vector<Matrix2<symbolic::Variable>>>
+MathematicalProgram::TightenPsdConstraintToSdd(
+    const Binding<PositiveSemidefiniteConstraint>& constraint) {
+  RemoveConstraint(constraint);
+  // Variables are flattened by the Flatten method, which flattens in
+  // column-major order. This is the same convention as Eigen, so we can use the
+  // map methods.
+  const int n = constraint.evaluator()->matrix_rows();
+  const MatrixXDecisionVariable mat_vars =
+      Eigen::Map<const MatrixXDecisionVariable>(constraint.variables().data(),
+                                                n, n);
+  return AddScaledDiagonallyDominantMatrixConstraint(mat_vars);
+}
+
+std::vector<Binding<RotatedLorentzConeConstraint>>
+MathematicalProgram::AddScaledDiagonallyDominantDualConeMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  const int n = X.rows();
+  DRAKE_DEMAND(X.cols() == n);
+  std::vector<Binding<RotatedLorentzConeConstraint>> ret;
+  ret.reserve(n);
+
+  // if i ≥ j
+  for (int i = 0; i < n; ++i) {
+    // VᵢⱼᵀXVᵢⱼ = [[Xᵢᵢ, Xᵢⱼ],[Xᵢⱼ,Xⱼⱼ]] and this matrix is PSD if an only if
+    // Xᵢᵢ ≥ 0, Xⱼⱼ ≥ 0, and XᵢᵢXⱼⱼ - XᵢⱼXᵢⱼ >= 0. Notice that if i == j, this
+    // is simply that Xᵢᵢ ≥ 0 and so we don't need to include the Xᵢᵢ ≥ 0 as it
+    // is already added when i ≠ j.
+    for (int j = i + 1; j < n; ++j) {
+      // VᵢⱼᵀXVᵢⱼ = [[Xᵢᵢ, Xᵢⱼ],[Xᵢⱼ,Xⱼⱼ]]. Since we already imposed that Xᵢᵢ ≥
+      // 0 and Xⱼⱼ ≥ 0, we only have to impose that XᵢᵢXⱼⱼ - XᵢⱼXᵢⱼ >= 0 which
+      // can be
+      ret.push_back(
+          AddRotatedLorentzConeConstraint(Vector3<symbolic::Expression>(
+              X(i, i), X(j, j), 0.5 * (X(i, j) + X(j, i)))));
+    }
+  }
+  return ret;
+}
+
+std::vector<Binding<RotatedLorentzConeConstraint>>
+MathematicalProgram::AddScaledDiagonallyDominantDualConeMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Variable>>& X) {
+  return AddScaledDiagonallyDominantDualConeMatrixConstraint(
+      X.cast<Expression>());
+}
+
+std::vector<Binding<RotatedLorentzConeConstraint>>
+MathematicalProgram::RelaxPsdConstraintToSddDualCone(
+    const Binding<PositiveSemidefiniteConstraint>& constraint) {
+  RemoveConstraint(constraint);
+  // Variables are flattened by the Flatten method, which flattens in
+  // column-major order. This is the same convention as Eigen, so we can use the
+  // map methods.
+  const int n = constraint.evaluator()->matrix_rows();
+  const MatrixXDecisionVariable mat_vars =
+      Eigen::Map<const MatrixXDecisionVariable>(constraint.variables().data(),
+                                                n, n);
+  return AddScaledDiagonallyDominantDualConeMatrixConstraint(mat_vars);
 }
 
 Binding<ExponentialConeConstraint> MathematicalProgram::AddConstraint(
@@ -1597,6 +1884,82 @@ void MathematicalProgram::SetVariableScaling(const symbolic::Variable& var,
   }
 }
 
+namespace {
+template <typename C>
+[[nodiscard]] bool IsVariableBound(const symbolic::Variable& var,
+                                   const std::vector<Binding<C>>& bindings,
+                                   std::string* binding_description) {
+  for (const auto& binding : bindings) {
+    if (binding.ContainsVariable(var)) {
+      *binding_description = binding.to_string();
+      return true;
+    }
+  }
+  return false;
+}
+
+// Return true if the variable is bound with a cost or constraint (except for a
+// bounding box constraint); false otherwise.
+[[nodiscard]] bool IsVariableBound(const symbolic::Variable& var,
+                                   const MathematicalProgram& prog,
+                                   std::string* binding_description) {
+  if (IsVariableBound(var, prog.GetAllCosts(), binding_description)) {
+    return true;
+  }
+  if (IsVariableBound(var, prog.GetAllConstraints(), binding_description)) {
+    return true;
+  }
+  if (IsVariableBound(var, prog.visualization_callbacks(),
+                      binding_description)) {
+    return true;
+  }
+  return false;
+}
+}  // namespace
+
+int MathematicalProgram::RemoveDecisionVariable(const symbolic::Variable& var) {
+  if (decision_variable_index_.count(var.get_id()) == 0) {
+    throw std::invalid_argument(
+        fmt::format("RemoveDecisionVariable: {} is not a decision variable of "
+                    "this MathematicalProgram.",
+                    var.get_name()));
+  }
+  std::string binding_description;
+  if (IsVariableBound(var, *this, &binding_description)) {
+    throw std::invalid_argument(
+        fmt::format("RemoveDecisionVariable: {} is associated with a {}.",
+                    var.get_name(), binding_description));
+  }
+  const auto var_it = decision_variable_index_.find(var.get_id());
+  const int var_index = var_it->second;
+  // Update decision_variable_index_.
+  decision_variable_index_.erase(var_it);
+  for (auto& [variable_id, variable_index] : decision_variable_index_) {
+    // Decrement the index of the variable after `var`.
+    if (variable_index > var_index) {
+      --variable_index;
+    }
+  }
+  // Remove the variable from decision_variables_.
+  decision_variables_.erase(decision_variables_.begin() + var_index);
+  // Remove from var_scaling_map_.
+  std::unordered_map<int, double> new_var_scaling_map;
+  for (const auto& [variable_index, scale] : var_scaling_map_) {
+    if (variable_index < var_index) {
+      new_var_scaling_map.emplace(variable_index, scale);
+    } else if (variable_index > var_index) {
+      new_var_scaling_map.emplace(variable_index - 1, scale);
+    }
+  }
+  var_scaling_map_ = std::move(new_var_scaling_map);
+  // Update x_initial_guess_;
+  for (int i = var_index; i < x_initial_guess_.rows() - 1; ++i) {
+    x_initial_guess_(i) = x_initial_guess_(i + 1);
+  }
+  x_initial_guess_.conservativeResize(x_initial_guess_.rows() - 1);
+  return var_index;
+}
+
 template <typename C>
 int MathematicalProgram::RemoveCostOrConstraintImpl(
     const Binding<C>& removal, ProgramAttribute affected_capability,
@@ -1830,6 +2193,12 @@ int MathematicalProgram::RemoveConstraint(
   DRAKE_UNREACHABLE();
 }
 
+int MathematicalProgram::RemoveVisualizationCallback(
+    const Binding<VisualizationCallback>& callback) {
+  return RemoveCostOrConstraintImpl(callback, ProgramAttribute::kCallback,
+                                    &visualization_callbacks_);
+}
+
 void MathematicalProgram::CheckVariableType(VarType var_type) {
   switch (var_type) {
     case VarType::CONTINUOUS:
@@ -1860,7 +2229,7 @@ void MathematicalProgram::CheckIsDecisionVariable(
     const VectorXDecisionVariable& vars) const {
   for (int i = 0; i < vars.rows(); ++i) {
     for (int j = 0; j < vars.cols(); ++j) {
-      if (decision_variable_index_.count(vars(i, j).get_id()) == 0) {
+      if (!decision_variable_index_.contains(vars(i, j).get_id())) {
         throw std::logic_error(fmt::format(
             "{} is not a decision variable of the mathematical program.",
             vars(i, j)));

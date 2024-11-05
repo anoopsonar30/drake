@@ -32,13 +32,13 @@ class UniversalJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
     // Add some bodies so we can add joints between them:
-    body_ = &model->AddBody<RigidBody>("Body", M_B);
+    body_ = &model->AddRigidBody("Body", M_B);
 
     // Add a universal joint between the world and body1:
     joint_ = &model->AddJoint<UniversalJoint>("Joint", model->world_body(),
@@ -60,7 +60,7 @@ class UniversalJointTest : public ::testing::Test {
     // We are done adding modeling elements. Transfer tree to system and get
     // a Context.
     system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
-        std::move(model), true/* is_discrete */);
+        std::move(model), true /* is_discrete */);
     context_ = system_->CreateDefaultContext();
   }
 
@@ -115,8 +115,8 @@ TEST_F(UniversalJointTest, GetJointLimits) {
 }
 
 TEST_F(UniversalJointTest, Damping) {
-  EXPECT_EQ(joint_->damping(), kDamping);
-  EXPECT_EQ(joint_->damping_vector(), Vector2d::Constant(kDamping));
+  EXPECT_EQ(joint_->default_damping(), kDamping);
+  EXPECT_EQ(joint_->default_damping_vector(), Vector2d::Constant(kDamping));
 }
 
 // Context-dependent value access.
@@ -133,6 +133,15 @@ TEST_F(UniversalJointTest, ContextDependentAccess) {
   // Joint locking.
   joint_->Lock(context_.get());
   EXPECT_EQ(joint_->get_angular_rates(*context_), Vector2d(0., 0.));
+
+  // Damping.
+  EXPECT_EQ(joint_->GetDampingVector(*context_), Vector2d::Constant(kDamping));
+  EXPECT_NO_THROW(joint_->SetDampingVector(context_.get(), some_value));
+  EXPECT_EQ(joint_->GetDampingVector(*context_), some_value);
+
+  // Expect to throw on invalid damping values.
+  EXPECT_THROW(joint_->SetDampingVector(context_.get(), Vector2d::Constant(-1)),
+               std::exception);
 }
 
 // Tests API to apply torques to individual dof of joint.
@@ -159,6 +168,21 @@ TEST_F(UniversalJointTest, AddInOneForce) {
     EXPECT_TRUE(F1.IsApprox(*F2++, kEpsilon));
 }
 
+// Tests API to add in damping forces.
+TEST_F(UniversalJointTest, AddInDamping) {
+  const Vector2d angular_rates(0.1, 0.2);
+  const double damping = 3 * kDamping;
+
+  const Vector2d damping_forces_expected = -damping * angular_rates;
+
+  joint_->set_angular_rates(context_.get(), angular_rates);
+  joint_->SetDampingVector(context_.get(), Vector2d::Constant(damping));
+
+  MultibodyForces<double> forces(tree());
+  joint_->AddInDamping(*context_, &forces);
+  EXPECT_EQ(forces.generalized_forces(), damping_forces_expected);
+}
+
 TEST_F(UniversalJointTest, Clone) {
   auto model_clone = tree().CloneToScalar<AutoDiffXd>();
   const auto& joint_clone = model_clone->get_variant(*joint_);
@@ -180,7 +204,7 @@ TEST_F(UniversalJointTest, Clone) {
             joint_->acceleration_lower_limits());
   EXPECT_EQ(joint_clone.acceleration_upper_limits(),
             joint_->acceleration_upper_limits());
-  EXPECT_EQ(joint_clone.damping(), joint_->damping());
+  EXPECT_EQ(joint_clone.default_damping(), joint_->default_damping());
   EXPECT_EQ(joint_clone.get_default_angles(), joint_->get_default_angles());
 }
 
@@ -264,8 +288,7 @@ TEST_F(UniversalJointTest, DefaultAngles) {
 
   // Setting the default angle out of the bounds of the position limits
   // should NOT throw an exception.
-  EXPECT_NO_THROW(
-      mutable_joint_->set_default_angles(out_of_bounds_low_angles));
+  EXPECT_NO_THROW(mutable_joint_->set_default_angles(out_of_bounds_low_angles));
   EXPECT_NO_THROW(
       mutable_joint_->set_default_angles(out_of_bounds_high_angles));
 }

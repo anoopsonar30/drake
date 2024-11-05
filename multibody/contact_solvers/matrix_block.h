@@ -87,7 +87,8 @@ class MatrixBlock {
    @pre 0 <= start <= end < Gs.size().
    @pre All matrices in Gs are square.
    @pre Gs[start].rows() + ... + Gs[end].rows() == M.rows().
-   @pre If M is sparse, all matrices in Gs are 3x3. */
+   @pre If M is sparse, all matrices in Gs are 3n-by-3n for some positive
+   integer n. */
   MatrixBlock<T> LeftMultiplyByBlockDiagonal(const std::vector<MatrixX<T>>& Gs,
                                              int start, int end) const;
 
@@ -99,6 +100,8 @@ class MatrixBlock {
   /* Returns the MatrixBlock as an Eigen dense matrix. Useful for debugging and
    testing. */
   MatrixX<T> MakeDenseMatrix() const;
+
+  bool operator==(const MatrixBlock<T>&) const = default;
 
  private:
   friend MatrixBlock<T> StackMatrixBlocks<T>(

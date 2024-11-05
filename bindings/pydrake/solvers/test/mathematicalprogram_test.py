@@ -7,7 +7,7 @@ import numpy as np
 import scipy.sparse
 
 from pydrake.autodiffutils import AutoDiffXd
-from pydrake.common import kDrakeAssertIsArmed
+from pydrake.common import kDrakeAssertIsArmed, Parallelism
 from pydrake.common.test_utilities import numpy_compare
 from pydrake.forwarddiff import jacobian
 from pydrake.math import ge
@@ -65,6 +65,7 @@ class TestMathematicalProgram(unittest.TestCase):
         self.assertEqual(vars.dtype, sym.Variable)
         vars_all = prog.decision_variables()
         self.assertEqual(vars_all.shape, (5,))
+        self.assertTrue(prog.IsThreadSafe())
 
     def test_clone_and_copy_and_deepcopy(self):
 
@@ -138,7 +139,7 @@ class TestMathematicalProgram(unittest.TestCase):
         self.assertTrue(np.allclose(result.get_x_val(), x_expected))
         self.assertEqual(result.get_solution_result(),
                          mp.SolutionResult.kSolutionFound)
-        self.assertEqual(result.get_optimal_cost(), 3.0)
+        self.assertAlmostEqual(result.get_optimal_cost(), 3.0, places=7)
         self.assertTrue(result.get_solver_id().name())
         self.assertTrue(np.allclose(result.GetSolution(), x_expected))
         self.assertAlmostEqual(result.GetSolution(qp.x[0]), 1.0)
@@ -538,14 +539,25 @@ class TestMathematicalProgram(unittest.TestCase):
         S = prog.NewSymmetricContinuousVariables(3, "S")
         prog.AddLinearConstraint(S[0, 1] >= 1)
         prog.AddPositiveSemidefiniteConstraint(S)
+        minor_indices = {0, 2}
         self.assertEqual(len(prog.positive_semidefinite_constraints()), 1)
         self.assertEqual(
             prog.positive_semidefinite_constraints()[0].evaluator().
             matrix_rows(), 3)
+        prog.AddPrincipalSubmatrixIsPsdConstraint(S, minor_indices)
+        self.assertEqual(len(prog.positive_semidefinite_constraints()), 2)
+        self.assertEqual(
+            prog.positive_semidefinite_constraints()[1].evaluator().
+            matrix_rows(), 2)
         prog.AddPositiveSemidefiniteConstraint(S+S)
+        prog.AddPrincipalSubmatrixIsPsdConstraint(S+S, minor_indices)
         prog.AddPositiveDiagonallyDominantMatrixConstraint(X=S)
+        prog.AddPositiveDiagonallyDominantDualConeMatrixConstraint(X=S)
+        prog.AddPositiveDiagonallyDominantDualConeMatrixConstraint(X=S+S)
         prog.AddScaledDiagonallyDominantMatrixConstraint(X=S)
         prog.AddScaledDiagonallyDominantMatrixConstraint(X=S+S)
+        prog.AddScaledDiagonallyDominantDualConeMatrixConstraint(X=S)
+        prog.AddScaledDiagonallyDominantDualConeMatrixConstraint(X=S+S)
         prog.AddLinearCost(np.trace(S))
         result = mp.Solve(prog)
         self.assertTrue(result.is_success())
@@ -554,6 +566,21 @@ class TestMathematicalProgram(unittest.TestCase):
         tol = 1e-8
         self.assertTrue(np.all(eigs >= -tol))
         self.assertTrue(S[0, 1] >= -tol)
+
+    def test_replace_psd_methods(self):
+        prog = mp.MathematicalProgram()
+        replacement_methods = [
+            prog.TightenPsdConstraintToDd,
+            prog.TightenPsdConstraintToSdd,
+            prog.RelaxPsdConstraintToDdDualCone,
+            prog.RelaxPsdConstraintToSddDualCone,
+        ]
+        for method in replacement_methods:
+            X = prog.NewSymmetricContinuousVariables(3)
+            psd_constraint = prog.AddPositiveSemidefiniteConstraint(X)
+            self.assertEqual(len(prog.positive_semidefinite_constraints()), 1)
+            method(constraint=psd_constraint)
+            self.assertEqual(len(prog.positive_semidefinite_constraints()), 0)
 
     def test_sos_polynomial(self):
         # Only check if the API works.
@@ -690,7 +717,7 @@ class TestMathematicalProgram(unittest.TestCase):
         self.assertAlmostEqual(a_val[0], 1)
         self.assertAlmostEqual(a_val[1], 2)
 
-    def test_log_determinant(self):
+    def test_log_determinant_cost(self):
         # Find the minimal ellipsoid that covers some given points.
         prog = mp.MathematicalProgram()
         X = prog.NewSymmetricContinuousVariables(2)
@@ -704,6 +731,14 @@ class TestMathematicalProgram(unittest.TestCase):
         self.assertEqual(log_det_Z.shape, (2, 2))
         result = mp.Solve(prog)
         self.assertTrue(result.is_success())
+
+    def test_log_determinant_lower(self):
+        prog = mp.MathematicalProgram()
+        X = prog.NewSymmetricContinuousVariables(2)
+        linear_constraint, t, Z = prog.AddLogDeterminantLowerBoundConstraint(
+            X=X, lower=1)
+        self.assertEqual(t.shape, (2,))
+        self.assertEqual(Z.shape, (2, 2))
 
     def test_maximize_geometric_mean(self):
         # Find the smallest axis-algined ellipsoid that covers some given
@@ -774,21 +809,41 @@ class TestMathematicalProgram(unittest.TestCase):
         x = prog.NewContinuousVariables(2, 'x')
         lb = [0., 0.]
         ub = [1., 1.]
+
         prog.AddBoundingBoxConstraint(lb, ub, x)
         prog.AddBoundingBoxConstraint(0., 1., x[0])
         prog.AddBoundingBoxConstraint(0., 1., x)
-        prog.AddLinearConstraint(A=np.eye(2), lb=np.zeros(2), ub=np.ones(2),
-                                 vars=x)
+
+        A_dense = np.eye(2)
+        dense1 = prog.AddLinearConstraint(
+            A=A_dense, lb=np.zeros(2), ub=np.ones(2), vars=x)
+        # Ensure that the dense version of the binding has been called.
+        self.assertTrue(dense1.evaluator().is_dense_A_constructed())
+
+        A_sparse = scipy.sparse.csc_matrix(A_dense)
+        sparse1 = prog.AddLinearConstraint(
+            A=A_sparse, lb=np.zeros(2), ub=np.ones(2), vars=x)
+        # Ensure that the sparse version of the binding has been called.
+        self.assertFalse(sparse1.evaluator().is_dense_A_constructed())
         prog.AddLinearConstraint(a=[1, 1], lb=0, ub=0, vars=x)
         prog.AddLinearConstraint(e=x[0], lb=0, ub=1)
         prog.AddLinearConstraint(v=x, lb=[0, 0], ub=[1, 1])
         prog.AddLinearConstraint(f=(x[0] == 0))
 
-        prog.AddLinearEqualityConstraint(np.eye(2), np.zeros(2), x)
-        prog.AddLinearEqualityConstraint(x[0] == 1)
-        prog.AddLinearEqualityConstraint(x[0] + x[1], 1)
+        dense2 = prog.AddLinearEqualityConstraint(
+            Aeq=A_dense, beq=np.zeros(2), vars=x)
+        # Ensure that the dense version of the binding has been called.
+        self.assertTrue(dense2.evaluator().is_dense_A_constructed())
+
+        sparse2 = prog.AddLinearEqualityConstraint(
+            Aeq=A_sparse, beq=np.zeros(2), vars=x)
+        # Ensure that the sparse version of the binding has been called.
+        self.assertFalse(sparse2.evaluator().is_dense_A_constructed())
+        prog.AddLinearEqualityConstraint(a=[1, 1], beq=0, vars=x)
+        prog.AddLinearEqualityConstraint(f=x[0] == 1)
+        prog.AddLinearEqualityConstraint(e=x[0] + x[1], b=1)
         prog.AddLinearEqualityConstraint(
-            2 * x[:2] + np.array([0, 1]), np.array([3, 2]))
+            v=2 * x[:2] + np.array([0, 1]), b=np.array([3, 2]))
 
     def test_constraint_set_bounds(self):
         prog = mp.MathematicalProgram()
@@ -1005,9 +1060,15 @@ class TestMathematicalProgram(unittest.TestCase):
     def test_add_l2norm_cost(self):
         prog = mp.MathematicalProgram()
         x = prog.NewContinuousVariables(2, 'x')
-        prog.AddL2NormCost(
-            A=np.array([[1, 2.], [3., 4]]), b=np.array([1., 2.]), vars=x)
+        A = np.array([[1, 2.], [3., 4]])
+        b = np.array([1., 2.])
+        prog.AddL2NormCost(A=A, b=b, vars=x)
         self.assertEqual(len(prog.l2norm_costs()), 1)
+        prog.AddL2NormCost(
+            e=np.linalg.norm(A@x+b), psd_tol=1e-8, coefficient_tol=1e-8)
+        self.assertEqual(len(prog.l2norm_costs()), 2)
+        prog.AddCost(e=np.linalg.norm(A@x+b))
+        self.assertEqual(len(prog.l2norm_costs()), 3)
 
     def test_add_l2norm_cost_using_conic_constraint(self):
         prog = mp.MathematicalProgram()
@@ -1053,6 +1114,16 @@ class TestMathematicalProgram(unittest.TestCase):
         result = mp.Solve(prog)
         self.assertTrue(result.GetSolution(x)[0] <= 2)
         self.assertTrue(result.GetSolution(x)[0] >= -2)
+
+    def test_addconstraint_binding(self):
+        prog = mp.MathematicalProgram()
+        x = prog.NewContinuousVariables(1, 'x')
+        prog.AddConstraint(x[0] <= 2)
+        # This ensures that constraint is of type Binding<Constraint> and not
+        # a more specific type.
+        constraint = prog.GetAllConstraints()[0]
+        constraint2 = prog.AddConstraint(constraint)
+        self.assertEqual(constraint, constraint2)
 
     def test_initial_guess(self):
         prog = mp.MathematicalProgram()
@@ -1127,9 +1198,14 @@ class TestMathematicalProgram(unittest.TestCase):
         prog.AddCost(z[0])
 
         # Add LorentzConeConstraints
+        prog.AddLorentzConeConstraint(
+            f=(z[0] >= np.linalg.norm(x)),
+            eval_type=mp.LorentzConeConstraint.EvalType.kConvexSmooth,
+            psd_tol=1e-7,
+            coefficient_tol=1e-7)
         prog.AddLorentzConeConstraint(np.array([0*x[0]+1, x[0]-1, x[1]-1]))
         prog.AddLorentzConeConstraint(np.array([z[0], x[0], x[1]]))
-        self.assertEqual(len(prog.lorentz_cone_constraints()), 2)
+        self.assertEqual(len(prog.lorentz_cone_constraints()), 3)
 
         # Test result
         # The default initial guess is [0, 0, 0]. This initial guess is bad
@@ -1240,11 +1316,17 @@ class TestMathematicalProgram(unittest.TestCase):
         options_object.SetOption(mp.CommonSolverOption.kPrintToConsole, 1)
         options_object.SetOption(
             mp.CommonSolverOption.kPrintFileName, "foo.txt")
+        options_object.SetOption(
+            mp.CommonSolverOption.kStandaloneReproductionFileName,
+            "reproduction.py")
         options = options_object.GetOptions(solver_id)
         self.assertDictEqual(
             options, {"double_key": 1.0, "int_key": 2, "string_key": "3"})
         self.assertEqual(options_object.get_print_to_console(), True)
         self.assertEqual(options_object.get_print_file_name(), "foo.txt")
+        self.assertEqual(
+            options_object.get_standalone_reproduction_file_name(),
+            "reproduction.py")
 
         prog.SetSolverOptions(options_object)
         prog_options = prog.GetSolverOptions(solver_id)
@@ -1287,6 +1369,25 @@ class TestMathematicalProgram(unittest.TestCase):
         numpy_compare.assert_equal(prog.indeterminates()[0], x0)
         numpy_compare.assert_equal(prog.indeterminate(1), x1)
 
+    def test_required_capabilities(self):
+
+        prog = mp.MathematicalProgram()
+        X = prog.NewSymmetricContinuousVariables(3, "X")
+        prog.AddPositiveSemidefiniteConstraint(X)
+
+        prog.AddLinearConstraint(X[0, 0] >= 0)
+        prog.AddLinearEqualityConstraint(X[1, 0] == 1)
+        prog.AddLinearCost(X[0, 0])
+        expected_attributes = [
+            mp.ProgramAttribute.kLinearCost,
+            mp.ProgramAttribute.kLinearEqualityConstraint,
+            mp.ProgramAttribute.kLinearConstraint,
+            mp.ProgramAttribute.kPositiveSemidefiniteConstraint]
+        for attribute in expected_attributes:
+            self.assertIn(attribute, prog.required_capabilities())
+        for attribute in prog.required_capabilities():
+            self.assertIn(attribute, expected_attributes)
+
     def test_make_first_available_solver(self):
         gurobi_solver = GurobiSolver()
         scs_solver = ScsSolver()
@@ -1308,6 +1409,14 @@ class TestMathematicalProgram(unittest.TestCase):
         prog.ClearVariableScaling()
         scaling = prog.GetVariableScaling()
         self.assertEqual(len(scaling), 0)
+
+    def test_remove_decision_variable(self):
+        prog = mp.MathematicalProgram()
+        x = prog.NewContinuousVariables(3)
+        x1_index = prog.FindDecisionVariableIndex(x[1])
+        x1_index_removed = prog.RemoveDecisionVariable(x[1])
+        self.assertEqual(x1_index, x1_index_removed)
+        self.assertEqual(prog.num_vars(), 2)
 
     def test_remove_cost(self):
         prog = mp.MathematicalProgram()
@@ -1397,6 +1506,15 @@ class TestMathematicalProgram(unittest.TestCase):
         prog.RemoveConstraint(constraint=lcp_con)
         self.assertEqual(len(prog.linear_complementarity_constraints()), 0)
 
+    def test_remove_visualization_callback(self):
+        prog = mp.MathematicalProgram()
+        x = prog.NewContinuousVariables(3)
+        callback = prog.AddVisualizationCallback(
+            lambda x_val: print(x_val[0]), x)
+        count = prog.RemoveVisualizationCallback(callback=callback)
+        self.assertEqual(count, 1)
+        self.assertEqual(len(prog.visualization_callbacks()), 0)
+
     def test_get_program_type(self):
         prog = mp.MathematicalProgram()
         x = prog.NewContinuousVariables(2)
@@ -1408,6 +1526,102 @@ class TestMathematicalProgram(unittest.TestCase):
         result = MathematicalProgramResult()
         self.assertEqual(result.get_solution_result(),
                          mp.SolutionResult.kSolutionResultNotSet)
+
+    def test_solve_in_parallel(self):
+        prog = mp.MathematicalProgram()
+        x = prog.NewContinuousVariables(2)
+        prog.AddLinearConstraint(x[0] + x[1] == 2)
+        prog.AddQuadraticCost(x[0] ** 2, is_convex=True)
+
+        num_progs = 4
+        progs = [prog for _ in range(num_progs)]
+        initial_guesses = [np.zeros(2) for _ in range(num_progs)]
+        solver_ids = [ScsSolver().solver_id() for _ in range(num_progs)]
+        solver_options = [SolverOptions() for _ in range(num_progs)]
+
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=initial_guesses,
+                                     solver_options=solver_options,
+                                     solver_ids=solver_ids,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=None,
+                                     solver_options=solver_options,
+                                     solver_ids=solver_ids,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=initial_guesses,
+                                     solver_options=None,
+                                     solver_ids=solver_ids,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=initial_guesses,
+                                     solver_options=solver_options,
+                                     solver_ids=solver_ids,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        # Finally, interleave None into initial_guesses, solver_options, and
+        # solver_ids.
+        initial_guesses[0] = None
+        solver_options[0] = None
+        solver_ids[0] = None
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=initial_guesses,
+                                     solver_options=solver_options,
+                                     solver_ids=solver_ids,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        # Now we test the overload
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=None,
+                                     solver_options=SolverOptions(),
+                                     solver_id=ScsSolver().solver_id(),
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=initial_guesses,
+                                     solver_options=SolverOptions(),
+                                     solver_id=ScsSolver().solver_id(),
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        # Ensure that all options being None does not cause ambiguity.
+        results = mp.SolveInParallel(progs=progs,
+                                     initial_guesses=None,
+                                     solver_options=None,
+                                     solver_id=None,
+                                     parallelism=Parallelism.Max(),
+                                     dynamic_schedule=False)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
+
+        # Ensure default arguments do not cause ambiguity.
+        results = mp.SolveInParallel(progs=progs)
+        self.assertEqual(len(results), len(progs))
+        self.assertTrue(all([r.is_success() for r in results]))
 
 
 class DummySolverInterface(SolverInterface):

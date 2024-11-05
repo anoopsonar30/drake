@@ -11,7 +11,12 @@ import tarfile
 
 from datetime import datetime, timezone
 
-from .common import die, gripe, wheel_name
+from .common import (
+    create_snopt_tgz,
+    die, gripe,
+    strip_tar_metadata,
+    wheel_name,
+)
 from .common import resource_root, wheelhouse
 from .common import find_tests
 
@@ -31,32 +36,21 @@ targets = (
     # NOTE: adding or removing a python version?  Please update the artifact
     # tallies in doc/_pages/release_playbook.md (search `Attach binaries`).
     Target(
-        build_platform=Platform('ubuntu', '20.04', 'focal'),
+        build_platform=Platform('ubuntu', '22.04', 'jammy'),
         test_platform=None,
-        python_version_tuple=(3, 8)),
+        python_version_tuple=(3, 10)),
     Target(
-        build_platform=Platform('ubuntu', '20.04', 'focal'),
+        build_platform=Platform('ubuntu', '22.04', 'jammy'),
         test_platform=None,
-        python_version_tuple=(3, 9)),
+        python_version_tuple=(3, 11)),
     Target(
-        build_platform=Platform('ubuntu', '20.04', 'focal'),
-        test_platform=Platform('ubuntu', '22.04', 'jammy'),
-        python_version_tuple=(3, 10, 6),
-        python_sha='f795ff87d11d4b0c7c33bc8851b0c28648d8a4583aa2100a98c22b4326b6d3f3'),  # noqa
-    Target(
-        build_platform=Platform('ubuntu', '20.04', 'focal'),
-        test_platform=Platform('ubuntu', '22.04', 'jammy'),
-        python_version_tuple=(3, 11, 1),
-        python_sha='85879192f2cffd56cb16c092905949ebf3e5e394b7f764723529637901dfb58f'),  # noqa
-    Target(
-        build_platform=Platform('ubuntu', '20.04', 'focal'),
-        # TODO(jwnimmer-tri) Switch the test to 24.04 once that's available.
-        test_platform=Platform('ubuntu', '23.10', 'mantic'),
+        build_platform=Platform('ubuntu', '22.04', 'jammy'),
+        test_platform=Platform('ubuntu', '24.04', 'noble'),
         python_version_tuple=(3, 12, 0),
         python_sha='795c34f44df45a0e9b9710c8c71c15c671871524cd412ca14def212e8ccb155d'),  # noqa
 )
 glibc_versions = {
-    'focal': '2_31',
+    'jammy': '2_35',
 }
 
 
@@ -95,6 +89,16 @@ def _cleanup():
         _docker('image', 'rm', *_images_to_remove)
 
 
+def _git_sha(path):
+    """
+    Determines the git SHA of the repository which contains or is rooted at the
+    specified `path`.
+    """
+    command = ['git', 'rev-parse', 'HEAD']
+    raw = subprocess.check_output(command, cwd=path)
+    return raw.decode(sys.stdout.encoding).strip()
+
+
 def _git_root(path):
     """
     Determines the canonical repository root of the working tree which includes
@@ -103,17 +107,6 @@ def _git_root(path):
     command = ['git', 'rev-parse', '--show-toplevel']
     raw = subprocess.check_output(command, cwd=path)
     return raw.decode(sys.stdout.encoding).rsplit('\n', maxsplit=1)[0]
-
-
-def _strip_tar_metadata(info):
-    """
-    Removes some metadata (owner, timestamp) from a TarInfo.
-    """
-    info.uid = info.gid = 0
-    info.uname = info.gname = 'root'
-    info.mtime = 0
-    info.pax_headers = {}
-    return info
 
 
 def _add_to_tar(tar, name, parent_path, root_path, exclude=[]):
@@ -131,7 +124,7 @@ def _add_to_tar(tar, name, parent_path, root_path, exclude=[]):
             _add_to_tar(tar, f, os.path.join(parent_path, name), root_path)
     else:
         tar.add(full_path, tar_path, recursive=False,
-                filter=_strip_tar_metadata)
+                filter=strip_tar_metadata)
 
 
 def _create_source_tar(path):
@@ -139,17 +132,7 @@ def _create_source_tar(path):
     Creates a tarball of the repository working tree.
     """
     print('[-] Creating source archive', end='', flush=True)
-    out = tarfile.open(path, 'w:xz')
-
-    # Add an rcfile that's compatible with our Dockerfile base.
-    rc_lines = [
-        'import %workspace%/tools/ubuntu.bazelrc',
-        'import %workspace%/tools/ubuntu-focal.bazelrc',
-    ]
-    rc_bytes = '\n'.join(rc_lines).encode('utf-8')
-    tarinfo = tarfile.TarInfo('gen/environment.bazelrc')
-    tarinfo.size = len(rc_bytes)
-    out.addfile(tarinfo, io.BytesIO(rc_bytes))
+    out = tarfile.open(path, 'w')
 
     # Walk the git root and archive almost every file we find.
     repo_dir = _git_root(resource_root)
@@ -158,8 +141,7 @@ def _create_source_tar(path):
         if f == '.git' or f == 'user.bazelrc' or f.startswith('bazel-'):
             continue
 
-        # Exclude host-generated setup files; we want the container-relevant
-        # setup file (already added atop this function).
+        # Exclude host-generated setup files.
         if f == 'gen':
             continue
 
@@ -232,8 +214,8 @@ def _build_image(target, identifier, options):
     Runs the build for a target and (optionally) extract the wheel.
     """
     args = [
-        '--ssh', 'default',
         '--build-arg', f'DRAKE_VERSION={options.version}',
+        '--build-arg', f'DRAKE_GIT_SHA={_git_sha(resource_root)}',
     ] + _target_args(target, BUILD)
     if not options.keep_containers:
         args.append('--force-rm')
@@ -241,7 +223,8 @@ def _build_image(target, identifier, options):
     # Build the image.
     if options.tag_stages:
         # Inspect Dockerfile, find stages, and build them.
-        for line in open(os.path.join(resource_root, 'Dockerfile')):
+        dockerfile = os.path.join(resource_root, 'Dockerfile')
+        for line in open(dockerfile, encoding='utf-8'):
             if line.startswith('FROM'):
                 stage = line.strip().split()[-1]
                 tag = _build_stage(target, args, tag_prefix=stage, stage=stage)
@@ -336,8 +319,14 @@ def build(options):
     time = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
     identifier = f'{time}-{salt}'
 
-    # Generate the repository source archive.
-    source_tar = os.path.join(resource_root, 'image', 'drake-src.tar.xz')
+    # Provide the SNOPT source archive as a dependency.
+    snopt_tgz = os.path.join(
+        resource_root, 'image', 'dependencies', 'snopt.tar.gz')
+    _files_to_remove.append(snopt_tgz)
+    create_snopt_tgz(snopt_path=options.snopt_path, output=snopt_tgz)
+
+    # Generate the Drake repository source archive.
+    source_tar = os.path.join(resource_root, 'image', 'drake-src.tar')
     _files_to_remove.append(source_tar)
     _create_source_tar(source_tar)
 

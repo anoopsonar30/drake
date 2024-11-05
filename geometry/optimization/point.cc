@@ -29,15 +29,19 @@ Point::Point(const QueryObject<double>& query_object, GeometryId geometry_id,
              std::optional<FrameId> reference_frame,
              double maximum_allowable_radius)
     : ConvexSet(3, true) {
-  double radius = -1.0;
-  query_object.inspector().GetShape(geometry_id).Reify(this, &radius);
-  if (radius > maximum_allowable_radius) {
+  const Shape& shape = query_object.inspector().GetShape(geometry_id);
+  if (shape.type_name() != "Sphere") {
+    throw std::logic_error(fmt::format(
+        "Point(geometry_id={}, ...) cannot convert a {}, only a Sphere",
+        geometry_id, shape));
+  }
+  const Sphere& sphere = dynamic_cast<const Sphere&>(shape);
+  if (sphere.radius() > maximum_allowable_radius) {
     throw std::runtime_error(
         fmt::format("GeometryID {} has a radius {} is larger than the "
                     "specified maximum_allowable_radius: {}.",
-                    geometry_id, radius, maximum_allowable_radius));
+                    geometry_id, sphere.radius(), maximum_allowable_radius));
   }
-
   const RigidTransformd X_WE =
       reference_frame ? query_object.GetPoseInWorld(*reference_frame)
                       : RigidTransformd::Identity();
@@ -69,8 +73,8 @@ std::optional<VectorXd> Point::DoMaybeGetPoint() const {
   return x_;
 }
 
-bool Point::DoPointInSet(const Eigen::Ref<const VectorXd>& x,
-                         double tol) const {
+std::optional<bool> Point::DoPointInSetShortcut(
+    const Eigen::Ref<const VectorXd>& x, double tol) const {
   return is_approx_equal_abstol(x, x_, tol);
 }
 
@@ -125,9 +129,15 @@ Point::DoToShapeWithPose() const {
                         math::RigidTransformd(x_));
 }
 
-void Point::ImplementGeometry(const Sphere& sphere, void* data) {
-  double* radius = static_cast<double*>(data);
-  *radius = sphere.radius();
+std::vector<std::optional<double>> Point::DoProjectionShortcut(
+    const Eigen::Ref<const Eigen::MatrixXd>& points,
+    EigenPtr<Eigen::MatrixXd> projected_points) const {
+  *projected_points = x_ * Eigen::MatrixXd::Ones(1, points.cols());
+  Eigen::VectorXd distances_eigen =
+      (points - *projected_points).colwise().norm();
+  std::vector<std::optional<double>> distances(
+      distances_eigen.data(), distances_eigen.data() + distances_eigen.size());
+  return distances;
 }
 
 }  // namespace optimization

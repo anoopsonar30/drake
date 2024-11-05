@@ -5,8 +5,8 @@
 #include <utility>
 #include <vector>
 
-#include "drake/multibody/tree/body.h"
 #include "drake/multibody/tree/multibody_tree.h"
+#include "drake/multibody/tree/rigid_body.h"
 
 namespace drake {
 namespace multibody {
@@ -21,18 +21,15 @@ LinearBushingRollPitchYaw<T>::LinearBushingRollPitchYaw(
     const Vector3<double>& torque_damping_constants,
     const Vector3<double>& force_stiffness_constants,
     const Vector3<double>& force_damping_constants)
-    : LinearBushingRollPitchYaw(frameC.model_instance(),
-                                frameA.index(), frameC.index(),
-                                torque_stiffness_constants,
-                                torque_damping_constants,
-                                force_stiffness_constants,
-                                force_damping_constants) {}
+    : LinearBushingRollPitchYaw(
+          frameC.model_instance(), frameA.index(), frameC.index(),
+          torque_stiffness_constants, torque_damping_constants,
+          force_stiffness_constants, force_damping_constants) {}
 
 template <typename T>
 LinearBushingRollPitchYaw<T>::LinearBushingRollPitchYaw(
-    ModelInstanceIndex model_instance,
-    FrameIndex frameA_index, FrameIndex frameC_index,
-    const Vector3<double>& torque_stiffness_constants,
+    ModelInstanceIndex model_instance, FrameIndex frameA_index,
+    FrameIndex frameC_index, const Vector3<double>& torque_stiffness_constants,
     const Vector3<double>& torque_damping_constants,
     const Vector3<double>& force_stiffness_constants,
     const Vector3<double>& force_damping_constants)
@@ -48,6 +45,9 @@ LinearBushingRollPitchYaw<T>::LinearBushingRollPitchYaw(
   DRAKE_THROW_UNLESS(force_stiffness_constants.minCoeff() >= 0);
   DRAKE_THROW_UNLESS(force_damping_constants.minCoeff() >= 0);
 }
+
+template <typename T>
+LinearBushingRollPitchYaw<T>::~LinearBushingRollPitchYaw() = default;
 
 template <typename T>
 SpatialForce<T> LinearBushingRollPitchYaw<T>::CalcBushingSpatialForceOnFrameA(
@@ -100,7 +100,6 @@ void LinearBushingRollPitchYaw<T>::DoCalcAndAddForceContribution(
     const internal::PositionKinematicsCache<T>& /* pc */,
     const internal::VelocityKinematicsCache<T>& /* vc */,
     MultibodyForces<T>* forces) const {
-
   // Form F_Ao_A, the spatial force at point Ao of frame A due to the bushing.
   const SpatialForce<T> F_Ao_A = CalcBushingSpatialForceOnFrameA(context);
 
@@ -135,8 +134,8 @@ void LinearBushingRollPitchYaw<T>::DoCalcAndAddForceContribution(
 
   // Apply a torque to link L0 and apply the force −𝐟 to L0ₒ.
   // Apply a torque to link L1 and apply the force +𝐟 to L1ₒ.
-  F_BodyOrigin_W_array[link0().node_index()] += F_L0_W;
-  F_BodyOrigin_W_array[link1().node_index()] += F_L1_W;
+  F_BodyOrigin_W_array[link0().mobod_index()] += F_L0_W;
+  F_BodyOrigin_W_array[link1().mobod_index()] += F_L1_W;
 }
 
 template <typename T>
@@ -176,7 +175,7 @@ math::RotationMatrix<T> LinearBushingRollPitchYaw<T>::CalcR_AB(
   // e3 = λz sin(θ/4) = q3 / (2 cos(θ/4) ).
   // ----------------------------------------------------------------------
   using std::sqrt;
-  const T e0 = sqrt(0.5 *(q0 + 1));
+  const T e0 = sqrt(0.5 * (q0 + 1));
   // If q0 = −1 the e0 = 0 and the next line has a divide-by-zero error.
   // However, R_AC.ToQuaternion() guarantees q0 >= 0, so sqrt(0.5) <= e0 <= 1
   // which means the angle θₑ in e0 = cos(θₑ/2) has range  0 <= θₑ <= π/2.
@@ -215,8 +214,8 @@ template <typename T>
 Vector3<T> LinearBushingRollPitchYaw<T>::CalcBushing_xyzDt(
     const systems::Context<T>& context) const {
   // Calculate V_AC_A, frame C's spatial velocity in frame A, expressed in A.
-  const SpatialVelocity<T> V_AC_A = frameC().CalcSpatialVelocity(context,
-      frameA(), frameA());
+  const SpatialVelocity<T> V_AC_A =
+      frameC().CalcSpatialVelocity(context, frameA(), frameA());
   const Vector3<T>& w_AC_A = V_AC_A.rotational();
   const Vector3<T>& v_ACo_A = V_AC_A.translational();
   const Vector3<T> w_AB_A = 0.5 * w_AC_A;
@@ -283,20 +282,21 @@ Vector3<T> LinearBushingRollPitchYaw<T>::CalcBushingTorqueOnCExpressedInA(
 template <typename T>
 void LinearBushingRollPitchYaw<T>::ThrowPitchAngleViolatesGimbalLockTolerance(
     const T& pitch_angle, const char* function_name) {
-    const double pitch_radians = ExtractDoubleOrThrow(pitch_angle);
-    const double pitch_tolerance =
-        math::RollPitchYaw<double>::GimbalLockPitchAngleTolerance();
-    std::string message = fmt::format("LinearBushingRollPitchYaw::{}():"
-        " Pitch angle p = {:G} degrees is within {:G} degrees of gimbal-lock"
-        " which means p ≈ (n*π ± π/2) where n = 0, 1, 2, ..."
-        " There is a divide-by-zero error (singularity) at gimbal-lock due to"
-        " this bushing's mathematical dependence on roll-pitch-yaw angles."
-        " A pitch angle near gimbal-lock cause numerical inaccuracies.  To"
-        " avoid this pitch angle problem, use a reasonable default alignment of"
-        " the frames associated with this bushing and/or choose stiffness and"
-        " damping properties that help avoid pitch angles near gimbal lock.",
-        function_name, pitch_radians * 180 / M_PI, pitch_tolerance);
-    throw std::runtime_error(message);
+  const double pitch_radians = ExtractDoubleOrThrow(pitch_angle);
+  const double pitch_tolerance =
+      math::RollPitchYaw<double>::GimbalLockPitchAngleTolerance();
+  std::string message = fmt::format(
+      "LinearBushingRollPitchYaw::{}():"
+      " Pitch angle p = {:G} degrees is within {:G} degrees of gimbal-lock"
+      " which means p ≈ (n*π ± π/2) where n = 0, 1, 2, ..."
+      " There is a divide-by-zero error (singularity) at gimbal-lock due to"
+      " this bushing's mathematical dependence on roll-pitch-yaw angles."
+      " A pitch angle near gimbal-lock cause numerical inaccuracies.  To"
+      " avoid this pitch angle problem, use a reasonable default alignment of"
+      " the frames associated with this bushing and/or choose stiffness and"
+      " damping properties that help avoid pitch angles near gimbal lock.",
+      function_name, pitch_radians * 180 / M_PI, pitch_tolerance);
+  throw std::runtime_error(message);
 }
 
 template <typename T>
@@ -348,7 +348,8 @@ LinearBushingRollPitchYaw<T>::TemplatedDoCloneToScalar(
   // is needed to facilitate the _private_ use of constructor below.
   std::unique_ptr<LinearBushingRollPitchYaw<ToScalar>> bushing_clone(
       new LinearBushingRollPitchYaw<ToScalar>(this->model_instance(),
-          frameA_index_, frameC_index_, k012, d012, kxyz, dxyz));
+                                              frameA_index_, frameC_index_,
+                                              k012, d012, kxyz, dxyz));
 
   return bushing_clone;
 }
@@ -378,4 +379,4 @@ LinearBushingRollPitchYaw<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::LinearBushingRollPitchYaw)
+    class ::drake::multibody::LinearBushingRollPitchYaw);

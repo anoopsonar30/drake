@@ -1,15 +1,16 @@
-load("//tools/workspace/crate_universe:lock/archives.bzl", "ARCHIVES")
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "patch")
 load("//tools/workspace:metadata.bzl", "generate_repository_metadata")
+load("//tools/workspace/crate_universe:lock/archives.bzl", "ARCHIVES")
 
 def _add_mirrors(*, urls, mirrors):
     # The input `urls` will be a singleton list like this:
     # [
-    #   "https://crates.io/api/v1/crates/amd/0.2.2/download",
+    #   "https://static.crates.io/crates/amd/0.2.2/download",
     # ]
     #
     # Our goal is to make it into a multi-URL list like this:
     # [
-    #   "https://crates.io/api/v1/crates/amd/0.2.2/download",
+    #   "https://static.crates.io/crates/amd/0.2.2/download",
     #   "https://drake-mirror.csail.mit.edu/crates.io/amd/0.2.2/download",
     #   "https://s3.amazonaws.com/drake-mirror/crates.io/amd/0.2.2/download",
     # ]
@@ -18,11 +19,10 @@ def _add_mirrors(*, urls, mirrors):
     if len(urls) != 1:
         fail("Expected exactly one crate URL, got: " + str(urls))
     (default_url,) = urls
-    middle = "/api/v1/crates/"
-    tokens = default_url.split(middle)
-    if len(tokens) != 2:
-        fail("Failed to match " + middle + " in URL " + default_url)
-    (_, archive) = tokens
+    prefix = "https://static.crates.io/crates/"
+    if not default_url.startswith(prefix):
+        fail("Failed to match " + prefix + " at start of URL " + default_url)
+    archive = default_url[len(prefix):]
 
     # Substitute the {default_url} or {archive} into the mirror pattern(s).
     result = []
@@ -47,6 +47,8 @@ def _create_http_archive_impl(repo_ctx):
         stripPrefix = strip_prefix,
         type = type,
     )
+    if repo_ctx.attr.patches:
+        patch(repo_ctx)
     repo_ctx.symlink(repo_ctx.attr.build_file, "BUILD.bazel")
     generate_repository_metadata(
         repo_ctx,
@@ -64,6 +66,9 @@ crate_http_archive = repository_rule(
         "mirrors": attr.string_list_dict(
             mandatory = True,
         ),
+        "patches": attr.label_list(),
+        "patch_tool": attr.string(default = "patch"),
+        "patch_args": attr.string_list(default = ["-p0"]),
         "sha256": attr.string(
             mandatory = True,
         ),
@@ -80,6 +85,12 @@ crate_http_archive = repository_rule(
 )
 
 def crate_universe_repositories(*, mirrors, excludes = []):
+    # This dependency is part of a "cohort" defined in
+    # drake/tools/workspace/new_release.py.  When practical, all members of
+    # this cohort should be updated at the same time.
+    #
+    # Metadata for this repository is additionally defined in
+    # drake/tools/workspace/metadata.py.
     for kwargs in ARCHIVES:
         if kwargs["name"] not in excludes:
             crate_http_archive(

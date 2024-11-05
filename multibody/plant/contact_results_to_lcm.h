@@ -106,7 +106,7 @@ bool operator==(const FullBodyName& n1, const FullBodyName& n2);
 template <typename T>
 class ContactResultsToLcmSystem final : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultsToLcmSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ContactResultsToLcmSystem);
 
   /** Constructs an instance with *default* geometry names (e.g., "Id(7)").
 
@@ -124,6 +124,8 @@ class ContactResultsToLcmSystem final : public systems::LeafSystem<T> {
     body_names_ = other.body_names_;
   }
 
+  ~ContactResultsToLcmSystem() final;
+
   const systems::InputPort<T>& get_contact_result_input_port() const;
   const systems::OutputPort<T>& get_lcm_message_output_port() const;
 
@@ -138,7 +140,8 @@ class ContactResultsToLcmSystem final : public systems::LeafSystem<T> {
 
   // Allow different specializations to access each other's private data for
   // scalar conversion.
-  template <typename U> friend class ContactResultsToLcmSystem;
+  template <typename U>
+  friend class ContactResultsToLcmSystem;
 
   // Special constructor that handles configuring ports. Used by both public
   // constructor and scalar-converting copy constructor.
@@ -190,9 +193,9 @@ class ContactResultsToLcmSystem final : public systems::LeafSystem<T> {
  @anchor contact_result_vis_creation
 
  These functions extend a Diagram with the required components to publish
- contact results (as reported by MultibodyPlant) to a visualizer (either Meldis
- or the legacy ``drake_visualizer`` application of days past). We recommend
- using these functions instead of assembling the requisite components by hand.
+ contact results (as reported by MultibodyPlant) to a visualizer (Meldis).
+ We recommend using these functions instead of assembling the requisite
+ components by hand.
 
  These must be called _during_ Diagram building. Each function makes
  modifications to the diagram being constructed by `builder` including the
@@ -264,4 +267,4 @@ systems::lcm::LcmPublisherSystem* ConnectContactResultsToDrakeVisualizer(
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::ContactResultsToLcmSystem)
+    class drake::multibody::ContactResultsToLcmSystem);

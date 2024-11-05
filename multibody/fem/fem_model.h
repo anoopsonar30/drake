@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <Eigen/Sparse>
 
@@ -11,6 +12,7 @@
 #include "drake/common/eigen_types.h"
 #include "drake/multibody/contact_solvers/block_sparse_lower_triangular_or_symmetric_matrix.h"
 #include "drake/multibody/fem/dirichlet_boundary_condition.h"
+#include "drake/multibody/fem/fem_plant_data.h"
 #include "drake/multibody/fem/fem_state.h"
 
 namespace drake {
@@ -43,10 +45,9 @@ namespace fem {
      R(X,t)J(X,t) = R(X,0),
      R(X,0)A(X,t) = fᵢₙₜ(X,t) + fₑₓₜ(X,t),
 
- where R is mass density, fᵢₙₜ and fₑₓₜ are internal and external force (only
- gravity for now) densities respectively, and J is the determinant of the
- deformation gradient. Using finite element method to discretize in space, one
- gets
+ where R is mass density, fᵢₙₜ and fₑₓₜ are internal and external force
+ densities respectively, and J is the determinant of the deformation gradient.
+ Using finite element method to discretize in space, one gets
 
      ϕ(X,t) = ∑ᵢ xᵢ(t)Nᵢ(X)
      V(X,t) = ∑ᵢ vᵢ(t)Nᵢ(X)
@@ -74,7 +75,7 @@ namespace fem {
  deformable solids." Synthesis Lectures on Visual Computing: Computer Graphics,
  Animation, Computational Photography, and Imaging 1.1 (2015): 1-69.
 
- @tparam_nonsymbolic_scalar */
+ @tparam_default_scalar */
 template <typename T>
 class FemModel {
  public:
@@ -117,7 +118,9 @@ class FemModel {
     bool built_{false};
   };
 
-  virtual ~FemModel() = default;
+  virtual ~FemModel();
+
+  std::unique_ptr<FemModel<T>> Clone() const;
 
   /* The `num_dofs()` is always a multiple of 3. It is enforced by
    FemStateSystem. */
@@ -134,12 +137,14 @@ class FemModel {
   std::unique_ptr<FemState<T>> MakeFemState() const;
 
   /** Calculates the residual G(x, v, a) (see class doc) evaluated at the
-   given FEM state. The residual for degrees of freedom with Dirichlet boundary
-   conditions is set to zero. Therefore their residual should not be used as a
-   metric for the error on the boundary condition.
+   given FEM state using the given `plant_data`. The residual for degrees of
+   freedom with Dirichlet boundary conditions is set to zero. Therefore their
+   residual should not be used as a metric for the error on the boundary
+   condition.
    @pre residual != nullptr.
    @throws std::exception if the FEM state is incompatible with this model. */
   void CalcResidual(const FemState<T>& fem_state,
+                    const FemPlantData<T>& plant_data,
                     EigenPtr<VectorX<T>> residual) const;
 
   /** Calculates an approximated tangent matrix evaluated at the given FEM
@@ -176,12 +181,6 @@ class FemModel {
    @throws std::exception if T is not double. */
   std::unique_ptr<contact_solvers::internal::Block3x3SparseSymmetricMatrix>
   MakeTangentMatrix() const;
-
-  /** Sets the gravity vector for all elements in this model. */
-  void set_gravity_vector(const Vector3<T>& gravity) { gravity_ = gravity; }
-
-  /** Returns the gravity vector for all elements in this model. */
-  const Vector3<T>& gravity_vector() const { return gravity_; }
 
   /** Applies boundary condition set for this %FemModel to the input `state`.
    No-op if no boundary condition is set.
@@ -222,6 +221,10 @@ class FemModel {
   /** Constructs an empty FEM model. */
   FemModel();
 
+  /** FemModelImpl must override this method to provide an implementation to
+   make a deep copy of the concrete FemModel. */
+  virtual std::unique_ptr<FemModel<T>> DoClone() const = 0;
+
   /** Returns the reference positions of this model. */
   virtual VectorX<T> MakeReferencePositions() const = 0;
 
@@ -230,6 +233,7 @@ class FemModel {
    compatible with `this` FEM model, and the input `residual` is guaranteed to
    be non-null and properly sized. */
   virtual void DoCalcResidual(const FemState<T>& fem_state,
+                              const FemPlantData<T>& plant_data,
                               EigenPtr<VectorX<T>> residual) const = 0;
 
   /** FemModelImpl must override this method to provide an implementation for
@@ -271,7 +275,6 @@ class FemModel {
   /* The system that manages the states and cache entries of this FEM model.
    */
   std::unique_ptr<internal::FemStateSystem<T>> fem_state_system_;
-  Vector3<T> gravity_{0, 0, -9.81};
   /* The Dirichlet boundary condition that the model is subject to. */
   internal::DirichletBoundaryCondition<T> dirichlet_bc_;
 };

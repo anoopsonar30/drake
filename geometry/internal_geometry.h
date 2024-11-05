@@ -12,6 +12,7 @@
 #include "drake/geometry/geometry_ids.h"
 #include "drake/geometry/geometry_roles.h"
 #include "drake/geometry/internal_frame.h"
+#include "drake/geometry/proximity/polygon_surface_mesh.h"
 #include "drake/geometry/proximity/volume_mesh.h"
 #include "drake/geometry/shape_specification.h"
 #include "drake/math/rigid_transform.h"
@@ -34,7 +35,7 @@ namespace internal {
  the registered geometry), its name, and its *declared* geometry.  */
 class InternalGeometry {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(InternalGeometry)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(InternalGeometry);
 
   // TODO(SeanCurtis-TRI): Is this strictly required? Typically, I have this to
   // be compatible with STL structures that need to default construct. Confirm
@@ -72,13 +73,13 @@ class InternalGeometry {
   /* Compares two %InternalGeometry instances for "equality". Two internal
    geometries are considered equal if they have the same geometry identifier.
    */
-  bool operator==(const InternalGeometry &other) const {
+  bool operator==(const InternalGeometry& other) const {
     return id_ == other.id_;
   }
 
   /* Compares two %InternalGeometry instances for inequality. See operator==()
    for the definition of equality.  */
-  bool operator!=(const InternalGeometry &other) const {
+  bool operator!=(const InternalGeometry& other) const {
     return !(*this == other);
   }
 
@@ -187,6 +188,11 @@ class InternalGeometry {
   /* Reports if the geometry has a perception role. */
   bool has_perception_role() const { return perception_props_ != std::nullopt; }
 
+  /* Returns a pointer to the geometry's properties associated with the given
+   `role` (if they are defined). Nullptr otherwise. Always returns the nullptr
+   for Role::kUnassigned. */
+  const GeometryProperties* properties(Role role) const;
+
   /* Returns a pointer to the geometry's proximity properties (if they are
    defined. Nullptr otherwise.  */
   const ProximityProperties* proximity_properties() const {
@@ -210,26 +216,18 @@ class InternalGeometry {
 
   /* Removes the proximity role assigned to this geometry -- if there was
    no proximity role previously, this has no effect.  */
-  void RemoveProximityRole() {
-    proximity_props_ = std::nullopt;
-  }
+  void RemoveProximityRole() { proximity_props_ = std::nullopt; }
 
   /* Removes the illustration role assigned to this geometry -- if there was
    no illustration role previously, this has no effect.  */
-  void RemoveIllustrationRole() {
-    illustration_props_ = std::nullopt;
-  }
+  void RemoveIllustrationRole() { illustration_props_ = std::nullopt; }
 
   /* Removes the perception role assigned to this geometry -- if there was
    no perception role previously, this has no effect.  */
-  void RemovePerceptionRole() {
-    perception_props_ = std::nullopt;
-  }
+  void RemovePerceptionRole() { perception_props_ = std::nullopt; }
 
   /* Changes the name of the geometry to `name`. */
-  void set_name(const std::string& name) {
-    name_ = name;
-  }
+  void set_name(const std::string& name) { name_ = name; }
 
   //@}
 
@@ -274,6 +272,10 @@ class InternalGeometry {
   // configuration. The vertex positions are expressed in the geometry's
   // frame, G. It's a nullptr if the geometry is rigid.
   copyable_unique_ptr<VolumeMesh<double>> reference_mesh_;
+
+  // An optional representation of the convex hull associated with this
+  // geometry.
+  copyable_unique_ptr<PolygonSurfaceMesh<double>> convex_hull_;
 };
 
 }  // namespace internal

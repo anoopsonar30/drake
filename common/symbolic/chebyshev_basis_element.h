@@ -18,7 +18,7 @@ namespace symbolic {
  */
 class ChebyshevBasisElement : public PolynomialBasisElement {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ChebyshevBasisElement)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ChebyshevBasisElement);
 
   /** Constructs a ChebyshevBasisElement equals to 1. */
   ChebyshevBasisElement();
@@ -40,7 +40,7 @@ class ChebyshevBasisElement : public PolynomialBasisElement {
   ChebyshevBasisElement(const Eigen::Ref<const VectorX<Variable>>& vars,
                         const Eigen::Ref<const Eigen::VectorXi>& degrees);
 
-  ~ChebyshevBasisElement() override = default;
+  ~ChebyshevBasisElement() override;
 
   /**
    * Compares two ChebyshevBasisElement in lexicographic order.

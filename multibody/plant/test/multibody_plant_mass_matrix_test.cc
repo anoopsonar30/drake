@@ -4,7 +4,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/limit_malloc.h"
 #include "drake/multibody/parsing/parser.h"
@@ -29,13 +28,6 @@ namespace {
 //     column of the mass matrix at a time.
 class MultibodyPlantMassMatrixTests : public ::testing::Test {
  public:
-  void LoadModel(const std::string& file_path) {
-    const std::string model_path = FindResourceOrThrow(file_path);
-    Parser parser(&plant_);
-    parser.AddModels(model_path);
-    plant_.Finalize();
-  }
-
   void LoadUrl(const std::string& url) {
     Parser parser(&plant_);
     parser.AddModelsFromUrl(url);
@@ -43,20 +35,18 @@ class MultibodyPlantMassMatrixTests : public ::testing::Test {
   }
 
   void LoadIiwaWithGripper() {
-    const char kArmSdfPath[] =
-        "drake/manipulation/models/iiwa_description/sdf/"
-            "iiwa14_no_collision.sdf";
-
-    const char kWsg50SdfPath[] =
-        "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
+    const char kArmSdfUrl[] =
+        "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
+    const char kWsg50SdfUrl[] =
+        "package://drake_models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(&plant_);
     const ModelInstanceIndex arm_model =
-        parser.AddModels(FindResourceOrThrow(kArmSdfPath)).at(0);
+        parser.AddModelsFromUrl(kArmSdfUrl).at(0);
 
     // Add the gripper.
     const ModelInstanceIndex gripper_model =
-        parser.AddModels(FindResourceOrThrow(kWsg50SdfPath)).at(0);
+        parser.AddModelsFromUrl(kWsg50SdfUrl).at(0);
 
     const auto& base_body = plant_.GetBodyByName("iiwa_link_0", arm_model);
     const auto& end_effector = plant_.GetBodyByName("iiwa_link_7", arm_model);
@@ -72,8 +62,11 @@ class MultibodyPlantMassMatrixTests : public ::testing::Test {
   void VerifyMassMatrixComputation(const Context<double>& context) {
     // Compute mass matrix via the Composite Body Algorithm.
     MatrixX<double> Mcba(plant_.num_velocities(), plant_.num_velocities());
+    plant_.CalcMassMatrix(context, &Mcba);
+
+    // After a first warm-up call, subsequent calls to CalcMassMatrix<double>()
+    // should never allocate.
     {
-      // CalcMassMatrix on `double` should never allocate.
       LimitMalloc guard;
       plant_.CalcMassMatrix(context, &Mcba);
     }
@@ -98,8 +91,8 @@ class MultibodyPlantMassMatrixTests : public ::testing::Test {
 };
 
 TEST_F(MultibodyPlantMassMatrixTests, IiwaRobot) {
-  LoadModel(
-      "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf");
+  LoadUrl(
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
   // We did not weld the arm to the world, therefore we expect it to be free.
   EXPECT_EQ(plant_.num_velocities(), 13);
 
@@ -118,8 +111,7 @@ TEST_F(MultibodyPlantMassMatrixTests, AtlasRobot) {
 
   // Create a context and store an arbitrary configuration.
   std::unique_ptr<Context<double>> context = plant_.CreateDefaultContext();
-  for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     const Joint<double>& joint = plant_.get_joint(joint_index);
     // This model has weld, revolute, and floating joints. Set the revolute
     // joints to an arbitrary angle.
@@ -133,19 +125,17 @@ TEST_F(MultibodyPlantMassMatrixTests, AtlasRobot) {
   VerifyMassMatrixComputation(*context);
 }
 
-
 // Verify that optimizations over fixed (weld) joints don't cause trouble.
 // This is to prevent a repeat of the bug introduced in PR #13933 (fixed in
 // #13953).
 TEST_F(MultibodyPlantMassMatrixTests, AtlasRobotWithFixedJoints) {
   // TODO(sherm1) Replace this large copied file with the original Atlas urdf
   //              plus a patch or in-memory edit (issue #13954).
-  LoadModel("drake/multibody/plant/test/atlas_with_fixed_joints.urdf");
+  LoadUrl("package://drake/multibody/plant/test/atlas_with_fixed_joints.urdf");
 
   // Create a context and store an arbitrary configuration.
   std::unique_ptr<Context<double>> context = plant_.CreateDefaultContext();
-  for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     const Joint<double>& joint = plant_.get_joint(joint_index);
     // This model has weld, revolute, and floating joints. Set the revolute
     // joints to an arbitrary angle.
@@ -166,8 +156,7 @@ TEST_F(MultibodyPlantMassMatrixTests, IiwaWithWeldedGripper) {
 
   // Create a context and store an arbitrary configuration.
   std::unique_ptr<Context<double>> context = plant_.CreateDefaultContext();
-  for (JointIndex joint_index(0); joint_index < plant_.num_joints();
-       ++joint_index) {
+  for (JointIndex joint_index : plant_.GetJointIndices()) {
     const Joint<double>& joint = plant_.get_joint(joint_index);
     // This model only has weld, prismatic, and revolute joints.
     if (joint.type_name() == RevoluteJoint<double>::kTypeName) {
@@ -176,7 +165,7 @@ TEST_F(MultibodyPlantMassMatrixTests, IiwaWithWeldedGripper) {
       // Arbitrary non-zero angle.
       revolute_joint.set_angle(context.get(), 0.5 * joint_index);
     } else if (joint.type_name() == PrismaticJoint<double>::kTypeName) {
-       const PrismaticJoint<double>& prismatic_joint =
+      const PrismaticJoint<double>& prismatic_joint =
           dynamic_cast<const PrismaticJoint<double>&>(joint);
       // Arbitrary non-zero joint translation.
       prismatic_joint.set_translation(context.get(), 0.5 * joint_index);

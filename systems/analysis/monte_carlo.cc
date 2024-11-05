@@ -128,51 +128,10 @@ std::vector<RandomSimulationResult> MonteCarloSimulationParallel(
 
 }  // namespace
 
-namespace internal {
-
-int SelectNumberOfThreadsToUse(const int num_parallel_executions) {
-  const int hardware_concurrency =
-      static_cast<int>(std::thread::hardware_concurrency());
-
-  int num_threads = 0;
-
-  if (num_parallel_executions > 1) {
-    num_threads = num_parallel_executions;
-    if (num_threads > hardware_concurrency) {
-      drake::log()->warn(
-          "Provided num_parallel_executions value of {} is greater than the "
-          "value of hardware concurrency {} for this computer, this is likely "
-          "to result in poor performance",
-          num_threads, hardware_concurrency);
-    } else {
-      drake::log()->debug(
-          "Using provided value of {} parallel executions", num_threads);
-    }
-  } else if (num_parallel_executions == kNoConcurrency) {
-    num_threads = 1;
-    drake::log()->debug("kNoConcurrency specified, using a single thread");
-  } else if (num_parallel_executions == kUseHardwareConcurrency) {
-    num_threads = hardware_concurrency;
-    drake::log()->debug(
-        "kUseHardwareConcurrency specified, using hardware concurrency {}",
-        num_threads);
-  } else {
-    throw std::runtime_error(fmt::format(
-        "Specified num_parallel_executions {} is not valid. Valid options are "
-        "kNoConcurrency, kUseHardwareConcurrency, or num_parallel_executions "
-        ">= 1",
-        num_parallel_executions));
-  }
-
-  return num_threads;
-}
-
-}  // namespace internal
-
 std::vector<RandomSimulationResult> MonteCarloSimulation(
     const SimulatorFactory& make_simulator, const ScalarSystemFunction& output,
     const double final_time, const int num_samples, RandomGenerator* generator,
-    const int num_parallel_executions) {
+    const Parallelism parallelism) {
   // Create a generator if the user didn't provide one.
   std::unique_ptr<RandomGenerator> owned_generator;
   if (generator == nullptr) {
@@ -180,13 +139,9 @@ std::vector<RandomSimulationResult> MonteCarloSimulation(
     generator = owned_generator.get();
   }
 
-  // Check num_parallel_executions vs the available hardware concurrency.
-  // This also serves to sanity-check the num_parallel_executions argument.
-  const int num_threads =
-      internal::SelectNumberOfThreadsToUse(num_parallel_executions);
-
   // Since the parallel implementation incurs additional overhead even in the
   // num_threads=1 case, dispatch to the serial implementation in these cases.
+  const int num_threads = parallelism.num_threads();
   if (num_threads > 1) {
     return MonteCarloSimulationParallel(
         make_simulator, output, final_time, num_samples, generator,

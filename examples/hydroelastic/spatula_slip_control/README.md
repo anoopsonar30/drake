@@ -25,14 +25,37 @@ files and also calling C++ APIs.
 bazel run //examples/hydroelastic/spatula_slip_control:spatula_slip_control
 ```
 
-You should see the printout of Meshcat URL like this:
+Use the MeshCat URL from the console log messages for visualization. In
+the example console output below, the last line contains the log message
+with the MeshCat URL `http://localhost:7002`.
 
 ```
-[console] [info] Meshcat listening for connections at http://localhost:7000
+drake (master)$ bazel run //examples/hydroelastic/spatula_slip_control:spatula_slip_control
+INFO: Analyzed target //examples/hydroelastic/spatula_slip_control:spatula_slip_control (0 packages loaded, 0 targets configured).
+INFO: Found 1 target...
+Target //examples/hydroelastic/spatula_slip_control:spatula_slip_control up-to-date:
+  bazel-bin/examples/hydroelastic/spatula_slip_control/spatula_slip_control
+INFO: Elapsed time: 0.428s, Critical Path: 0.00s
+INFO: 1 process: 1 internal.
+INFO: Build completed successfully, 1 total action
+INFO: Running command line: bazel-bin/examples/hydroelastic/spatula_slip_control/spatula_slip_control
+[2023-11-27 15:10:48.768] [console] [info] Meshcat listening for connections at http://localhost:7002
 ```
 
-Click on the Meshcat link (for example, http://localhost:7000)
-to visualize.
+Please note that other examples may instruct users to run `meldis` for
+visualization. However, this example recommends using the in-process MeshCat
+URL from the log messages because it supports Animations playback (see the
+section *Playback simulation* below). You can use `meldis` with this example,
+but it will not show Animations playback when the simulation finishes.
+Animations playback comes from code like this in
+[spatula_slip_control.cc](https://github.com/RobotLocomotion/drake/blob/master/examples/hydroelastic/spatula_slip_control/spatula_slip_control.cc):
+```C++
+  meshcat->StartRecording();
+  simulator.AdvanceTo(FLAGS_simulation_sec);
+  meshcat->StopRecording();
+  meshcat->PublishRecording();
+```
+
 
 ## Illustration and Collision geometries
 
@@ -41,7 +64,7 @@ collision (aka, proximity) geometries or both as shown
 in the following picture.
 Click on `illustration` or `proximity` as you wish.
 
-![spatula_3](images/spatula3.jpg)
+![spatula_3](images/spatula_3.jpg)
 
 ## Playback simulation
 
@@ -80,12 +103,9 @@ bazel run //examples/hydroelastic/spatula_slip_control:spatula_slip_control \
 
 **WARNING**: According to issue
 [17681](https://github.com/RobotLocomotion/drake/issues/17681),
-only the legacy `//tools:drake_visualizer` application of days past, not
-MeshCat nor meldis, can draw wireframe of the contact surfaces.
-As a result, you will need `//tools:drake_visualizer` to visualize the 
-difference between the `triangle` option and the default `polygon` option.
-However, `//tools:drake_visualizer` is only available in the older
-Ubuntu Focal, not Jammy.
+neither MeshCat nor Meldis can draw wireframe of the contact surfaces.
+As a result, you cannot currently see the difference between the `triangle`
+option and the default `polygon` option.
 
 ## Other Options
 

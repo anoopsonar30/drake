@@ -46,8 +46,8 @@ class YamlReadArchiveTest : public ::testing::TestWithParam<LoadYamlOptions> {
     if (!loaded.IsMapping()) {
       throw std::logic_error("Bad contents parse " + contents);
     }
-    const std::map<std::string, internal::Node>& mapping = loaded.GetMapping();
-    if (mapping.count("doc") != 1) {
+    const string_map<internal::Node>& mapping = loaded.GetMapping();
+    if (!mapping.contains("doc")) {
       throw std::logic_error("Missing doc parse " + contents);
     }
     const internal::Node doc = mapping.at("doc");
@@ -213,7 +213,7 @@ TEST_P(YamlReadArchiveTest, StdMap) {
   const auto test = [](const std::string& doc,
                        const std::map<std::string, double>& expected) {
     const auto& x = AcceptNoThrow<MapStruct>(Load(doc));
-    std::map<std::string, double> adjusted_expected = expected;
+    string_map<double> adjusted_expected{expected.begin(), expected.end()};
     if (GetParam().retain_map_defaults) {
       adjusted_expected["kNominalDouble"] = kNominalDouble;
     }
@@ -323,7 +323,7 @@ TEST_P(YamlReadArchiveTest, StdMapWithMergeKeys) {
   const auto test = [](const std::string& doc,
                        const std::map<std::string, double>& expected) {
     const auto& x = AcceptNoThrow<MapStruct>(Load(doc));
-    std::map<std::string, double> adjusted_expected = expected;
+    string_map<double> adjusted_expected{expected.begin(), expected.end()};
     if (GetParam().retain_map_defaults) {
       adjusted_expected["kNominalDouble"] = kNominalDouble;
     }
@@ -532,6 +532,47 @@ TEST_P(YamlReadArchiveTest, Variant) {
   test("doc:\n  value: !!str foo", "foo");
   test("doc:\n  value: !!float 1.0", 1.0);
   test("doc:\n  value: !DoubleStruct { value: 1.0 }", DoubleStruct{1.0});
+}
+
+TEST_P(YamlReadArchiveTest, PrimitiveVariant) {
+  const auto test = [](const std::string& doc,
+                       const PrimitiveVariant& expected) {
+    const auto& x = AcceptNoThrow<PrimitiveVariantStruct>(Load(doc));
+    EXPECT_EQ(x.value, expected) << doc;
+  };
+
+  test("doc:\n  value: [1.0, 2.0]", std::vector<double>{1.0, 2.0});
+  test("doc:\n  value: !!bool true", true);
+  test("doc:\n  value: !!bool 'true'", true);
+  test("doc:\n  value: !!int 10", 10);
+  test("doc:\n  value: !!int '10'", 10);
+  test("doc:\n  value: !!float 1.0", 1.0);
+  test("doc:\n  value: !!float '1.0'", 1.0);
+  test("doc:\n  value: !!str foo", std::string("foo"));
+  test("doc:\n  value: !!str 'foo'", std::string("foo"));
+
+  // It might be sensible for this case to pass, but for now we'll require that
+  // non-0'th variant indices always use a tag even where it could be inferred.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      AcceptIntoDummy<PrimitiveVariantStruct>(Load("doc:\n  value: 1.0")),
+      ".*vector.*double.*");
+}
+
+// When loading a variant, the default value should remain intact in cases where
+// the type tag is unchanged.
+TEST_P(YamlReadArchiveTest, VariantNestedDefaults) {
+  const LoadYamlOptions param = GetParam();
+  VariantStruct result{Variant4{DoubleStruct{.value = 22.0}}};
+  const std::string doc = "doc: { value: !DoubleStruct {} }";
+  auto parse = [&]() {
+    YamlReadArchive(Load(doc), param).Accept(&result);
+  };
+  if (param.allow_cpp_with_no_yaml) {
+    EXPECT_NO_THROW(parse());
+  } else {
+    EXPECT_THROW(parse(), std::exception);
+  }
+  EXPECT_EQ(std::get<DoubleStruct>(result.value).value, 22.0);
 }
 
 TEST_P(YamlReadArchiveTest, VariantMissing) {

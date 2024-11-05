@@ -9,7 +9,6 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/eigen_types.h"
 #include "drake/common/name_value.h"
 #include "drake/common/polynomial.h"
@@ -82,7 +81,7 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
   PiecewisePolynomial() = default;
 
   // We are final, so this is okay.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewisePolynomial)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PiecewisePolynomial);
 
   typedef MatrixX<Polynomial<T>> PolynomialMatrix;
 
@@ -182,7 +181,7 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
                       const std::vector<T>& breaks);
   // @}
 
-  ~PiecewisePolynomial() override = default;
+  ~PiecewisePolynomial() override;
 
   std::unique_ptr<Trajectory<T>> Clone() const override;
 
@@ -876,4 +875,4 @@ class PiecewisePolynomial final : public PiecewiseTrajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewisePolynomial)
+    class drake::trajectories::PiecewisePolynomial);

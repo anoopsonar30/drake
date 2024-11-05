@@ -5,7 +5,6 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/value.h"
 
 namespace drake {
@@ -17,7 +16,7 @@ namespace systems {
 class AbstractValues {
  public:
   // AbstractState is not copyable or moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AbstractValues)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(AbstractValues);
 
   /// Constructs an empty AbstractValues.
   AbstractValues();

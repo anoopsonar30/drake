@@ -1,15 +1,15 @@
 # -*- bazel -*-
 
-load("@drake//tools/skylark:drake_java.bzl", "drake_java_binary")
+load("@drake//tools/install:install.bzl", "install", "install_files")
+load("@drake//tools/lint:python_lint.bzl", "python_lint")
 load("@drake//tools/skylark:cc.bzl", "cc_binary", "cc_library")
+load("@drake//tools/skylark:drake_java.bzl", "drake_java_binary")
 load("@drake//tools/skylark:py.bzl", "py_library")
-load("@drake//tools/workspace:generate_file.bzl", "generate_file")
 load(
     "@drake//tools/workspace:generate_export_header.bzl",
     "generate_export_header",
 )
-load("@drake//tools/install:install.bzl", "install", "install_files")
-load("@drake//tools/lint:python_lint.bzl", "python_lint")
+load("@drake//tools/workspace:generate_file.bzl", "generate_file")
 load("@python//:version.bzl", "PYTHON_EXTENSION_SUFFIX")
 
 licenses([
@@ -19,9 +19,17 @@ licenses([
 
 package(default_visibility = ["//visibility:public"])
 
+# Provide an opt-out that avoids installing Java LCM libraries (e.g., we don't
+# need Java when we're building a Python wheel). The java targets will still be
+# defined, they just won't be part of //:install.
+config_setting(
+    name = "lcm_install_java_is_off",
+    values = {"define": "LCM_INSTALL_JAVA=OFF"},
+)
+
 config_setting(
     name = "linux",
-    values = {"cpu": "k8"},
+    constraint_values = ["@platforms//os:linux"],
     visibility = ["//visibility:private"],
 )
 
@@ -101,7 +109,7 @@ cc_binary(
         "@//conditions:default": [],
     }),
     linkshared = 1,
-    visibility = ["@drake_visualizer//:__pkg__"],
+    visibility = ["//visibility:private"],
     deps = ["@glib"],
 )
 
@@ -310,15 +318,19 @@ install(
     ],
     targets = [
         ":lcm-gen",
-        ":lcm-java",
         ":lcm-logger",
         ":lcm-logplayer",
-        ":lcm-logplayer-gui",
-        ":lcm-logplayer-gui-launcher",
-        ":lcm-spy",
-        ":lcm-spy-launcher",
         ":libdrake_lcm.so",
-    ],
+    ] + select({
+        ":lcm_install_java_is_off": [],
+        "//conditions:default": [
+            ":lcm-java",
+            ":lcm-logplayer-gui",
+            ":lcm-logplayer-gui-launcher",
+            ":lcm-spy",
+            ":lcm-spy-launcher",
+        ],
+    }),
     py_strip_prefix = ["lcm-python"],
     hdrs = LCM_PUBLIC_HEADERS,
     hdr_dest = "include/" + CMAKE_PACKAGE,

@@ -17,7 +17,7 @@ std::map<Variable, int> ToVarToDegreeMap(
   DRAKE_DEMAND(vars.size() == exponents.size());
   std::map<Variable, int> powers;
   for (int i = 0; i < vars.size(); ++i) {
-    if (powers.count(vars[i]) > 0) {
+    if (powers.contains(vars[i])) {
       throw std::invalid_argument(fmt::format(
           "PolynomialBasisElement: {} is repeated", vars[i].get_name()));
     }
@@ -62,6 +62,8 @@ int PolynomialBasisElement::degree(const Variable& v) const {
     return it->second;
   }
 }
+
+PolynomialBasisElement::~PolynomialBasisElement() = default;
 
 Variables PolynomialBasisElement::GetVariables() const {
   Variables vars{};

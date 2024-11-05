@@ -44,7 +44,7 @@ namespace multibody {
 template <typename T>
 class UniversalJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(UniversalJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(UniversalJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -65,8 +65,8 @@ class UniversalJoint final : public Joint<T> {
   /// The additional parameters are:
   /// @param[in] damping
   ///   Viscous damping coefficient, in N⋅m⋅s, used to model losses within the
-  ///   joint. See documentation of damping() for details on modelling of the
-  ///   damping torque.
+  ///   joint. See documentation of default_damping() for details on modelling
+  ///   of the damping torque.
   /// @throws std::exception if damping is negative.
   UniversalJoint(const std::string& name, const Frame<T>& frame_on_parent,
                  const Frame<T>& frame_on_child, double damping = 0)
@@ -87,16 +87,18 @@ class UniversalJoint final : public Joint<T> {
     DRAKE_THROW_UNLESS(damping >= 0);
   }
 
+  ~UniversalJoint() override;
+
   const std::string& type_name() const override;
 
-  /// Returns `this` joint's damping constant in N⋅m⋅s. The damping torque
-  /// (in N⋅m) is modeled as `τᵢ = -damping⋅ωᵢ, i = 1, 2` i.e. opposing motion,
-  /// with ωᵢ the angular rates about the i-th axis for `this` joint (see
-  /// get_angular_rates())and τᵢ the torque on child body B about the same i-th
-  /// axis.
-  double damping() const {
+  /// Returns `this` joint's default damping constant in N⋅m⋅s. The damping
+  /// torque (in N⋅m) is modeled as `τᵢ = -damping⋅ωᵢ, i = 1, 2` i.e. opposing
+  /// motion, with ωᵢ the angular rates about the i-th axis for `this` joint
+  /// (see get_angular_rates())and τᵢ the torque on child body B about the same
+  /// i-th axis.
+  double default_damping() const {
     // N.B. Both damping coefficients are set to the same value for this joint.
-    return this->damping_vector()[0];
+    return this->default_damping_vector()[0];
   }
 
   /// @name Context-dependent value access
@@ -121,7 +123,7 @@ class UniversalJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const UniversalJoint<T>& set_angles(Context<T>* context,
                                       const Vector2<T>& angles) const {
-    get_mobilizer()->set_angles(context, angles);
+    get_mobilizer()->SetAngles(context, angles);
     return *this;
   }
 
@@ -143,7 +145,7 @@ class UniversalJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const UniversalJoint<T>& set_angular_rates(
       systems::Context<T>* context, const Vector2<T>& theta_dot) const {
-    get_mobilizer()->set_angular_rates(context, theta_dot);
+    get_mobilizer()->SetAngularRates(context, theta_dot);
     return *this;
   }
 
@@ -198,14 +200,15 @@ class UniversalJoint final : public Joint<T> {
   /// Joint<T> override called through public NVI, Joint::AddInDamping().
   /// Therefore arguments were already checked to be valid.
   /// This method adds into `forces` a dissipative torque according to the
-  /// viscous law `τ = -d⋅ω`, with d the damping coefficient (see damping()).
+  /// viscous law `τ = -d⋅ω`, with d the damping coefficient (see
+  /// default_damping()).
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const override {
     Eigen::Ref<VectorX<T>> tau =
         get_mobilizer()->get_mutable_generalized_forces_from_array(
             &forces->mutable_generalized_forces());
     const Vector2<T>& theta_dot = get_angular_rates(context);
-    tau = -damping() * theta_dot;
+    tau = -this->GetDampingVector(context)[0] * theta_dot;
   }
 
  private:
@@ -237,8 +240,8 @@ class UniversalJoint final : public Joint<T> {
   }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const override;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const override;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const override;
@@ -259,20 +262,18 @@ class UniversalJoint final : public Joint<T> {
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
   const internal::UniversalMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     const internal::UniversalMobilizer<T>* mobilizer =
         dynamic_cast<const internal::UniversalMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
   internal::UniversalMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     auto* mobilizer = dynamic_cast<internal::UniversalMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -290,4 +291,4 @@ const char UniversalJoint<T>::kTypeName[] = "universal";
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::UniversalJoint)
+    class ::drake::multibody::UniversalJoint);

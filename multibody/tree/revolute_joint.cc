@@ -10,31 +10,37 @@ namespace multibody {
 
 template <typename T>
 RevoluteJoint<T>::RevoluteJoint(const std::string& name,
-              const Frame<T>& frame_on_parent, const Frame<T>& frame_on_child,
-              const Vector3<double>& axis, double pos_lower_limit,
-              double pos_upper_limit, double damping)
-    : Joint<T>(name, frame_on_parent, frame_on_child,
-               VectorX<double>::Constant(1, damping),
-               VectorX<double>::Constant(1, pos_lower_limit),
-               VectorX<double>::Constant(1, pos_upper_limit),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity())) {
+                                const Frame<T>& frame_on_parent,
+                                const Frame<T>& frame_on_child,
+                                const Vector3<double>& axis,
+                                double pos_lower_limit, double pos_upper_limit,
+                                double damping)
+    : Joint<T>(
+          name, frame_on_parent, frame_on_child,
+          VectorX<double>::Constant(1, damping),
+          VectorX<double>::Constant(1, pos_lower_limit),
+          VectorX<double>::Constant(1, pos_upper_limit),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1, std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    std::numeric_limits<double>::infinity())) {
   const double kEpsilon = std::numeric_limits<double>::epsilon();
   if (axis.isZero(kEpsilon)) {
-    throw std::logic_error("Revolute joint axis vector must have nonzero "
-                           "length.");
+    throw std::logic_error(
+        "Revolute joint axis vector must have nonzero "
+        "length.");
   }
   if (damping < 0) {
     throw std::logic_error("Revolute joint damping must be nonnegative.");
   }
   axis_ = axis.normalized();
 }
+
+template <typename T>
+RevoluteJoint<T>::~RevoluteJoint() = default;
 
 template <typename T>
 const std::string& RevoluteJoint<T>::type_name() const {
@@ -55,7 +61,7 @@ std::unique_ptr<Joint<ToScalar>> RevoluteJoint<T>::TemplatedDoCloneToScalar(
   auto joint_clone = std::make_unique<RevoluteJoint<ToScalar>>(
       this->name(), frame_on_parent_body_clone, frame_on_child_body_clone,
       this->revolute_axis(), this->position_lower_limits()[0],
-      this->position_upper_limit(), this->damping());
+      this->position_upper_limit(), this->default_damping());
   joint_clone->set_velocity_limits(this->velocity_lower_limits(),
                                    this->velocity_upper_limits());
   joint_clone->set_acceleration_limits(this->acceleration_lower_limits(),
@@ -88,12 +94,16 @@ std::unique_ptr<Joint<symbolic::Expression>> RevoluteJoint<T>::DoCloneToScalar(
 // in the header file.
 template <typename T>
 std::unique_ptr<typename Joint<T>::BluePrint>
-RevoluteJoint<T>::MakeImplementationBlueprint() const {
+RevoluteJoint<T>::MakeImplementationBlueprint(
+    const internal::SpanningForest::Mobod& mobod) const {
   auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+  const auto [inboard_frame, outboard_frame] =
+      this->tree_frames(mobod.is_reversed());
+  // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
   auto revolute_mobilizer = std::make_unique<internal::RevoluteMobilizer<T>>(
-      this->frame_on_parent(), this->frame_on_child(), axis_);
+      mobod, *inboard_frame, *outboard_frame, axis_);
   revolute_mobilizer->set_default_position(this->default_positions());
-  blue_print->mobilizers_.push_back(std::move(revolute_mobilizer));
+  blue_print->mobilizer = std::move(revolute_mobilizer);
   return blue_print;
 }
 
@@ -101,4 +111,4 @@ RevoluteJoint<T>::MakeImplementationBlueprint() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::RevoluteJoint)
+    class ::drake::multibody::RevoluteJoint);

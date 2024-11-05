@@ -18,7 +18,7 @@ namespace internal {
 class SparseAndDenseMatrix {
  public:
   // Delete these constructors for thread safety.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SparseAndDenseMatrix)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SparseAndDenseMatrix);
   explicit SparseAndDenseMatrix(const Eigen::SparseMatrix<double>& sparse);
 
   explicit SparseAndDenseMatrix(Eigen::MatrixXd dense);
@@ -41,6 +41,9 @@ class SparseAndDenseMatrix {
 
   // Returns true if all element in the matrix is finite. False otherwise.
   [[nodiscard]] bool IsFinite() const;
+
+  // Returns true if the dense matrix has been constructed.
+  [[nodiscard]] bool is_dense_constructed() const;
 
  private:
   Eigen::SparseMatrix<double> sparse_;

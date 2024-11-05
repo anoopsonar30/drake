@@ -1,5 +1,6 @@
 from collections import namedtuple
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
@@ -40,15 +41,14 @@ _GOOD_SYMBOLS_SUBSTR = [
     "NK6spdlog",
     # Symbols from Drake's vendored externals are fine. (It would be better
     # for performance if they could be hidden, but they are not hazardous.)
-    "N12drake_vendor",
-    "NK12drake_vendor",
+    "drake_vendor",
 ]
 
 # Any symbols whose name contains one of these are undesirable, but for now
 # will not cause this test to fail.
 _KNOWN_BAD_SYMBOLS_SUBSTR = [
+    "3tbb6detail",  # TODO(#20898): This line should be removed eventually.
     "5bazel5tools3cpp8runfiles",
-    "AbslInternal",
     "Ampl",
     "BitVector128",
     "Clp",
@@ -61,7 +61,6 @@ _KNOWN_BAD_SYMBOLS_SUBSTR = [
     "MessageHandler",
     "N3uWS",
     "N5ofats10any_detail",
-    "N7tinyobj",
     "Realpath",
     "WindowsError",
     "action",
@@ -87,19 +86,14 @@ _KNOWN_BAD_SYMBOLS_SUBSTR = [
     "setupForSolve",
     "slack_value",
     "sortOnOther",
-    "usage",
-    "vtkdouble_conversion",
-    "vtkglew",
-    "vtkpugixml",
     "wrapper",
-    # This fix is pending a deprecation removal (#20115) 2024-01-01.
-    "N3lcm",
-    # This fix is pending a deprecation removal (#19866) 2023-11-01.
-    "optitrack",
 ]
 
 
 class ExportedSymbolsTest(unittest.TestCase):
+
+    def setUp(self):
+        self._readelf_repair_pattern = None
 
     @unittest.skipIf(sys.platform == "darwin", "Ubuntu only")
     def test_exported_symbols(self):
@@ -132,6 +126,7 @@ class ExportedSymbolsTest(unittest.TestCase):
             # Skip over useless lines.
             if not line or line.startswith("Symbol table"):
                 continue
+            line = self._repair_readelf_output(line)
             values = line.split()
             # Deal with the table header row.
             if line.strip().startswith("Num:"):
@@ -170,6 +165,26 @@ class ExportedSymbolsTest(unittest.TestCase):
             print(f" {row.Name}")
             print()
         self.assertEqual(len(bad_rows), 0)
+
+    def _repair_readelf_output(self, line):
+        # Mop up any "<OS specific>: %d" or "<processor specific>: # %d" output
+        # that could occur in the symbol binding or type columns.
+        #
+        # Sometimes, instead of getting line like:
+        #  990: 00000000036827b0     8 OBJECT  UNIQUE DEFAULT   ...
+        #
+        # Instead, we get
+        #  990: 00000000036827b0     8 OBJECT  <OS specific>: 10 DEFAULT   ...
+        #
+        # This method performs a substitution to get rid of the unusual output,
+        # so the returned result looks like this:
+        #  990: 00000000036827b0     8 OBJECT  SPECIFIC DEFAULT   ...
+        #
+        # This type of output was noticed using the `mold` linker, see issue:
+        # https://github.com/rui314/mold/issues/651
+        if self._readelf_repair_pattern is None:
+            self._readelf_repair_pattern = re.compile(r'<\w+ specific>: \d+')
+        return self._readelf_repair_pattern.sub('SPECIFIC', line)
 
     @staticmethod
     def _is_symbol_ok(row):

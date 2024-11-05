@@ -1,79 +1,7 @@
-load("//tools/skylark:drake_py.bzl", "drake_py_test")
-load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
 load("//tools/install:install.bzl", "install", "install_files")
+load("//tools/jupyter:jupyter_py.bzl", "drake_jupyter_py_binary")
 load("//tools/lint:lint.bzl", "add_lint_tests")
-
-drake_jupyter_py_binary(
-    name = "index",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "mathematical_program",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "solver_parameters",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "debug_mathematical_program",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "licensed_solvers_deepnote",
-    add_test_rule = 0,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "linear_program",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "nonlinear_program",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "quadratic_program",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
-
-drake_jupyter_py_binary(
-    name = "dynamical_systems",
-    add_test_rule = 1,
-    deps = [
-        "//bindings/pydrake",
-    ],
-)
+load("//tools/skylark:drake_py.bzl", "drake_py_test")
 
 drake_jupyter_py_binary(
     name = "authoring_leaf_systems",
@@ -84,7 +12,7 @@ drake_jupyter_py_binary(
 )
 
 drake_jupyter_py_binary(
-    name = "working_with_diagrams",
+    name = "authoring_multibody_simulation",
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
@@ -92,7 +20,15 @@ drake_jupyter_py_binary(
 )
 
 drake_jupyter_py_binary(
-    name = "authoring_multibody_simulation",
+    name = "custom_gradients",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "dynamical_systems",
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
@@ -109,7 +45,54 @@ drake_jupyter_py_binary(
 )
 
 drake_jupyter_py_binary(
-    name = "rendering_multibody_plant",
+    name = "hydroelastic_contact_nonconvex_mesh",
+    add_test_rule = 1,
+    data = [
+        "@drake_models//:dishes",
+        "@drake_models//:veggies",
+    ],
+    # TODO(#21380) Revisit timeout value when deferred reification is
+    # implemented.
+    test_timeout = "moderate",
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "index",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "linear_program",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "licensed_solvers_deepnote",
+    add_test_rule = 0,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "debug_mathematical_program",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "mathematical_program",
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
@@ -125,7 +108,47 @@ drake_jupyter_py_binary(
 )
 
 drake_jupyter_py_binary(
+    name = "multibody_plant_autodiff_mass",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "nonlinear_program",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
     name = "pyplot_animation_multibody_plant",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "quadratic_program",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "rendering_multibody_plant",
+    add_test_rule = 1,
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_jupyter_py_binary(
+    name = "solver_parameters",
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
@@ -149,7 +172,7 @@ drake_jupyter_py_binary(
 )
 
 drake_jupyter_py_binary(
-    name = "multibody_plant_autodiff_mass",
+    name = "working_with_diagrams",
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
@@ -167,7 +190,7 @@ drake_py_test(
     data = _NOTEBOOKS,
     tags = ["lint"],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 

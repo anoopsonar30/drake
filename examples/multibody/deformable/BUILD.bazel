@@ -1,0 +1,127 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_binary",
+    "drake_cc_googletest",
+    "drake_cc_library",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+filegroup(
+    name = "torus_tet_mesh",
+    data = ["models/torus.vtk"],
+    visibility = ["//geometry:__pkg__"],
+)
+
+filegroup(
+    name = "models",
+    srcs = glob(["models/**"]) + [
+        "@drake_models//:wsg_50_description",
+    ],
+    visibility = ["//:__pkg__"],
+)
+
+drake_cc_library(
+    name = "parallel_gripper_controller",
+    srcs = [
+        "parallel_gripper_controller.cc",
+    ],
+    hdrs = [
+        "parallel_gripper_controller.h",
+    ],
+    deps = [
+        "//multibody/plant",
+    ],
+)
+
+drake_cc_library(
+    name = "point_source_force_field",
+    srcs = [
+        "point_source_force_field.cc",
+    ],
+    hdrs = [
+        "point_source_force_field.h",
+    ],
+    deps = [
+        "//multibody/plant",
+    ],
+)
+
+drake_cc_library(
+    name = "suction_cup_controller",
+    srcs = [
+        "suction_cup_controller.cc",
+    ],
+    hdrs = [
+        "suction_cup_controller.h",
+    ],
+    deps = [
+        "//multibody/plant",
+    ],
+)
+
+drake_cc_binary(
+    name = "deformable_torus",
+    srcs = [
+        "deformable_torus.cc",
+    ],
+    add_test_rule = 1,
+    data = [
+        ":models",
+    ],
+    test_rule_args = [
+        "-simulation_time=0.1",
+        "-realtime_rate=0.0",
+    ],
+    deps = [
+        ":parallel_gripper_controller",
+        ":point_source_force_field",
+        ":suction_cup_controller",
+        "//geometry:drake_visualizer",
+        "//geometry:scene_graph",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "@gflags",
+    ],
+)
+
+drake_cc_binary(
+    name = "bubble_gripper",
+    srcs = [
+        "bubble_gripper.cc",
+    ],
+    add_test_rule = 1,
+    data = [
+        ":models",
+    ],
+    test_rule_args = [
+        "-simulation_time=0.1",
+        "-realtime_rate=0.0",
+        "-render_bubble=false",
+    ],
+    deps = [
+        ":parallel_gripper_controller",
+        "//geometry",
+        "//geometry/proximity",
+        "//geometry/render_gl",
+        "//multibody/parsing",
+        "//multibody/plant",
+        "//systems/analysis:simulator",
+        "//systems/framework:diagram",
+        "//systems/sensors:camera_config_functions",
+        "@gflags",
+    ],
+)
+
+drake_cc_googletest(
+    name = "point_source_force_field_test",
+    deps = [
+        ":point_source_force_field",
+        "//common/test_utilities:eigen_matrix_compare",
+    ],
+)
+
+add_lint_tests()

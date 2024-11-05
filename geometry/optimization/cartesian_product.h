@@ -31,7 +31,7 @@ is empty.
 @ingroup geometry_optimization */
 class CartesianProduct final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CartesianProduct)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CartesianProduct);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   CartesianProduct();
@@ -72,6 +72,14 @@ class CartesianProduct final : public ConvexSet {
   /** Returns a reference to the ConvexSet defining the `index` factor in the
   product. */
   const ConvexSet& factor(int i) const;
+
+  /** Returns a copy of the matrix A if it has been set, or nullopt otherwise.
+   */
+  std::optional<Eigen::MatrixXd> A() const { return A_; }
+
+  /** Returns a copy of the vector b if it has been set, or nullopt otherwise.
+   */
+  std::optional<Eigen::VectorXd> b() const { return b_; }
 
   /** Returns true if each subvector is in its corresponding set with tolerance
   `tol`.  Note: Tolerance support for this query varies in the different convex
@@ -127,9 +135,8 @@ class CartesianProduct final : public ConvexSet {
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
 
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Cylinder& cylinder, void* data) final;
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
 
   // The member variables are not const in order to support move semantics.
   ConvexSets sets_{};

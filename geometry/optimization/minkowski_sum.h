@@ -23,7 +23,7 @@ This includes the zero-dimensional case.
 @ingroup geometry_optimization */
 class MinkowskiSum final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MinkowskiSum)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MinkowskiSum);
 
   /** Constructs a default (zero-dimensional, nonempty) set. */
   MinkowskiSum();
@@ -100,10 +100,6 @@ class MinkowskiSum final : public ConvexSet {
 
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
-
-  // Implement support shapes for the ShapeReifier interface.
-  using ShapeReifier::ImplementGeometry;
-  void ImplementGeometry(const Capsule& capsule, void* data) final;
 
   ConvexSets sets_{};  // Not marked const to support move semantics.
 };

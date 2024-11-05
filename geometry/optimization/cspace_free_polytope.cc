@@ -47,6 +47,11 @@ CspaceFreePolytope::CspaceFreePolytope(
                               rational_forward_kin(), &plane_geometries_);
 }
 
+CspaceFreePolytope::~CspaceFreePolytope() = default;
+
+CspaceFreePolytope::SeparatingPlaneLagrangians::~SeparatingPlaneLagrangians() =
+    default;
+
 CspaceFreePolytope::SeparatingPlaneLagrangians
 CspaceFreePolytope::SeparatingPlaneLagrangians::GetSolution(
     const solvers::MathematicalProgramResult& result) const {
@@ -61,6 +66,17 @@ CspaceFreePolytope::SeparatingPlaneLagrangians::GetSolution(
   }
   return ret;
 }
+
+CspaceFreePolytope::SeparationCertificateResult::
+    ~SeparationCertificateResult() = default;
+
+CspaceFreePolytope::SeparationCertificate::~SeparationCertificate() = default;
+
+CspaceFreePolytope::SeparationCertificateProgram::
+    ~SeparationCertificateProgram() = default;
+
+CspaceFreePolytope::FindSeparationCertificateGivenPolytopeOptions::
+    ~FindSeparationCertificateGivenPolytopeOptions() = default;
 
 CspaceFreePolytope::SeparationCertificateProgram
 CspaceFreePolytope::ConstructPlaneSearchProgram(
@@ -124,7 +140,7 @@ CspaceFreePolytope::ConstructPlaneSearchProgram(
 
     // Set lagrangians.polytope, add sos constraints.
     for (int j = 0; j < d_minus_Cs.rows(); ++j) {
-      if (C_redundant_indices.count(j) == 0) {
+      if (!C_redundant_indices.contains(j)) {
         gram_and_monomial_basis.AddSos(
             prog, gram_vars.segment(gram_var_count, num_gram_vars_per_sos),
             &lagrangians.mutable_polytope()(j));
@@ -136,7 +152,7 @@ CspaceFreePolytope::ConstructPlaneSearchProgram(
     // Set lagrangians.s_lower and lagrangians.s_upper, add sos
     // constraints.
     for (int j = 0; j < s_size; ++j) {
-      if (s_lower_redundant_indices.count(j) == 0) {
+      if (!s_lower_redundant_indices.contains(j)) {
         gram_and_monomial_basis.AddSos(
             prog, gram_vars.segment(gram_var_count, num_gram_vars_per_sos),
             &lagrangians.mutable_s_lower()(j));
@@ -144,7 +160,7 @@ CspaceFreePolytope::ConstructPlaneSearchProgram(
       } else {
         lagrangians.mutable_s_lower()(j) = symbolic::Polynomial();
       }
-      if (s_upper_redundant_indices.count(j) == 0) {
+      if (!s_upper_redundant_indices.contains(j)) {
         gram_and_monomial_basis.AddSos(
             prog, gram_vars.segment(gram_var_count, num_gram_vars_per_sos),
             &lagrangians.mutable_s_upper()(j));
@@ -245,9 +261,9 @@ CspaceFreePolytope::FindSeparationCertificateGivenPolytope(
   std::vector<int> active_plane_indices;
   active_plane_indices.reserve(separating_planes().size());
   for (int i = 0; i < static_cast<int>(separating_planes().size()); ++i) {
-    if (ignored_collision_pairs.count(SortedPair<geometry::GeometryId>(
+    if (!ignored_collision_pairs.contains(SortedPair<geometry::GeometryId>(
             separating_planes()[i].positive_side_geometry->id(),
-            separating_planes()[i].negative_side_geometry->id())) == 0) {
+            separating_planes()[i].negative_side_geometry->id()))) {
       active_plane_indices.push_back(i);
     }
   }
@@ -282,7 +298,7 @@ CspaceFreePolytope::FindSeparationCertificateGivenPolytope(
   };
 
   this->SolveCertificationForEachPlaneInParallel(
-      active_plane_indices, solve_small_sos, options.num_threads,
+      active_plane_indices, solve_small_sos, options.parallelism,
       options.verbose, options.terminate_at_failure);
   return ret;
 }
@@ -361,7 +377,7 @@ CspaceFreePolytope::InitializePolytopeSearchProgram(
   // Add the indeterminates y if we need to certify non-polytopic collision
   // geometry
   for (const auto& plane : separating_planes()) {
-    if (ignored_collision_pairs.count(plane.geometry_pair()) == 0) {
+    if (!ignored_collision_pairs.contains(plane.geometry_pair())) {
       if (plane.positive_side_geometry->type() !=
               CIrisGeometryType::kPolytope ||
           plane.negative_side_geometry->type() !=
@@ -392,7 +408,7 @@ CspaceFreePolytope::InitializePolytopeSearchProgram(
     const auto& plane = separating_planes()[plane_index];
     const SortedPair<geometry::GeometryId> geometry_pair =
         plane.geometry_pair();
-    if (ignored_collision_pairs.count(geometry_pair) == 0) {
+    if (!ignored_collision_pairs.contains(geometry_pair)) {
       prog->AddDecisionVariables(plane.decision_variables);
       const auto& certificate =
           certificates_vec[plane_to_certificate_map.at(plane_index)];
@@ -505,7 +521,7 @@ CspaceFreePolytope::InitializePolytopeSearchProgram(
   for (const auto& plane : separating_planes()) {
     const SortedPair<geometry::GeometryId> geometry_pair(
         plane.positive_side_geometry->id(), plane.negative_side_geometry->id());
-    if (ignored_collision_pairs.count(geometry_pair) == 0) {
+    if (!ignored_collision_pairs.contains(geometry_pair)) {
       const auto it = certificates.find(geometry_pair);
       if (it == certificates.end()) {
         const auto& inspector = scene_graph().model_inspector();
@@ -608,6 +624,11 @@ void CspaceFreePolytope::AddCspacePolytopeContainment(
                             Eigen::VectorXd::Zero(A.rows()), vars);
 }
 
+CspaceFreePolytope::FindPolytopeGivenLagrangianOptions::
+    ~FindPolytopeGivenLagrangianOptions() = default;
+
+CspaceFreePolytope::SearchResult::~SearchResult() = default;
+
 void CspaceFreePolytope::SearchResult::SetPolytope(
     const Eigen::Ref<const Eigen::MatrixXd>& C,
     const Eigen::Ref<const Eigen::VectorXd>& d,
@@ -624,7 +645,7 @@ void CspaceFreePolytope::SearchResult::SetSeparatingPlanes(
   // Check that a and b have the same keys.
   DRAKE_THROW_UNLESS(a.size() == b.size());
   for (const auto& [plane_index, a_poly] : a) {
-    DRAKE_THROW_UNLESS(b.count(plane_index) > 0);
+    DRAKE_THROW_UNLESS(b.contains(plane_index));
   }
   a_ = std::move(a);
   b_ = std::move(b);
@@ -810,7 +831,7 @@ CspaceFreePolytope::BinarySearch(
       const SortedPair<geometry::GeometryId> geometry_pair(
           plane.positive_side_geometry->id(),
           plane.negative_side_geometry->id());
-      if (ignored_collision_pairs.count(geometry_pair) == 0 &&
+      if (!ignored_collision_pairs.contains(geometry_pair) &&
           geometry_pair_scale_lower_bounds[i] >= scale) {
         ignored_collision_pairs_for_scale.insert(geometry_pair);
       }
@@ -1024,7 +1045,7 @@ CspaceFreePolytope::FindPolytopeGivenLagrangian(
       const SortedPair<geometry::GeometryId> geometry_pair(
           plane.positive_side_geometry->id(),
           plane.negative_side_geometry->id());
-      if (ignored_collision_pairs.count(geometry_pair) == 0) {
+      if (!ignored_collision_pairs.contains(geometry_pair)) {
         Vector3<symbolic::Polynomial> a;
         for (int i = 0; i < 3; ++i) {
           a(i) = result.GetSolution(plane.a(i));
@@ -1041,9 +1062,9 @@ CspaceFreePolytope::FindPolytopeGivenLagrangian(
            plane_index < static_cast<int>(separating_planes().size());
            ++plane_index) {
         const auto& plane = separating_planes()[plane_index];
-        if (ignored_collision_pairs.count(SortedPair<geometry::GeometryId>(
+        if (!ignored_collision_pairs.contains(SortedPair<geometry::GeometryId>(
                 plane.positive_side_geometry->id(),
-                plane.negative_side_geometry->id())) == 0) {
+                plane.negative_side_geometry->id()))) {
           certificates_result->emplace(
               plane_index,
               new_certificates_map.at(plane_index)

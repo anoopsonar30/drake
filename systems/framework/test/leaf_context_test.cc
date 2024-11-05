@@ -36,7 +36,7 @@ constexpr double kTime = 12.0;
 // Defines a simple class for evaluating abstract types.
 class TestAbstractType {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(TestAbstractType)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(TestAbstractType);
   TestAbstractType() = default;
 };
 
@@ -636,7 +636,7 @@ void CheckAllCacheValuesUpToDateExcept(
   for (CacheIndex i(0); i < cache.cache_size(); ++i) {
     if (!cache.has_cache_entry_value(i)) continue;
     const CacheEntryValue& entry = cache.get_cache_entry_value(i);
-    EXPECT_EQ(entry.is_out_of_date(), should_be_out_of_date.count(i) != 0) << i;
+    EXPECT_EQ(entry.is_out_of_date(), should_be_out_of_date.contains(i)) << i;
   }
 }
 
@@ -929,18 +929,6 @@ TEST_F(LeafContextTest, PerturbTime) {
   // Setting time the normal way clears the "true time".
   context_.SetTime(1.);
   EXPECT_FALSE(context_.get_true_time());
-}
-
-// Check that the hidden mutable "utility flag" in the Context can be set
-// even in a const Context.
-TEST_F(LeafContextTest, UtilityFlag) {
-  auto set_flag = [](const Context<double>& context) {
-    context.set_use_default_implementation(true);
-  };
-
-  EXPECT_FALSE(context_.get_use_default_implementation());
-  set_flag(context_);
-  EXPECT_TRUE(context_.get_use_default_implementation());
 }
 
 }  // namespace

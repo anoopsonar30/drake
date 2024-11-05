@@ -6,6 +6,7 @@
 
 #include "drake/common/eigen_types.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/optimization/test_utilities.h"
 #include "drake/geometry/scene_graph.h"
@@ -106,11 +107,8 @@ GTEST_TEST(PointTest, FromSceneGraphTest) {
 
   // Test SceneGraph constructor.
   const double kRadius = 0.2;
-  auto [scene_graph, geom_id] =
+  auto [scene_graph, geom_id, context, query] =
       MakeSceneGraphWithShape(Sphere(kRadius), RigidTransformd(p_W));
-  auto context = scene_graph->CreateDefaultContext();
-  auto query =
-      scene_graph->get_query_output_port().Eval<QueryObject<double>>(*context);
 
   EXPECT_NEAR(query.ComputeSignedDistanceToPoint(p_W)[0].distance, -kRadius,
               1e-16);
@@ -136,6 +134,13 @@ GTEST_TEST(PointTest, FromSceneGraphTest) {
   Point P2(query2, geom_id, frame_id, kAllowableRadius);
 
   EXPECT_TRUE(CompareMatrices(P2.x(), X_WF.inverse() * p_W, 1e-16));
+}
+
+GTEST_TEST(PointTest, FromSceneGraphBad) {
+  auto [scene_graph, geom_id, context, query] =
+      MakeSceneGraphWithShape(HalfSpace(), RigidTransformd());
+  DRAKE_EXPECT_THROWS_MESSAGE(Point(query, geom_id),
+                              ".*Point.*cannot.*HalfSpace.*");
 }
 
 GTEST_TEST(PointTest, 6DTest) {
@@ -227,6 +232,43 @@ GTEST_TEST(PointTest, NonnegativeScalingTest2) {
   prog.SetInitialGuess(x, x_solution);
   prog.SetInitialGuess(t, Eigen::Vector2d(-1, 0));
   EXPECT_FALSE(prog.CheckSatisfiedAtInitialGuess(constraints, tol));
+}
+
+GTEST_TEST(PointTest, Projection) {
+  Eigen::Vector4d p{1.0, 2.0, 3.0, 4.0};
+  Point P(p);
+
+  // clang-format off
+  const Eigen::Matrix4d test_points{
+      { 0.12,  0.41, -2.81, 2.17},
+      { 3.06, -0.75, -1.16, 0.55},
+      { 0.54,  4.26,  0.85, 0.02},
+      { 2.99,  0.47,  3.99, 3.29}
+  };
+  const Eigen::Matrix4d expected_projection{
+      { 1.0, 1.0, 1.0, 1.0},
+      { 2.0, 2.0, 2.0, 2.0},
+      { 3.0, 3.0, 3.0, 3.0},
+      { 4.0, 4.0, 4.0, 4.0}
+  };
+  // clang-format on
+  std::vector<double> expected_distances;
+  for (int i = 0; i < test_points.cols(); ++i) {
+    double expected_distance = 0.0;
+    for (int j = 0; j < p.rows(); ++j) {
+      expected_distance += std::pow((p[j] - test_points(j, i)), 2);
+    }
+    expected_distances.push_back(std::sqrt(expected_distance));
+  }
+  const auto projection_result = P.Projection(test_points);
+  ASSERT_TRUE(projection_result.has_value());
+  const auto& [distances, projections] = projection_result.value();
+  const double kTol = 1e-12;
+  for (int i = 0; i < test_points.cols(); ++i) {
+    EXPECT_TRUE(
+        CompareMatrices(projections.col(i), expected_projection.col(i), kTol));
+    EXPECT_NEAR(distances.at(i), expected_distances.at(i), kTol);
+  }
 }
 
 }  // namespace optimization

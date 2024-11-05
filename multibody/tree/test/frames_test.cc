@@ -23,9 +23,9 @@ namespace internal {
 namespace {
 
 using Eigen::AngleAxisd;
-using math::RigidTransformd;
 using Eigen::Translation3d;
 using Eigen::Vector3d;
+using math::RigidTransformd;
 using std::unique_ptr;
 using systems::Context;
 
@@ -43,18 +43,17 @@ class FrameTests : public ::testing::Test {
     // Using a NaN spatial inertia is ok in this unit test since all
     // computations only relate to frame kinematics (and therefore mass
     // properties do not play any role.)
-    SpatialInertia<double> M_Bo_B;
+    const auto M_Bo_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
-    bodyB_ = &model->AddBody<RigidBody>("B", M_Bo_B);
+    bodyB_ = &model->AddRigidBody("B", M_Bo_B);
     frameB_ = &bodyB_->body_frame();
 
     // Joint connecting bodyB to the world.
-    model->AddJoint<RevoluteJoint>("joint0",
-        model->world_body(), {}, *bodyB_, {},
-        Vector3d::UnitZ() /*revolute axis*/);
+    model->AddJoint<RevoluteJoint>("joint0", model->world_body(), {}, *bodyB_,
+                                   {}, Vector3d::UnitZ() /*revolute axis*/);
 
     // Some arbitrary pose of frame P in the body frame B.
     X_BP_ = RigidTransformd(AngleAxisd(M_PI / 6.0, Vector3d::UnitZ()) *
@@ -69,8 +68,7 @@ class FrameTests : public ::testing::Test {
                             AngleAxisd(M_PI / 7.0, Vector3d::UnitX()) *
                             Translation3d(0.5, 1.0, -2.0));
     // Frame Q is rigidly attached to P with pose X_PQ.
-    frameQ_ =
-        &model->AddFrame<FixedOffsetFrame>("Q", *frameP_, X_PQ_);
+    frameQ_ = &model->AddFrame<FixedOffsetFrame>("Q", *frameP_, X_PQ_);
 
     // Frame R is arbitrary, but named.
     frameR_ = &model->AddFrame<FixedOffsetFrame>(
@@ -85,13 +83,12 @@ class FrameTests : public ::testing::Test {
     // Ensure that the model instance propagates implicitly.
     frameSChild_ = &model->AddFrame<FixedOffsetFrame>(
         "SChild", *frameS_, math::RigidTransformd::Identity());
-    EXPECT_EQ(frameSChild_->scoped_name().get_full(),
-              "extra_instance::SChild");
+    EXPECT_EQ(frameSChild_->scoped_name().get_full(), "extra_instance::SChild");
 
     // We are done adding modeling elements. Transfer tree to system and get
     // a Context.
-    system_ = std::make_unique<
-        internal::MultibodyTreeSystem<double>>(std::move(model));
+    system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
+        std::move(model));
     context_ = system_->CreateDefaultContext();
 
     // An arbitrary pose of an arbitrary frame G in an arbitrary frame F.
@@ -164,6 +161,10 @@ TEST_F(FrameTests, BodyFrameCalcPoseMethods) {
   // body frame B, X_BF = Id and this method should return the identity
   // transformation. Next, verify the method CalcRotationMatrixInBodyFrame()
   // returns an identity rotation matrix for the rotation matrix R_BF.
+
+  // Check the cached method for getting the body pose.
+  EXPECT_TRUE(frameB_->EvalPoseInBodyFrame(*context_).IsExactlyIdentity());
+
   EXPECT_TRUE(frameB_->CalcPoseInBodyFrame(*context_).IsExactlyIdentity());
   EXPECT_TRUE(
       frameB_->CalcRotationMatrixInBodyFrame(*context_).IsExactlyIdentity());
@@ -203,6 +204,11 @@ TEST_F(FrameTests, FixedOffsetFrameCalcPoseMethods) {
   // Verify this method returns the pose X_BP of frame P in body frame B.
   // Similarly, verify the method CalcRotationMatrixInBodyFrame() returns R_BP.
   const math::RotationMatrix<double>& R_BP = X_BP_.rotation();
+
+  // Check the cached method for getting the body pose.
+  EXPECT_TRUE(
+      frameP_->EvalPoseInBodyFrame(*context_).IsNearlyEqualTo(X_BP_, kEpsilon));
+
   EXPECT_TRUE(
       frameP_->CalcPoseInBodyFrame(*context_).IsNearlyEqualTo(X_BP_, kEpsilon));
   EXPECT_TRUE(frameP_->CalcRotationMatrixInBodyFrame(*context_).IsNearlyEqualTo(
@@ -245,6 +251,11 @@ TEST_F(FrameTests, ChainedFixedOffsetFrames) {
   // Similarly verify the method CalcRotationMatrixInBodyFrame() returns R_BQ.
   const math::RigidTransform<double> X_BQ = X_BP_ * X_PQ_;
   const math::RotationMatrix<double> R_BQ = X_BQ.rotation();
+
+  // Check the cached method for getting the body pose.
+  EXPECT_TRUE(
+      frameQ_->EvalPoseInBodyFrame(*context_).IsNearlyEqualTo(X_BQ, kEpsilon));
+
   EXPECT_TRUE(
       frameQ_->CalcPoseInBodyFrame(*context_).IsNearlyEqualTo(X_BQ, kEpsilon));
   EXPECT_TRUE(frameQ_->CalcRotationMatrixInBodyFrame(*context_).IsNearlyEqualTo(
@@ -272,6 +283,39 @@ TEST_F(FrameTests, ChainedFixedOffsetFrames) {
       frameQ_->GetFixedOffsetPoseInBody(X_QG_).IsNearlyEqualTo(X_BG, kEpsilon));
   EXPECT_TRUE(frameQ_->GetFixedRotationMatrixInBody(R_QG).IsNearlyEqualTo(
       R_BG, kEpsilon));
+
+  // Change the poses of the parent P and frame Q and make sure those are
+  // noticed by the cached method. We're also going to do some digging to
+  // show that we don't recalculate unnecessarily. For that we'll find the
+  // cached value's serial number and show that it changes when we have
+  // to recalculate and doesn't when we don't.
+
+  const systems::CacheEntry& body_pose_cache_entry =
+      system_->frame_body_poses_cache_entry();
+  // This function just digs out the cached value; it doesn't compute anything.
+  const systems::CacheEntryValue& body_poses =
+      body_pose_cache_entry.get_cache_entry_value(*context_);
+  const int64_t starting_serial_number = body_poses.serial_number();
+
+  const math::RigidTransform<double> X_PQ2 = RigidTransformd(
+      AngleAxisd(1.23, Vector3d::UnitZ()) *
+      AngleAxisd(-1.45, Vector3d::UnitX()) * Translation3d(5.0, 6.0, -7.0));
+  dynamic_cast<const FixedOffsetFrame<double>*>(frameQ_)->SetPoseInParentFrame(
+      &*context_, X_PQ2);
+  EXPECT_TRUE(frameQ_->EvalPoseInBodyFrame(*context_).IsNearlyEqualTo(
+      X_BP_ * X_PQ2, kEpsilon));
+  EXPECT_EQ(body_poses.serial_number(), starting_serial_number + 1);
+
+  // Now change the parent P and make sure Q notices.
+  dynamic_cast<const FixedOffsetFrame<double>*>(frameP_)->SetPoseInParentFrame(
+      &*context_, X_PQ2);  // Re-using the same frame for convenience.
+  EXPECT_TRUE(frameP_->EvalPoseInBodyFrame(*context_).IsExactlyEqualTo(X_PQ2));
+  EXPECT_EQ(body_poses.serial_number(), starting_serial_number + 2);
+
+  // Looking at frameQ's pose now shouldn't require recomputation.
+  EXPECT_TRUE(frameQ_->EvalPoseInBodyFrame(*context_).IsNearlyEqualTo(
+      X_PQ2 * X_PQ2, kEpsilon));
+  EXPECT_EQ(body_poses.serial_number(), starting_serial_number + 2);
 }
 
 TEST_F(FrameTests, NamedFrame) {
@@ -289,8 +333,7 @@ TEST_F(FrameTests, ModelInstanceOverride) {
 TEST_F(FrameTests, HasFrameNamed) {
   for (FrameIndex i{0}; i < tree().num_frames(); ++i) {
     auto& frame = tree().get_frame(i);
-    EXPECT_TRUE(
-        tree().HasFrameNamed(frame.name(), frame.model_instance()))
+    EXPECT_TRUE(tree().HasFrameNamed(frame.name(), frame.model_instance()))
         << frame.name();
   }
 }

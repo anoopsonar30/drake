@@ -3,8 +3,12 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
+
+#include <fmt/ranges.h>
 
 #include "drake/common/drake_assert.h"
+#include "drake/common/string_unordered_set.h"
 #include "drake/common/text_logging.h"
 #include "drake/systems/framework/abstract_value_cloner.h"
 #include "drake/systems/framework/subvector.h"
@@ -100,25 +104,6 @@ Diagram<T>::DoAllocateCompositeEventCollection() const {
 }
 
 template <typename T>
-void Diagram<T>::SetDefaultState(const Context<T>& context,
-                                 State<T>* state) const {
-  this->ValidateContext(context);
-  auto diagram_context = dynamic_cast<const DiagramContext<T>*>(&context);
-  DRAKE_DEMAND(diagram_context != nullptr);
-
-  this->ValidateCreatedForThisSystem(state);
-  auto diagram_state = dynamic_cast<DiagramState<T>*>(state);
-  DRAKE_DEMAND(diagram_state != nullptr);
-
-  // Set default state of each constituent system.
-  for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
-    auto& subcontext = diagram_context->GetSubsystemContext(i);
-    auto& substate = diagram_state->get_mutable_substate(i);
-    registered_systems_[i]->SetDefaultState(subcontext, &substate);
-  }
-}
-
-template <typename T>
 void Diagram<T>::SetDefaultParameters(const Context<T>& context,
                                       Parameters<T>* params) const {
   this->ValidateContext(context);
@@ -169,6 +154,25 @@ void Diagram<T>::SetDefaultParameters(const Context<T>& context,
     subparameters.set_system_id(subcontext.get_system_id());
 
     registered_systems_[i]->SetDefaultParameters(subcontext, &subparameters);
+  }
+}
+
+template <typename T>
+void Diagram<T>::SetDefaultState(const Context<T>& context,
+                                 State<T>* state) const {
+  this->ValidateContext(context);
+  auto diagram_context = dynamic_cast<const DiagramContext<T>*>(&context);
+  DRAKE_DEMAND(diagram_context != nullptr);
+
+  this->ValidateCreatedForThisSystem(state);
+  auto diagram_state = dynamic_cast<DiagramState<T>*>(state);
+  DRAKE_DEMAND(diagram_state != nullptr);
+
+  // Set default state of each constituent system.
+  for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
+    auto& subcontext = diagram_context->GetSubsystemContext(i);
+    auto& substate = diagram_state->get_mutable_substate(i);
+    registered_systems_[i]->SetDefaultState(subcontext, &substate);
   }
 }
 
@@ -608,36 +612,6 @@ template <typename T>
 std::vector<std::string> Diagram<T>::GetGraphvizPortLabels(bool input) const {
   return internal::DiagramSystemBaseAttorney::GetGraphvizPortLabels(*this,
                                                                     input);
-}
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-void Diagram<T>::GetGraphvizInputPortToken(const InputPort<T>& port,
-                                           int max_depth,
-                                           std::stringstream* dot) const {
-  DRAKE_DEMAND(&port.get_system() == this);
-  *dot << fmt::format("s{}{}:u{}", this->get_system_id().get_value(),
-                      (max_depth > 0) ? "in" : 0, port.get_index());
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  // Call the base class to trigger the console log warning.
-  System<T>::GetGraphvizInputPortToken(port, max_depth, dot);
-#pragma GCC diagnostic pop
-}
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-void Diagram<T>::GetGraphvizOutputPortToken(const OutputPort<T>& port,
-                                            int max_depth,
-                                            std::stringstream* dot) const {
-  DRAKE_DEMAND(&port.get_system() == this);
-  *dot << fmt::format("s{}{}:u{}", this->get_system_id().get_value(),
-                      (max_depth > 0) ? "out" : 0, port.get_index());
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  // Call the base class to trigger the console log warning.
-  System<T>::GetGraphvizOutputPortToken(port, max_depth, dot);
-#pragma GCC diagnostic pop
 }
 
 template <typename T>
@@ -1172,7 +1146,7 @@ bool Diagram<T>::DiagramHasDirectFeedthrough(
     for (const auto& [sys_input, sys_output] : sys_feedthroughs) {
       if (sys_output == current_output_id.second) {
         const InputPortLocator curr_input_id(sys, sys_input);
-        if (target_input_ids.count(curr_input_id)) {
+        if (target_input_ids.contains(curr_input_id)) {
           // We've found a direct-feedthrough path to the input_port.
           return true;
         } else {
@@ -1752,7 +1726,7 @@ bool Diagram<T>::PortsAreValid() const {
 
 template <typename T>
 bool Diagram<T>::NamesAreUniqueAndNonEmpty() const {
-  std::set<std::string> names;
+  string_unordered_set names;
   for (const auto& system : registered_systems_) {
     const std::string& name = system->get_name();
     if (name.empty()) {
@@ -1782,4 +1756,4 @@ int Diagram<T>::num_subsystems() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-  class ::drake::systems::Diagram)
+  class ::drake::systems::Diagram);

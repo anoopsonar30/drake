@@ -11,16 +11,21 @@
 #include <msgpack.hpp>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/temp_directory.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
-#include "drake/geometry/meshcat_types.h"
+#include "drake/common/timer.h"
+#include "drake/geometry/meshcat_types_internal.h"
 
 namespace drake {
 namespace geometry {
 namespace {
 
+namespace fs = std::filesystem;
+
 using Eigen::Vector3d;
 using math::RigidTransformd;
+using math::RollPitchYawd;
 using math::RotationMatrixd;
 using testing::ElementsAre;
 using ::testing::HasSubstr;
@@ -44,15 +49,17 @@ int SystemCall(const std::vector<std::string>& argv) {
 // @param expect_json Expected content of the final message, as a json string.
 // @param expect_success Whether to insist that the python helper finished and
 //     the expected_json (if given) was actually received.
-void CheckWebsocketCommand(
-    const Meshcat& meshcat,
-    std::optional<std::string> send_json,
-    std::optional<int> expect_num_messages,
-    std::optional<std::string> expect_json,
-    bool expect_success = true) {
+void CheckWebsocketCommand(const Meshcat& meshcat,
+                           std::optional<std::string> send_json,
+                           std::optional<int> expect_num_messages,
+                           std::optional<std::string> expect_json,
+                           bool expect_success = true) {
+  if (expect_num_messages) {
+    meshcat.Flush();
+  }
   std::vector<std::string> argv;
-  argv.push_back(FindResourceOrThrow(
-      "drake/geometry/meshcat_websocket_client"));
+  argv.push_back(
+      FindResourceOrThrow("drake/geometry/meshcat_websocket_client"));
   // Even when this unit test is itself running under valgrind, we don't want to
   // instrument the helper process. Our valgrind configuration recognizes this
   // argument and skips instrumentation of the child process.
@@ -63,19 +70,56 @@ void CheckWebsocketCommand(
     argv.push_back(fmt::format("--send_message={}", std::move(*send_json)));
   }
   if (expect_num_messages) {
-    argv.push_back(fmt::format("--expect_num_messages={}",
-        *expect_num_messages));
+    argv.push_back(
+        fmt::format("--expect_num_messages={}", *expect_num_messages));
   }
   if (expect_json) {
     DRAKE_DEMAND(!expect_json->empty());
     argv.push_back(fmt::format("--expect_message={}", std::move(*expect_json)));
   }
-  argv.push_back(fmt::format("--expect_success={}",
-      expect_success ? "1" : "0"));
+  argv.push_back(
+      fmt::format("--expect_success={}", expect_success ? "1" : "0"));
   const int exit_code = SystemCall(argv);
   if (expect_success) {
     EXPECT_EQ(exit_code, 0);
   }
+}
+
+/* Decodes the most recent SetTransform message for Meshcat on the given path
+and returns the message's decoded path and transform data. If no message has
+ever been sent, returns a default-constructed value. */
+std::pair<std::string, Eigen::Matrix4d> GetDecodedTransform(
+    const Meshcat& meshcat, std::string_view path) {
+  std::string message = meshcat.GetPackedTransform(path);
+  if (message.empty()) {
+    return {};
+  }
+
+  msgpack::object_handle oh = msgpack::unpack(message.data(), message.size());
+  internal::SetTransformData decoded;
+  EXPECT_NO_THROW(decoded = oh.get().as<internal::SetTransformData>());
+  EXPECT_EQ(decoded.type, "set_transform");
+  Eigen::Map<Eigen::Matrix4d> matrix(decoded.matrix);
+  return {decoded.path, Eigen::Matrix4d{matrix}};
+}
+
+/* Decodes the most recent SetProperty message for Meshcat on the given path
+and returns the message's decoded path and property value. If no message has
+ever been sent, returns a default-constructed value. */
+template <typename T>
+std::pair<std::string, T> GetDecodedProperty(const Meshcat& meshcat,
+                                             std::string_view path,
+                                             std::string_view property) {
+  std::string message = meshcat.GetPackedProperty(path, std::string{property});
+  if (message.empty()) {
+    return {};
+  }
+  msgpack::object_handle oh = msgpack::unpack(message.data(), message.size());
+  internal::SetPropertyData<T> decoded;
+  EXPECT_NO_THROW(decoded = oh.get().as<internal::SetPropertyData<T>>());
+  EXPECT_EQ(decoded.type, "set_property");
+  EXPECT_EQ(decoded.property, property);
+  return {decoded.path, decoded.value};
 }
 
 GTEST_TEST(MeshcatTest, TestHttp) {
@@ -139,12 +183,14 @@ GTEST_TEST(MeshcatTest, EphemeralPort) {
   Meshcat meshcat(0);
   EXPECT_GE(meshcat.port(), 32768);
 
-  // Try clicking a button to make sure the number was correct.
+  // Try clicking a button to make sure the number was correct. This also serves
+  // as an end-to-end test of button handling over websockets.
   meshcat.AddButton("button");
   CheckWebsocketCommand(meshcat, R"""({
       "type": "button",
       "name": "button"
-    })""", {}, {});
+    })""",
+                        {}, {});
   EXPECT_EQ(meshcat.GetButtonClicks("button"), 1);
 }
 
@@ -209,9 +255,8 @@ GTEST_TEST(MeshcatTest, MalformedCustom) {
       Meshcat({"", std::nullopt, "http://localhost:{portnum}"}),
       ".*argument.*");
   // Only http or https are allowed.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      Meshcat({"", std::nullopt, "file:///tmp"}),
-      ".*web_url_pattern.*http.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(Meshcat({"", std::nullopt, "file:///tmp"}),
+                              ".*web_url_pattern.*http.*");
 }
 
 // Checks that unparsable messages are ignored.
@@ -292,15 +337,114 @@ TEST_P(MeshcatFaultTest, WorkerThreadFault) {
 }
 
 INSTANTIATE_TEST_SUITE_P(AllFaults, MeshcatFaultTest,
-    testing::Range(0, Meshcat::kMaxFaultNumber + 1));
+                         testing::Range(0, Meshcat::kMaxFaultNumber + 1));
 
 GTEST_TEST(MeshcatTest, NumActive) {
   Meshcat meshcat;
   EXPECT_EQ(meshcat.GetNumActiveConnections(), 0);
 }
 
+// Note: The Mesh shape is special. It can reference on-disk or in-memory data
+// and they all need to be handled. This test runs through the various
+// permutations.
+GTEST_TEST(MeshcatTest, SetObjectWithMesh) {
+  Meshcat meshcat;
+
+  using testing::HasSubstr;
+  using testing::Not;
+
+  // A .obj file with material library and image. The packed message should
+  // encode the .obj, the .mtl file, and the image.
+  const fs::path obj_path =
+      FindResourceOrThrow("drake/geometry/render/test/meshes/rainbow_box.obj");
+  const Mesh disk_obj(obj_path, 0.25);
+  const auto obj_file = MemoryFile::Make(obj_path);
+  const auto mtl_file = MemoryFile::Make(
+      FindResourceOrThrow("drake/geometry/render/test/meshes/rainbow_box.mtl"));
+  const auto png_file = MemoryFile::Make(FindResourceOrThrow(
+      "drake/geometry/render/test/meshes/rainbow_stripes.png"));
+  const Mesh memory_obj(InMemoryMesh{
+      MemoryFile(obj_file.contents(), obj_file.extension(),
+                 "a hint; *not* a path"),
+      {{"rainbow_box.mtl", MemoryFile(mtl_file)},
+       {"rainbow_stripes.png", MemoryFile(png_file)}}});
+  // The "hetero" objs mix up the supporting files so that, in turn, one is
+  // in memory, and one is on-disk.
+  const Mesh hetero_obj1(InMemoryMesh{
+      MemoryFile(obj_file.contents(), obj_file.extension(), "hetero1_obj"),
+      {{"rainbow_box.mtl", fs::path(mtl_file.filename_hint())},
+       {"rainbow_stripes.png", MemoryFile(png_file)}}});
+  const Mesh hetero_obj2(InMemoryMesh{
+      MemoryFile(obj_file.contents(), obj_file.extension(), "hetero2_obj"),
+      {{"rainbow_box.mtl", MemoryFile(mtl_file)},
+       {"rainbow_stripes.png", fs::path(png_file.filename_hint())}}});
+  for (const auto* mesh_ptr :
+       {&disk_obj, &memory_obj, &hetero_obj1, &hetero_obj2}) {
+    const MeshSource& source = mesh_ptr->source();
+    const bool is_disk = source.is_path();
+    SCOPED_TRACE(fmt::format("Full obj from {} - {}",
+                             is_disk ? "disk" : "memory",
+                             is_disk ? std::string() : source.description()));
+    DRAKE_DEMAND(meshcat.GetPackedObject("obj_path").empty());
+
+    meshcat.SetObject("obj_path", *mesh_ptr);
+    const std::string packed_obj = meshcat.GetPackedObject("obj_path");
+    EXPECT_FALSE(packed_obj.empty());
+    // Evidence that the image got loaded.
+    EXPECT_THAT(packed_obj, testing::HasSubstr("data:image/png;base64"));
+    // Evidence that the material library got loaded.
+    EXPECT_THAT(packed_obj, testing::HasSubstr("newmtl Rainbow_Stripes"));
+    meshcat.Delete("obj_path");
+    ASSERT_TRUE(meshcat.GetPackedObject("obj_path").empty());
+  }
+
+  // Missing elements from the in-memory mesh should proceed (but with missing
+  // resources). Warnings are also spewed, but we can't test for those.
+
+  // Missing the mtl file (whether the png is present or not), means no mtl and
+  // no png.
+  for (const InMemoryMesh& mem_mesh :
+       {InMemoryMesh{obj_file},
+        InMemoryMesh{obj_file,
+                     {{"rainbow_stripes.png", MemoryFile(png_file)}}}}) {
+    SCOPED_TRACE(fmt::format("Partial OBJ with {} supporting files",
+                             mem_mesh.supporting_files.size()));
+    DRAKE_DEMAND(meshcat.GetPackedObject("obj_path").empty());
+    meshcat.SetObject("obj_path", Mesh(mem_mesh));
+    const std::string packed_obj = meshcat.GetPackedObject("obj_path");
+    EXPECT_FALSE(packed_obj.empty());
+    EXPECT_THAT(packed_obj, Not(HasSubstr("data:image/png;base64")));
+    EXPECT_THAT(packed_obj, Not(HasSubstr("newmtl Rainbow_Stripes")));
+    meshcat.Delete("obj_path");
+  }
+
+  // If only the texture is missing, we still have "success" - materials are
+  // loaded but the image is not.
+  {
+    DRAKE_DEMAND(meshcat.GetPackedObject("obj_path").empty());
+    meshcat.SetObject("obj_path",
+                      Mesh(InMemoryMesh{obj_file, {{"rainbow_box.mtl",
+                                                    MemoryFile(mtl_file)}}}));
+    const std::string packed_obj = meshcat.GetPackedObject("obj_path");
+    EXPECT_FALSE(packed_obj.empty());
+    EXPECT_THAT(packed_obj, Not(HasSubstr("data:image/png;base64")));
+    EXPECT_THAT(packed_obj, HasSubstr("newmtl Rainbow_Stripes"));
+    meshcat.Delete("obj_path");
+  }
+
+  // Meshcat defers to `meshcat_internal` logic for handling glTF files so
+  // it's enough to show that good things happen. Tests on the internal
+  // implementations are responsible for confirming it's the *right* thing.
+  meshcat.SetObject(
+      "gltf",
+      Mesh(FindResourceOrThrow("drake/geometry/render/test/meshes/cube1.gltf"),
+           0.25));
+  EXPECT_FALSE(meshcat.GetPackedObject("gltf").empty());
+}
+
 // The correctness of this is established with meshcat_manual_test.  Here we
 // simply aim to provide code coverage for CI (e.g., no segfaults).
+// Meshes are treated in SetObjectWithMesh.
 GTEST_TEST(MeshcatTest, SetObjectWithShape) {
   Meshcat meshcat;
   EXPECT_TRUE(meshcat.GetPackedObject("sphere").empty());
@@ -319,19 +463,9 @@ GTEST_TEST(MeshcatTest, SetObjectWithShape) {
   meshcat.SetObject("capsule", Capsule(0.25, 0.5));
   EXPECT_FALSE(meshcat.GetPackedObject("capsule").empty());
   meshcat.SetObject(
-      "mesh", Mesh(FindResourceOrThrow(
-                       "drake/geometry/render/test/meshes/box.obj"),
-                   0.25));
-  EXPECT_FALSE(meshcat.GetPackedObject("mesh").empty());
-  meshcat.SetObject(
-      "gltf", Mesh(FindResourceOrThrow(
-                       "drake/geometry/render/test/meshes/cube.gltf"),
-                   0.25));
-  EXPECT_FALSE(meshcat.GetPackedObject("gltf").empty());
-  meshcat.SetObject(
-      "convex", Convex(FindResourceOrThrow(
-                           "drake/geometry/render/test/meshes/box.obj"),
-                       0.25));
+      "convex",
+      Convex(FindResourceOrThrow("drake/geometry/render/test/meshes/box.obj"),
+             0.25));
   EXPECT_FALSE(meshcat.GetPackedObject("convex").empty());
   // Bad filename (no extension).  Should only log a warning.
   meshcat.SetObject("bad", Mesh("test"));
@@ -339,6 +473,33 @@ GTEST_TEST(MeshcatTest, SetObjectWithShape) {
   // Bad filename (file doesn't exist).  Should only log a warning.
   meshcat.SetObject("bad", Mesh("test.obj"));
   EXPECT_TRUE(meshcat.GetPackedObject("bad").empty());
+}
+
+// Confirms that an OBJ with a missing material becomes a MeshData instead of a
+// MeshfileObjectData.
+GTEST_TEST(MeshcatTest, ObjWithMissingMtl) {
+  Meshcat meshcat;
+
+  // The baseline .obj with .mtl file.
+  const std::string obj_source =
+      FindResourceOrThrow("drake/geometry/render/test/meshes/box.obj");
+  meshcat.SetObject("with_mtl", Mesh(obj_source), Rgba(1, 0, 1));
+  const std::string with_mtl_packed = meshcat.GetPackedObject("with_mtl");
+  EXPECT_THAT(with_mtl_packed, testing::HasSubstr("_meshfile_object"));
+  EXPECT_THAT(with_mtl_packed, testing::HasSubstr("mtl_library"));
+
+  // Copy the .obj into a directory, without its .mtl file.
+  const fs::path dir = temp_directory();
+  const fs::path missing_mtl_path = dir / "box.obj";
+  fs::copy_file(obj_source, missing_mtl_path);
+  meshcat.SetObject("missing_mtl", Mesh(missing_mtl_path.string()),
+                    Rgba(1, 0.75, 0.5));
+
+  const std::string missing_mtl_packed = meshcat.GetPackedObject("missing_mtl");
+  EXPECT_THAT(missing_mtl_packed, testing::HasSubstr("_meshfile_geometry"));
+  EXPECT_THAT(missing_mtl_packed, testing::HasSubstr("MeshPhongMaterial"));
+  // The Rgba value above gets hex encoded as follows:
+  EXPECT_THAT(missing_mtl_packed, testing::HasSubstr("\0\xFF\xBF\x7F"));
 }
 
 GTEST_TEST(MeshcatTest, SetObjectWithPointCloud) {
@@ -381,8 +542,8 @@ GTEST_TEST(MeshcatTest, SetObjectWithTriangleSurfaceMesh) {
       {0, 0, 0}, {0.5, 0, 0}, {0.5, 0.5, 0}, {0, 0.5, 0.5}};
   std::vector<Eigen::Vector3d> vertices;
   for (int v = 0; v < 4; ++v) vertices.emplace_back(vertex_data[v]);
-  TriangleSurfaceMesh<double> surface_mesh(
-      std::move(faces), std::move(vertices));
+  TriangleSurfaceMesh<double> surface_mesh(std::move(faces),
+                                           std::move(vertices));
   meshcat.SetObject("triangle_mesh", surface_mesh, Rgba(0.9, 0, 0.9, 1.0));
   EXPECT_FALSE(meshcat.GetPackedObject("triangle_mesh").empty());
 
@@ -395,12 +556,10 @@ GTEST_TEST(MeshcatTest, PlotSurface) {
   Meshcat meshcat;
 
   constexpr int nx = 15, ny = 11;
-  Eigen::MatrixXd X =
-      RowVector<double, nx>::LinSpaced(0, 1).replicate<ny, 1>();
-  Eigen::MatrixXd Y =
-      Vector<double, ny>::LinSpaced(0, 1).replicate<1, nx>();
+  Eigen::MatrixXd X = RowVector<double, nx>::LinSpaced(0, 1).replicate<ny, 1>();
+  Eigen::MatrixXd Y = Vector<double, ny>::LinSpaced(0, 1).replicate<1, nx>();
   // z = y*sin(5*x)
-  Eigen::MatrixXd Z = (Y.array() * (5*X.array()).sin()).matrix();
+  Eigen::MatrixXd Z = (Y.array() * (5 * X.array()).sin()).matrix();
 
   // Wireframe = false.
   meshcat.PlotSurface("plot_surface", X, Y, Z, Rgba(0, 0, 0.9, 1.0), false);
@@ -455,7 +614,7 @@ GTEST_TEST(MeshcatTest, SetTriangleMesh) {
   // clang-format on
 
   meshcat.SetTriangleMesh("triangle_mesh", vertices.transpose(),
-                         faces.transpose(), Rgba(1, 0, 0, 1), true, 5.0);
+                          faces.transpose(), Rgba(1, 0, 0, 1), true, 5.0);
   EXPECT_FALSE(meshcat.GetPackedObject("triangle_mesh").empty());
 }
 
@@ -463,18 +622,14 @@ GTEST_TEST(MeshcatTest, SetTransform) {
   Meshcat meshcat;
   EXPECT_FALSE(meshcat.HasPath("frame"));
   EXPECT_TRUE(meshcat.GetPackedTransform("frame").empty());
-  const RigidTransformd X_ParentPath{math::RollPitchYawd(0.5, 0.26, -3),
+  const RigidTransformd X_ParentPath{RollPitchYawd(0.5, 0.26, -3),
                                      Vector3d{0.9, -2.0, 0.12}};
   meshcat.SetTransform("frame", X_ParentPath);
 
-  std::string transform = meshcat.GetPackedTransform("frame");
-  msgpack::object_handle oh =
-      msgpack::unpack(transform.data(), transform.size());
-  auto data = oh.get().as<internal::SetTransformData>();
-  EXPECT_EQ(data.type, "set_transform");
-  EXPECT_EQ(data.path, "/drake/frame");
-  Eigen::Map<Eigen::Matrix4d> matrix(data.matrix);
-  EXPECT_TRUE(CompareMatrices(matrix, X_ParentPath.GetAsMatrix4()));
+  const auto [actual_path, actual_value] =
+      GetDecodedTransform(meshcat, "frame");
+  EXPECT_EQ(actual_path, "/drake/frame");
+  EXPECT_TRUE(CompareMatrices(actual_value, X_ParentPath.GetAsMatrix4()));
 }
 
 GTEST_TEST(MeshcatTest, SetTransformWithMatrix) {
@@ -490,14 +645,10 @@ GTEST_TEST(MeshcatTest, SetTransformWithMatrix) {
   // clang-format on
   meshcat.SetTransform("frame", matrix);
 
-  std::string transform = meshcat.GetPackedTransform("frame");
-  msgpack::object_handle oh =
-      msgpack::unpack(transform.data(), transform.size());
-  auto data = oh.get().as<internal::SetTransformData>();
-  EXPECT_EQ(data.type, "set_transform");
-  EXPECT_EQ(data.path, "/drake/frame");
-  Eigen::Map<Eigen::Matrix4d> actual(data.matrix);
-  EXPECT_TRUE(CompareMatrices(matrix, actual));
+  const auto [actual_path, actual_value] =
+      GetDecodedTransform(meshcat, "frame");
+  EXPECT_EQ(actual_path, "/drake/frame");
+  EXPECT_TRUE(CompareMatrices(actual_value, matrix));
 }
 
 GTEST_TEST(MeshcatTest, Delete) {
@@ -581,96 +732,122 @@ GTEST_TEST(MeshcatTest, Paths) {
 
 GTEST_TEST(MeshcatTest, SetPropertyBool) {
   Meshcat meshcat;
-  EXPECT_FALSE(meshcat.HasPath("/Grid"));
-  EXPECT_TRUE(meshcat.GetPackedProperty("/Grid", "visible").empty());
-  meshcat.SetProperty("/Grid", "visible", false);
-  EXPECT_TRUE(meshcat.HasPath("/Grid"));
+  const std::string path{"/Grid"};
+  const std::string property{"visible"};
+  EXPECT_FALSE(meshcat.HasPath(path));
+  EXPECT_TRUE(meshcat.GetPackedProperty(path, property).empty());
 
-  std::string property = meshcat.GetPackedProperty("/Grid", "visible");
-  msgpack::object_handle oh = msgpack::unpack(property.data(), property.size());
-  auto data = oh.get().as<internal::SetPropertyData<bool>>();
-  EXPECT_EQ(data.type, "set_property");
-  EXPECT_EQ(data.path, "/Grid");
-  EXPECT_EQ(data.property, "visible");
-  EXPECT_FALSE(data.value);
+  meshcat.SetProperty(path, property, false);
+  EXPECT_TRUE(meshcat.HasPath(path));
+  const auto [actual_path, actual_value] =
+      GetDecodedProperty<bool>(meshcat, path, property);
+  EXPECT_EQ(actual_path, path);
+  EXPECT_FALSE(actual_value);
 }
 
 GTEST_TEST(MeshcatTest, SetPropertyDouble) {
   Meshcat meshcat;
-  EXPECT_FALSE(meshcat.HasPath("/Cameras/default/rotated/<object>"));
-  EXPECT_TRUE(
-      meshcat.GetPackedProperty("/Cameras/default/rotated/<object>", "zoom")
-          .empty());
-  meshcat.SetProperty("/Cameras/default/rotated/<object>", "zoom", 2.0);
-  EXPECT_TRUE(meshcat.HasPath("/Cameras/default/rotated/<object>"));
+  const std::string path{"/Cameras/default/rotated/<object>"};
+  const std::string property{"zoom"};
+  EXPECT_FALSE(meshcat.HasPath(path));
+  EXPECT_TRUE(meshcat.GetPackedProperty(path, property).empty());
 
-  std::string property =
-      meshcat.GetPackedProperty("/Cameras/default/rotated/<object>", "zoom");
-  msgpack::object_handle oh = msgpack::unpack(property.data(), property.size());
-  auto data = oh.get().as<internal::SetPropertyData<double>>();
-  EXPECT_EQ(data.type, "set_property");
-  EXPECT_EQ(data.path, "/Cameras/default/rotated/<object>");
-  EXPECT_EQ(data.property, "zoom");
-  EXPECT_EQ(data.value, 2.0);
+  meshcat.SetProperty(path, property, 2.0);
+  EXPECT_TRUE(meshcat.HasPath(path));
+  const auto [actual_path, actual_value] =
+      GetDecodedProperty<double>(meshcat, path, property);
+  EXPECT_EQ(actual_path, path);
+  EXPECT_EQ(actual_value, 2.0);
 }
 
 GTEST_TEST(MeshcatTest, SetEnvironmentMap) {
   Meshcat meshcat;
-  EXPECT_FALSE(meshcat.HasPath("/Background/<object>"));
-  EXPECT_TRUE(
-      meshcat.GetPackedProperty("/Background/<object>", "environment_map")
-          .empty());
+  const std::string path{"/Background/<object>"};
+  const std::string property{"environment_map"};
+  EXPECT_FALSE(meshcat.HasPath(path));
+  auto [actual_path, actual_value] =
+      GetDecodedProperty<std::string>(meshcat, path, property);
+  EXPECT_EQ(actual_path, "");
+  EXPECT_EQ(actual_value, "");
 
   // Set the map to a valid image.
-  const std::filesystem::path env_map(
+  const fs::path env_map(
       FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
   EXPECT_NO_THROW(meshcat.SetEnvironmentMap(env_map));
-  EXPECT_TRUE(meshcat.HasPath("/Background/<object>"));
-
-  std::string property =
-      meshcat.GetPackedProperty("/Background/<object>", "environment_map");
-  msgpack::object_handle oh = msgpack::unpack(property.data(), property.size());
-  auto data = oh.get().as<internal::SetPropertyData<std::string>>();
-  EXPECT_EQ(data.type, "set_property");
-  EXPECT_EQ(data.path, "/Background/<object>");
-  EXPECT_EQ(data.property, "environment_map");
-  EXPECT_THAT(data.value, testing::StartsWith("data:image/png;base64"));
+  EXPECT_TRUE(meshcat.HasPath(path));
+  std::tie(actual_path, actual_value) =
+      GetDecodedProperty<std::string>(meshcat, path, property);
+  EXPECT_EQ(actual_path, path);
+  EXPECT_THAT(actual_value, testing::StartsWith("cas-"));
 
   // Clear the map with an empty string.
   EXPECT_NO_THROW(meshcat.SetEnvironmentMap(""));
-  EXPECT_TRUE(meshcat.HasPath("/Background/<object>"));
-
-  property =
-      meshcat.GetPackedProperty("/Background/<object>", "environment_map");
-  oh = msgpack::unpack(property.data(), property.size());
-  data = oh.get().as<internal::SetPropertyData<std::string>>();
-  EXPECT_EQ(data.type, "set_property");
-  EXPECT_EQ(data.path, "/Background/<object>");
-  EXPECT_EQ(data.property, "environment_map");
-  EXPECT_EQ(data.value, "");
+  EXPECT_TRUE(meshcat.HasPath(path));
+  std::tie(actual_path, actual_value) =
+      GetDecodedProperty<std::string>(meshcat, path, property);
+  EXPECT_EQ(actual_path, path);
+  EXPECT_EQ(actual_value, "");
 
   // An invalid map throws.
   DRAKE_EXPECT_THROWS_MESSAGE(meshcat.SetEnvironmentMap("invalid_file.png"),
-                              "Requested environment map cannot be read.+");
+                              ".*invalid_file.png.*environment_map.*");
 }
 
+GTEST_TEST(MeshcatTest, InitialPropeties) {
+  // Construct Meshcat with some extra initial properties.
+  const std::vector<double> some_vector{1.0, 2.0};
+  const std::string some_string{"hello"};
+  const bool some_bool{true};
+  const double some_double{22.2};
+  const Meshcat meshcat{MeshcatParams{
+      .initial_properties = {
+          {.path = "/a", .property = "p1", .value = some_vector},
+          {.path = "/b", .property = "p2", .value = some_string},
+          {.path = "/c", .property = "p3", .value = some_bool},
+          {.path = "/d", .property = "p4", .value = some_double},
+      },
+  }};
+
+  // Check that they all showed up.
+  auto check_property = [&meshcat](auto path, auto property, auto value) {
+    SCOPED_TRACE(fmt::format("property = {}", property));
+    using T = decltype(value);
+    const auto [actual_path, actual_value] =
+        GetDecodedProperty<T>(meshcat, path, property);
+    EXPECT_EQ(actual_path, path);
+    EXPECT_EQ(actual_value, value);
+  };
+  check_property("/a", "p1", some_vector);
+  check_property("/b", "p2", some_string);
+  check_property("/c", "p3", some_bool);
+  check_property("/d", "p4", some_double);
+}
+
+// Tests the functional logic of button handling, without actually creating any
+// websocket connections. (The EphemeralPort case tests a button using an actual
+// connection.)
 GTEST_TEST(MeshcatTest, Buttons) {
   Meshcat meshcat;
 
   // Asking for clicks prior to adding is an error.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.GetButtonClicks("alice"),
-      "Meshcat does not have any button named alice.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.GetButtonClicks("alice"),
+                              "Meshcat does not have any button named alice.*");
 
   // A new button starts out unclicked.
   meshcat.AddButton("alice");
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 0);
 
+  auto click = [&meshcat]() {
+    internal::UserInterfaceEvent data;
+    data.type = "button";
+    data.name = "alice";
+    std::stringstream message_stream;
+    msgpack::pack(message_stream, data);
+    meshcat.InjectWebsocketMessage(message_stream.str());
+  };
+
   // Clicking the button increases the count.
-  CheckWebsocketCommand(meshcat, R"""({
-      "type": "button",
-      "name": "alice"
-    })""", {}, {});
+  click();
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 1);
 
   // Adding using an existing button name resets its count.
@@ -678,22 +855,18 @@ GTEST_TEST(MeshcatTest, Buttons) {
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 0);
 
   // Clicking the button increases the count again.
-  CheckWebsocketCommand(meshcat, R"""({
-      "type": "button",
-      "name": "alice"
-    })""", {}, {});
+  click();
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 1);
 
   // Removing the button then asking for clicks is an error.
-  meshcat.DeleteButton("alice");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.GetButtonClicks("alice"),
-      "Meshcat does not have any button named alice.*");
+  EXPECT_TRUE(meshcat.DeleteButton("alice"));
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.GetButtonClicks("alice"),
+                              "Meshcat does not have any button named alice.*");
 
-  // Removing a non-existent button is an error.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.DeleteButton("alice"),
-      "Meshcat does not have any button named alice.*");
+  // Strictly (the default) removing a missing button throws.
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.DeleteButton("alice"),
+                              "Meshcat does not have any button named alice.*");
+  EXPECT_FALSE(meshcat.DeleteButton("alice", /*strict = */ false));
 
   // Adding the button anew starts with a zero count again.
   meshcat.AddButton("alice");
@@ -702,31 +875,24 @@ GTEST_TEST(MeshcatTest, Buttons) {
   // Buttons are removed when deleting all controls.
   meshcat.AddButton("bob");
   meshcat.DeleteAddedControls();
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.GetButtonClicks("alice"),
-      "Meshcat does not have any button named alice.*");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.GetButtonClicks("bob"),
-      "Meshcat does not have any button named bob.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.GetButtonClicks("alice"),
+                              "Meshcat does not have any button named alice.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.GetButtonClicks("bob"),
+                              "Meshcat does not have any button named bob.*");
 
   // Adding a button with the keycode.
   meshcat.AddButton("alice", "KeyT");
-  CheckWebsocketCommand(meshcat, R"""({
-      "type": "button",
-      "name": "alice"
-    })""", {}, {});
+  click();
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 1);
   // Adding with the same keycode still resets.
   meshcat.AddButton("alice", "KeyT");
   EXPECT_EQ(meshcat.GetButtonClicks("alice"), 0);
   // Adding the same button with an empty keycode throws.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddButton("alice"),
-      ".*does not match the current keycode.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddButton("alice"),
+                              ".*does not match the current keycode.*");
   // Adding the same button with a different keycode throws.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddButton("alice", "KeyR"),
-      ".*does not match the current keycode.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddButton("alice", "KeyR"),
+                              ".*does not match the current keycode.*");
   meshcat.DeleteButton("alice");
 
   // Adding a button with the keycode empty, then populated works.
@@ -751,11 +917,10 @@ GTEST_TEST(MeshcatTest, Sliders) {
   EXPECT_NEAR(meshcat.GetSliderValue("slider"), 1.5, 1e-14);
   meshcat.SetSliderValue("slider", 1.245);
   EXPECT_NEAR(meshcat.GetSliderValue("slider"), 1.2, 1e-14);
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddSlider("slider", 0.2, 1.5, 0.1, 0.5),
-      "Meshcat already has a slider named slider.");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddSlider("slider", 0.2, 1.5, 0.1, 0.5),
+                              "Meshcat already has a slider named slider.");
 
-  meshcat.DeleteSlider("slider");
+  EXPECT_TRUE(meshcat.DeleteSlider("slider"));
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       meshcat.GetSliderValue("slider"),
@@ -775,6 +940,12 @@ GTEST_TEST(MeshcatTest, Sliders) {
       meshcat.GetSliderValue("slider2"),
       "Meshcat does not have any slider named slider2.*");
 
+  // Strictly (the default) removing a missing slider throws.
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      meshcat.DeleteSlider("slider1"),
+      "Meshcat does not have any slider named slider1.*");
+  EXPECT_FALSE(meshcat.DeleteSlider("slider1", /*strict = */false));
+
   slider_names = meshcat.GetSliderNames();
   EXPECT_EQ(slider_names.size(), 0);
 }
@@ -787,15 +958,12 @@ GTEST_TEST(MeshcatTest, DuplicateMixedControls) {
 
   // We cannot use AddButton nor AddSlider to change the type of an existing
   // control by attempting to re-use its name.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddButton("slider"),
-      "Meshcat already has a slider named slider.");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddButton("slider", "KeyR"),
-      "Meshcat already has a slider named slider.");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      meshcat.AddSlider("button", 0.2, 1.5, 0.1, 0.5),
-      "Meshcat already has a button named button.");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddButton("slider"),
+                              "Meshcat already has a slider named slider.");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddButton("slider", "KeyR"),
+                              "Meshcat already has a slider named slider.");
+  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.AddSlider("button", 0.2, 1.5, 0.1, 0.5),
+                              "Meshcat already has a button named button.");
 }
 
 // Properly testing Meshcat's limited support for gamepads requires human
@@ -819,7 +987,8 @@ GTEST_TEST(MeshcatTest, Gamepad) {
         "button_values": [0, 0.5],
         "axes": [0.1, 0.2, 0.3, 0.4]
       }
-    })""", {}, {});
+    })""",
+                        {}, {});
 
   gamepad = meshcat.GetGamepad();
   EXPECT_TRUE(gamepad.index);
@@ -936,7 +1105,7 @@ GTEST_TEST(MeshcatTest, SetAnimation) {
       "animations": [{
           "path": "/drake/cylinder",
           "clip": {
-              "fps": 32.0,
+              "fps": 64.0,
               "name": "default",
               "tracks": [{
                   "name": ".visible",
@@ -956,7 +1125,7 @@ GTEST_TEST(MeshcatTest, SetAnimation) {
       }, {
           "path": "/drake/ellipsoid/<object>",
           "clip": {
-              "fps": 32.0,
+              "fps": 64.0,
               "name": "default",
               "tracks": [{
                   "name": ".material.opacity",
@@ -976,7 +1145,7 @@ GTEST_TEST(MeshcatTest, SetAnimation) {
       }, {
           "path": "/drake/sphere",
           "clip": {
-              "fps": 32.0,
+              "fps": 64.0,
               "name": "default",
               "tracks": [{
                   "name": ".position",
@@ -1016,121 +1185,124 @@ GTEST_TEST(MeshcatTest, SetAnimation) {
   })""");
 }
 
-bool has_frame(const MeshcatAnimation& animation, int frame) {
-  return animation.get_key_frame<std::vector<double>>(0, "frame", "position")
+GTEST_TEST(MeshcatTest, RecordingFps) {
+  // The hard-coded default values for Meshcat's default recording and a newly-
+  // started recording should match the MeshcatAnimation constructor's default,
+  // and retain that value throughout the whole lifecycle.
+  const double default_fps = MeshcatAnimation().frames_per_second();
+  Meshcat meshcat;
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), default_fps);
+  meshcat.StartRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), default_fps);
+  meshcat.StopRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), default_fps);
+  meshcat.PublishRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), default_fps);
+  meshcat.DeleteRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), default_fps);
+
+  // When the user provides a specific fps, it's likewise retained.
+  const double new_fps = 22.22;
+  meshcat.StartRecording(new_fps);
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), new_fps);
+  meshcat.StopRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), new_fps);
+  meshcat.PublishRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), new_fps);
+  meshcat.DeleteRecording();
+  EXPECT_EQ(meshcat.get_recording().frames_per_second(), new_fps);
+}
+
+GTEST_TEST(MeshcatTest, RecordingSafety) {
+  // It's safe to call recording-related functions without starting recording.
+  Meshcat meshcat;
+  EXPECT_NO_THROW(meshcat.get_recording());
+  EXPECT_NO_THROW(meshcat.get_mutable_recording());
+  EXPECT_NO_THROW(meshcat.DeleteRecording());
+  EXPECT_NO_THROW(meshcat.PublishRecording());
+  EXPECT_NO_THROW(meshcat.StopRecording());
+}
+
+template <typename T>
+bool has_animation_property(const Meshcat& meshcat, std::string_view property,
+                            int frame) {
+  return meshcat.get_recording()
+      .get_key_frame<T>(frame, "foo", property)
       .has_value();
 }
 
+// The unit test for MeshcatRecording covers the details of recording logic, so
+// we can rely on it for most of the test coverage. Here, we only need to cover
+// the few implementation details that sit within meshcat.cc using some basic
+// acceptance tests.
 GTEST_TEST(MeshcatTest, Recording) {
-  Meshcat meshcat;
-  DRAKE_EXPECT_THROWS_MESSAGE(meshcat.get_mutable_recording(),
-                              ".*You must create a recording.*");
+  // We'll use two devices under test, with set_visualizations_while_recording
+  // configured differently in each. This helps us highlight & verify what's the
+  // same vs different under that setting.
+  Meshcat dut_live;  // Will use `true` for set_visualizations_while_recording.
+  Meshcat dut_mute;  // Will use `false` for set_visualizations_while_recording.
 
-  const RigidTransformd X_ParentPath{math::RollPitchYawd(0.5, 0.26, -3),
-                                     Vector3d{0.9, -2.0, 0.12}};
-  meshcat.SetTransform("frame", X_ParentPath, 0);
-  meshcat.StartRecording();
-  MeshcatAnimation* animation = &meshcat.get_mutable_recording();
-  // No transforms have been published since recording started.
-  EXPECT_FALSE(has_frame(*animation, 0));
+  // Cycle through various Meshcat operations while in a sequence of different
+  // recording states, to see what happens in each. We'll stop testing when we
+  // hit the first error, because they tend to cascade so future errors aren't
+  // that interesting.
+  for (auto* dut : {&dut_live, &dut_mute}) {
+    const bool is_live = dut == &dut_live;
+    for (int sequence = 0; sequence <= 5; ++sequence) {
+      SCOPED_TRACE(fmt::format("live = {}, sequence = {}", is_live, sequence));
+      const double kFps = 64.0;
+      if (sequence == 0) {
+        // Prior to starting a recording.
+      } else if (sequence == 1) {
+        dut->StartRecording(kFps, is_live);
+      } else if (sequence == 2) {
+        // No change; keep recording.
+      } else if (sequence == 3) {
+        dut->StopRecording();
+      } else if (sequence == 4) {
+        dut->PublishRecording();
+      } else if (sequence == 5) {
+        dut->DeleteRecording();
+      }
 
-  meshcat.SetTransform("frame", X_ParentPath, 0);
-  EXPECT_TRUE(has_frame(*animation, 0));
+      // Set one of each type of property on the current frame.
+      const double time = sequence / kFps;
+      using Vec = std::vector<double>;
+      dut->SetProperty("foo", "bravo", (sequence % 2) == 1, time);
+      dut->SetProperty("foo", "delta", time, time);
+      dut->SetProperty("foo", "victor", Vec{time, time, time}, time);
+      dut->SetTransform("foo", RigidTransformd{Vector3d::Constant(time)}, time);
 
-  // Deleting the recording removes that frame.
-  meshcat.DeleteRecording();
-  animation = &meshcat.get_mutable_recording();
-  EXPECT_FALSE(has_frame(*animation, 0));
+      // Check exactly which properties and frames have been recorded. (Note
+      // that nothing here is affected by `is_live`; the recording should be the
+      // same whether live or not.)
+      for (int i = 0; i <= 5; ++i) {
+        SCOPED_TRACE(fmt::format("i = {}", i));
+        const bool has_reached = (sequence >= i);
+        const bool should_record = (i >= 1) && (i <= 2);
+        const bool not_deleted = (sequence < 5);
+        const bool expected = has_reached && should_record && not_deleted;
+        ASSERT_EQ(has_animation_property<bool>(*dut, "bravo", i), expected);
+        ASSERT_EQ(has_animation_property<double>(*dut, "delta", i), expected);
+        ASSERT_EQ(has_animation_property<Vec>(*dut, "victor", i), expected);
+        ASSERT_EQ(has_animation_property<Vec>(*dut, "position", i), expected);
+      }
 
-  // We are still recording, so SetTransform *will* add it.
-  meshcat.SetTransform("frame", X_ParentPath, 0);
-  EXPECT_TRUE(has_frame(*animation, 0));
-
-  // But if we stop recording, then it's not added.
-  meshcat.StopRecording();
-  meshcat.DeleteRecording();
-  animation = &meshcat.get_mutable_recording();
-  EXPECT_FALSE(has_frame(*animation, 0));
-  meshcat.SetTransform("frame", X_ParentPath, 0);
-  EXPECT_FALSE(has_frame(*animation, 0));
-
-  // Now publish a time 0.0 and time = 1.0 and confirm we have the frames.
-  const double kFrameRate = 64.0;
-  meshcat.StartRecording(kFrameRate);
-  animation = &meshcat.get_mutable_recording();
-  meshcat.SetTransform("frame", X_ParentPath, 0);
-  meshcat.SetTransform("frame", X_ParentPath, 1);
-  EXPECT_TRUE(has_frame(*animation, 0));
-  EXPECT_TRUE(has_frame(*animation, std::floor(kFrameRate)));
-
-  const double kTime = 0.5;
-  const int kFrame = std::floor(kFrameRate * kTime);
-  EXPECT_FALSE(
-      animation->get_key_frame<bool>(kFrame, "bool_property", "visible")
-          .has_value());
-  meshcat.SetProperty("bool_property", "visible", false, kTime);
-  EXPECT_TRUE(
-      animation->get_key_frame<bool>(kFrame, "bool_property", "visible")
-          .has_value());
-
-  EXPECT_FALSE(
-      animation
-          ->get_key_frame<double>(kFrame, "double_property", "material.opacity")
-          .has_value());
-  meshcat.SetProperty("double_property", "material.opacity", 0.5, kTime);
-  EXPECT_TRUE(
-      animation
-          ->get_key_frame<double>(kFrame, "double_property", "material.opacity")
-          .has_value());
-
-  EXPECT_FALSE(animation
-                   ->get_key_frame<std::vector<double>>(
-                       kFrame, "vector_double_property", "position")
-                   .has_value());
-  meshcat.SetProperty("vector_double_property", "position", {0.1, 0.2, 0.3},
-                      kTime);
-  EXPECT_TRUE(animation
-                  ->get_key_frame<std::vector<double>>(
-                      kFrame, "vector_double_property", "position")
-                  .has_value());
-
-  // Confirm that PublishRecording runs.  Its correctness is established by
-  // meshcat_manual_test.
-  meshcat.PublishRecording();
-}
-
-GTEST_TEST(MeshcatTest, RecordingWithoutSetTransform) {
-  Meshcat meshcat;
-
-  const RigidTransformd X_0{math::RollPitchYawd(0.5, 0.26, -3),
-                            Vector3d{0.9, -2.0, 0.12}};
-  const RigidTransformd X_1{math::RollPitchYawd(0.75, 0.21, 2.4),
-                            Vector3d{6.9, -2.2, 1.12}};
-
-  const double kFrameRate = 64.0;
-  bool set_visualizations_while_recording = false;
-  meshcat.SetTransform("frame", X_0);
-  std::string X_0_message = meshcat.GetPackedTransform("frame");
-
-  meshcat.StartRecording(kFrameRate, set_visualizations_while_recording);
-  // This SetTransform should *not* change the transform in the Meshcat scene
-  // tree.
-  meshcat.SetTransform("frame", X_1, 0);
-  EXPECT_EQ(meshcat.GetPackedTransform("frame"), X_0_message);
-
-  // This SetTransform *should* change the transform in the Meshcat scene tree,
-  // because it doesn't pass the time_in_recording argument.
-  meshcat.SetTransform("frame", X_1);
-  EXPECT_NE(meshcat.GetPackedTransform("frame"), X_0_message);
-
-  set_visualizations_while_recording = true;
-  // This publish *should* change the transform in the Meshcat scene tree.
-  meshcat.SetTransform("frame", X_0);
-  EXPECT_EQ(meshcat.GetPackedTransform("frame"), X_0_message);
-  meshcat.StartRecording(kFrameRate, set_visualizations_while_recording);
-  // This publish *should* change the transform in the Meshcat scene tree.
-  meshcat.SetTransform("frame", X_1, 0);
-  EXPECT_NE(meshcat.GetPackedTransform("frame"), X_0_message);
+      // Check the live property values. The dut_live will update all the time,
+      // but the dut_mute will not update when the sequence number is 1 or 2.
+      const bool bravo = GetDecodedProperty<bool>(*dut, "foo", "bravo").second;
+      const double delta =
+          GetDecodedProperty<double>(*dut, "foo", "delta").second;
+      const Vec victor = GetDecodedProperty<Vec>(*dut, "foo", "victor").second;
+      const Eigen::Matrix4d transform = GetDecodedTransform(*dut, "foo").second;
+      const int live_sequence = (is_live || sequence >= 3) ? sequence : 0;
+      const double live_time = live_sequence / kFps;
+      EXPECT_EQ(bravo, (live_sequence % 2) == 1);
+      EXPECT_EQ(delta, live_time);
+      EXPECT_EQ(victor.at(0), live_time);
+      EXPECT_EQ(transform(0, 3), live_time);
+    }
+  }
 }
 
 GTEST_TEST(MeshcatTest, Set2dRenderMode) {
@@ -1138,8 +1310,7 @@ GTEST_TEST(MeshcatTest, Set2dRenderMode) {
   meshcat.Set2dRenderMode();
   // We simply confirm that all of the objects have been set, and use
   // meshcat_manual_test to check that the visualizer updates as we expect.
-  EXPECT_FALSE(
-      meshcat.GetPackedObject("/Cameras/default/rotated").empty());
+  EXPECT_FALSE(meshcat.GetPackedObject("/Cameras/default/rotated").empty());
   EXPECT_FALSE(meshcat.GetPackedTransform("/Cameras/default").empty());
   EXPECT_FALSE(
       meshcat.GetPackedProperty("/Cameras/default/rotated/<object>", "position")
@@ -1154,8 +1325,7 @@ GTEST_TEST(MeshcatTest, ResetRenderMode) {
   meshcat.ResetRenderMode();
   // We simply confirm that all of the objects have been set, and use
   // meshcat_manual_test to check that the visualizer updates as we expect.
-  EXPECT_FALSE(
-      meshcat.GetPackedObject("/Cameras/default/rotated").empty());
+  EXPECT_FALSE(meshcat.GetPackedObject("/Cameras/default/rotated").empty());
   EXPECT_FALSE(meshcat.GetPackedTransform("/Cameras/default").empty());
   EXPECT_FALSE(
       meshcat.GetPackedProperty("/Cameras/default/rotated/<object>", "position")
@@ -1189,29 +1359,85 @@ GTEST_TEST(MeshcatTest, SetCameraPose) {
 
   // /Cameras/default should have an identity transform.
   {
-    std::string transform = meshcat.GetPackedTransform("/Cameras/default");
-    msgpack::object_handle oh =
-        msgpack::unpack(transform.data(), transform.size());
-    auto data = oh.get().as<internal::SetTransformData>();
-    EXPECT_EQ(data.type, "set_transform");
-    EXPECT_EQ(data.path, "/Cameras/default");
-    Eigen::Map<Eigen::Matrix4d> matrix(data.matrix);
-    EXPECT_TRUE(CompareMatrices(matrix, Eigen::Matrix4d::Identity()));
+    const auto [actual_path, actual_value] =
+        GetDecodedTransform(meshcat, "/Cameras/default");
+    EXPECT_EQ(actual_path, "/Cameras/default");
+    EXPECT_TRUE(CompareMatrices(actual_value, Eigen::Matrix4d::Identity()));
   }
 
   // /Cameras/default/rotated/<object> should have a position value equal to
   // <1, 3, -2>.
   {
-    std::string property = meshcat.GetPackedProperty(
-        "/Cameras/default/rotated/<object>", "position");
-    msgpack::object_handle oh =
-        msgpack::unpack(property.data(), property.size());
-    auto data = oh.get().as<internal::SetPropertyData<std::vector<double>>>();
-    EXPECT_EQ(data.type, "set_property");
-    EXPECT_EQ(data.path, "/Cameras/default/rotated/<object>");
-    EXPECT_EQ(data.property, "position");
-    EXPECT_EQ(data.value, std::vector({1.0, 3.0, -2.0}));
+    const auto [actual_path, actual_value] =
+        GetDecodedProperty<std::vector<double>>(
+            meshcat, "/Cameras/default/rotated/<object>", "position");
+    EXPECT_EQ(actual_path, "/Cameras/default/rotated/<object>");
+    EXPECT_EQ(actual_value, std::vector({1.0, 3.0, -2.0}));
   }
+}
+
+GTEST_TEST(MeshcatTest, CameraTracking) {
+  Meshcat meshcat;
+
+  auto inject = [&meshcat](const auto& message) {
+    std::stringstream message_stream;
+    msgpack::pack(message_stream, message);
+    meshcat.InjectWebsocketMessage(message_stream.str());
+  };
+
+  // When no message has been received, no pose is available.
+  EXPECT_EQ(meshcat.GetTrackedCameraPose(), std::nullopt);
+
+  // A message with a valid transform (16 floats and is perspective is True).
+  internal::UserInterfaceEvent valid_pose_message;
+  valid_pose_message.type = "camera_pose";
+  // clang-format off
+  valid_pose_message.camera_pose = {1, 0, 0, 0,
+                                    0, 1, 0, 0,
+                                    0, 0, 1, 0,
+                                    1, 2, 3, 1};
+  // clang-format on
+  valid_pose_message.is_perspective = true;
+
+  // Transform y-up to z-up, and from facing in the +z direction to the -z
+  // direction (with concomitant flip of the y-axis).
+  const RigidTransformd X_WC_expected(
+      RotationMatrixd(RollPitchYawd(M_PI / 2, M_PI, M_PI)), {1.0, -3.0, 2.0});
+
+  // The message sent when the camera has an orthographic projection.
+  internal::UserInterfaceEvent invalid_pose_message = valid_pose_message;
+  invalid_pose_message.is_perspective = false;
+
+  // Send valid meshcat pose - pose is available.
+  inject(valid_pose_message);
+  std::optional<RigidTransformd> X_WC = meshcat.GetTrackedCameraPose();
+  ASSERT_TRUE(X_WC.has_value());
+
+  // The pose has been transformed.
+  EXPECT_TRUE(CompareMatrices(X_WC->GetAsMatrix34(),
+                              X_WC_expected.GetAsMatrix34(), 1e-15));
+
+  // Send invalid meshcat pose - pose is cleared.
+  inject(invalid_pose_message);
+  X_WC = meshcat.GetTrackedCameraPose();
+  EXPECT_FALSE(X_WC.has_value());
+}
+
+// The tracked camera pose is discarded when the websocket disconnects.
+GTEST_TEST(MeshcatTest, CameraTrackingDisconnect) {
+  Meshcat meshcat;
+  CheckWebsocketCommand(meshcat, R"""({
+      "type": "camera_pose",
+      "camera_pose": [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 0
+      ],
+      "is_perspective": true
+    })""",
+                        {}, {});
+  EXPECT_FALSE(meshcat.GetTrackedCameraPose().has_value());
 }
 
 GTEST_TEST(MeshcatTest, StaticHtml) {
@@ -1252,6 +1478,82 @@ GTEST_TEST(MeshcatTest, ShowStatsPlot) {
     })""");
 }
 
+// Tests the logic of time advancement.
+//
+// We don't test for the realtime rate message broadcast directly. As part of
+// the broadcast, the stored realtime rate gets updated and can be read from
+// Meshcat::GetRealtimeRate(). We'll assume if the expected value is available
+// there, then it got broadcast correctly.
+//
+// Most of the compuation logic is contained (and tested) in
+// realtime_rate_calculator.*. This test just needs to confirm that things are
+// correct:
+//
+//   1. Initialization doesn't broadcast a rate.
+//      - In fact, initialization clears previously broadcast rate.
+//   2. One message is broadcast for each period boundary passed.
+//      Without explicitly consuming the messages, this is impossible to test.
+//      Instead, we rely on inspection of behavior during code review to
+//      validate. To test it, try running a simulation with a significantly
+//      slowed realtime rate such that the visualizer's publish period is
+//      longer than Meshcat's realtime_rate_period.
+GTEST_TEST(MeshcatTest, SetSimulationTime) {
+  // Arbitrary, non-default parameter value to confirm that it's getting used.
+  const double wall_period = 0.625;
+  MeshcatParams params{.realtime_rate_period = wall_period};
+  Meshcat meshcat(params);
+
+  // Initial realtime rate is always zero.
+  ASSERT_EQ(meshcat.GetRealtimeRate(), 0.0);
+
+  // Replace the wall clock timer with one we explicitly control.
+  auto timer_ptr = std::make_unique<ManualTimer>();
+  ManualTimer& timer = *timer_ptr;
+  meshcat.InjectMockTimer(std::move(timer_ptr));
+
+  // Initialize meshcat's simulation with the first invocation where sim and
+  // wall times are both zero.
+  meshcat.SetSimulationTime(0);
+
+  // A list of test triples (wall_timer, sim_time, expected_realtime_rate) to
+  // step through.
+  const std::vector<std::array<double, 3>> tests{
+      // Rate remains at zero prior to the wall clock reaching the first period.
+      {wall_period * 0.7, 1.0, 0.0},
+      {wall_period * 0.8, 1.2, 0.0},
+      {wall_period * 0.9, 1.4, 0.0},
+      // After completing the first period, we have a non-zero value.
+      {wall_period * 1.5, 2.0, 2.0 / (wall_period * 1.5)},
+      // Wall time advances but sim time backtracks => re-initialize.
+      // This should (internally) tare the timer back to zero by calling
+      // Start().
+      {wall_period * 999, 0.5, 0.0},
+      // Sim time advances.
+      {wall_period * 1.5, 0.7, (0.7 - 0.5) / (wall_period * 1.5)},
+  };
+
+  // Step through the tests.
+  for (int i = 0; i < ssize(tests); ++i) {
+    const double wall_timer = tests[i][0];
+    const double sim_time = tests[i][1];
+    const double expected_realtime_rate = tests[i][2];
+    SCOPED_TRACE(
+        fmt::format("tests[{}] with wall_timer={}, sim_time={}, rtr={}", i,
+                    wall_timer, sim_time, expected_realtime_rate));
+
+    timer.set_tick(wall_timer);
+    EXPECT_NO_THROW(meshcat.SetSimulationTime(sim_time));
+    EXPECT_EQ(meshcat.GetRealtimeRate(), expected_realtime_rate);
+    // Repeat calls are always a no-op.
+    EXPECT_NO_THROW(meshcat.SetSimulationTime(sim_time));
+    EXPECT_EQ(meshcat.GetRealtimeRate(), expected_realtime_rate);
+  }
+}
+
+// Tests that the call to immediately broadcast a provided realtime rate value
+// works. We're not actually testing that the message got sent (we'll rely on
+// reviewer inspection). When we broadcast the rate, we also store the rate.
+// We look at the stored value as proxy.
 GTEST_TEST(MeshcatTest, RealtimeRate) {
   Meshcat meshcat;
   meshcat.SetRealtimeRate(2.2);

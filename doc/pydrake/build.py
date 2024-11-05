@@ -7,26 +7,16 @@ import os
 from os.path import join
 import sys
 
-from drake.doc.defs import (
+import pydrake._all_everything
+from pydrake.common import _MangledName
+
+from doc.defs import (
     check_call,
     main,
     perl_cleanup_html_output,
     symlink_input,
     verbose,
 )
-
-import pydrake.all
-import pydrake.gym  # The gym is not part of "pydrake.all".
-import pydrake.examples  # The examples are not part of "pydrake.all".
-import pydrake.examples.gym.play_cart_pole
-import pydrake.examples.gym.train_cart_pole
-# TODO(eric.cousineau): Indicate these as deprecated.
-from pydrake.common import (
-    cpp_param,
-    cpp_template,
-    _MangledName,
-)
-import pydrake.tutorials
 
 
 def _get_submodules(name):

@@ -4,6 +4,7 @@
 
 #include <fmt/format.h>
 
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/geometry/optimization/hyperellipsoid.h"
 #include "drake/solvers/solve.h"
@@ -90,8 +91,14 @@ CartesianProduct::CartesianProduct(const QueryObject<double>& query_object,
                                    GeometryId geometry_id,
                                    std::optional<FrameId> reference_frame)
     : ConvexSet(3, false) {
-  Cylinder cylinder(1., 1.);
-  query_object.inspector().GetShape(geometry_id).Reify(this, &cylinder);
+  const Shape& shape = query_object.inspector().GetShape(geometry_id);
+  if (shape.type_name() != "Cylinder") {
+    throw std::logic_error(fmt::format(
+        "CartesianProduct(geometry_id={}, ...) cannot convert a {}, only a "
+        "Cylinder",
+        geometry_id, shape));
+  }
+  const Cylinder& cylinder = dynamic_cast<const Cylinder&>(shape);
 
   // Make the cylinder out of a circle (2D sphere) and a line segment (1D box).
   sets_.emplace_back(
@@ -356,6 +363,38 @@ CartesianProduct::DoToShapeWithPose() const {
       "ToShapeWithPose is not implemented yet for CartesianProduct.");
 }
 
+std::unique_ptr<ConvexSet> CartesianProduct::DoAffineHullShortcut(
+    std::optional<double> tol) const {
+  // TODO(cohnt): Support affine transformations of Cartesian products. For now,
+  // we just return std::nullopt and use the generic affine hull computation.
+  if (A_ != std::nullopt || b_ != std::nullopt) {
+    return nullptr;
+  }
+
+  // The basis will be a block diagonal matrix, whose blocks correspond to the
+  // bases of the affine subspace of each factor. Not all blocks will be square,
+  // and some of the columns on the right will be skipped, since the affine hull
+  // may be a proper subspace.
+  MatrixXd basis = MatrixXd::Zero(ambient_dimension(), ambient_dimension());
+  // The translation will be a vector, concatenating all of the translations of
+  // each factor. Zero-initialization is not needed, since all entries will be
+  // overwritten in the following loop.
+  VectorXd translation(ambient_dimension());
+  int current_dimension = 0;
+  int num_basis_vectors = 0;
+  for (int i = 0; i < num_factors(); ++i) {
+    AffineSubspace a(factor(i), tol);
+    basis.block(current_dimension, num_basis_vectors, a.ambient_dimension(),
+                a.AffineDimension()) = a.basis();
+    translation.segment(current_dimension, a.ambient_dimension()) =
+        a.translation();
+    current_dimension += a.ambient_dimension();
+    num_basis_vectors += a.AffineDimension();
+  }
+  return std::make_unique<AffineSubspace>(basis.leftCols(num_basis_vectors),
+                                          std::move(translation));
+}
+
 double CartesianProduct::DoCalcVolume() const {
   DRAKE_DEMAND(sets_.size() > 0);
   double volume = 1.0;
@@ -372,11 +411,6 @@ double CartesianProduct::DoCalcVolume() const {
     }
   }
   return volume;
-}
-
-void CartesianProduct::ImplementGeometry(const Cylinder& cylinder, void* data) {
-  Cylinder* c = static_cast<Cylinder*>(data);
-  *c = cylinder;
 }
 
 }  // namespace optimization

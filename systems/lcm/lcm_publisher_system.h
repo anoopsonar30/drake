@@ -45,7 +45,7 @@ namespace lcm {
  */
 class LcmPublisherSystem : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmPublisherSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmPublisherSystem);
 
   /**
    * A factory method that returns an %LcmPublisherSystem that takes
@@ -251,6 +251,10 @@ class LcmPublisherSystem : public LeafSystem<double> {
  private:
   EventStatus Initialize(const Context<double>& context) const;
   EventStatus PublishInputAsLcmMessage(const Context<double>& context) const;
+
+  typename LeafSystem<double>::GraphvizFragment DoGetGraphvizFragment(
+      const typename LeafSystem<double>::GraphvizFragmentParams& params)
+      const final;
 
   // The channel on which to publish LCM messages.
   const std::string channel_;

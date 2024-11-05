@@ -57,6 +57,9 @@ PiecewisePolynomial<T>::PiecewisePolynomial(
 }
 
 template <typename T>
+PiecewisePolynomial<T>::~PiecewisePolynomial() = default;
+
+template <typename T>
 std::unique_ptr<Trajectory<T>> PiecewisePolynomial<T>::Clone() const {
   return std::make_unique<PiecewisePolynomial<T>>(*this);
 }
@@ -1296,4 +1299,4 @@ Eigen::Matrix<T, 4, 1> PiecewisePolynomial<T>::ComputeCubicSplineCoeffs(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewisePolynomial)
+    class drake::trajectories::PiecewisePolynomial);

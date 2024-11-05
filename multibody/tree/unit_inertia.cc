@@ -2,94 +2,10 @@
 
 #include "drake/common/fmt_eigen.h"
 #include "drake/common/text_logging.h"
+#include "drake/math/unit_vector.h"
 
 namespace drake {
 namespace multibody {
-
-namespace {
-
-// Throws unless ‖unit_vector‖ is within 1E-14 (≈ 5.5 bits) of 1.0.
-// Note: 1E-14 ≈ 2^5.5 * std::numeric_limits<double>::epsilon();
-// @retval ‖unit_vector‖² which is exactly 1.0 for a perfect unit_vector.
-// @note: When type T is symbolic::Expression, this function is a no-op that
-// returns 1.
-// @note Although this function uses a tolerance of 1E-14 for determining
-// whether unit_vector is acceptable, unit_vector can be normalized for more
-// accurate calculations (e.g., giving ‖unit_vector‖ to be within 1E-16 of 1.0).
-// Unless ‖unit_vector‖ is exactly 1 (common since coordinate axes are popular
-// directions), the calling function should consider normalizing unit_vector
-// even if unit_vector passes this test. Usually this is accomplished by handing
-// the unit_vector off to other function(s) that all eventually call down into
-// AxiallySymmetric() which does the normalization.
-template <typename T>
-T ThrowUnlessVectorIsMagnitudeOne(const Vector3<T>& unit_vector,
-                                  std::string_view function_name);
-
-// The implementation logic underlying ThrowUnlessVectorIsMagnitudeOne(), but
-// instead of throwing, returns the exception message as an extra return value.
-// When there are no errors, the error_message will be empty.
-// @retval {‖unit_vector‖², error_message} as a pair.
-template <typename T>
-std::pair<T, std::string> CheckVectorIsMagnitudeOne(
-    const Vector3<T>& unit_vector, std::string_view function_name) {
-  DRAKE_DEMAND(!function_name.empty());
-  if constexpr (scalar_predicate<T>::is_bool) {
-    using std::abs;
-    // A test that a unit vector's magnitude is within a very small ε of 1 is
-    // |√(𝐯⋅𝐯) − 1| ≤ ε. To avoid an unnecessary square-root, notice that this
-    // simple test is equivalent to  ±(√(𝐯⋅𝐯) - 1) ≤ ε  which means that both
-    // √(𝐯⋅𝐯) - 1 ≤ ε  and √(𝐯⋅𝐯) - 1 ≥ -ε,  or
-    // √(𝐯⋅𝐯) ≤ 1 + ε  and √(𝐯⋅𝐯) ≥ 1 - ε.  Squaring these two equations give
-    // 𝐯⋅𝐯 ≤ (1 + ε)²  and 𝐯⋅𝐯 ≥ (1 - ε)².  Distributing the square results in
-    // 𝐯⋅𝐯 ≤ 1 + 2 ε + ε²  and 𝐯⋅𝐯 ≥ 1 - 2 ε + ε². Since ε² ≪ 2 ε, this gives
-    // 𝐯⋅𝐯 - 1 ≤ 2 ε   and 𝐯⋅𝐯 - 1 ≥ -2 ε  or  |𝐯⋅𝐯 − 1| ≤ 2 ε
-    // -------------------------------------------------------------
-    // Hence the following simple test can be replaced by a more efficient one.
-    // constexpr double kTolerance = 1E-14;
-    // if (abs(unit_vector.norm() - 1) > kTolerance) {
-    // -------------------------------------------------------------
-    constexpr double kTolerance2 = 2E-14;
-    const T uvec_squared = unit_vector.squaredNorm();
-    if (abs(uvec_squared - 1) > kTolerance2) {
-      const std::string error_message =
-          fmt::format("{}(): The unit_vector argument {} is not a unit vector.",
-                      function_name, fmt_eigen(unit_vector.transpose()));
-      return {uvec_squared, error_message};
-    }
-    return {uvec_squared, {}};
-  }
-  return {1.0, {}};
-}
-
-template <typename T>
-T ThrowUnlessVectorIsMagnitudeOne(const Vector3<T>& unit_vector,
-                                  std::string_view function_name) {
-  DRAKE_DEMAND(!function_name.empty());
-  auto [result, error_message] =
-      CheckVectorIsMagnitudeOne(unit_vector, function_name);
-  if (!error_message.empty()) {
-    throw std::logic_error(error_message);
-  }
-  return result;
-}
-
-// Like ThrowUnlessVectorIsMagnitudeOne(), but warns (once per process) instead
-// of throwing.
-template <typename T>
-T WarnUnlessVectorIsMagnitudeOne(const Vector3<T>& unit_vector,
-                                 std::string_view function_name) {
-  DRAKE_DEMAND(!function_name.empty());
-  auto [result, error_message] =
-      CheckVectorIsMagnitudeOne(unit_vector, function_name);
-  if (!error_message.empty()) {
-    static const logging::Warn log_once(
-        "{} Implicit normalization is deprecated; on or after 2023-12-01 this "
-        "will become an exception.",
-        error_message);
-  }
-  return result;
-}
-}  // namespace
 
 template <typename T>
 UnitInertia<T>& UnitInertia<T>::SetFromRotationalInertia(
@@ -103,8 +19,8 @@ template <typename T>
 UnitInertia<T> UnitInertia<T>::PointMass(const Vector3<T>& p_FQ) {
   // Square each coefficient in p_FQ, perhaps better with p_FQ.array().square()?
   const Vector3<T> p2m = p_FQ.cwiseAbs2();  // [x²  y²  z²].
-  const T mp0 = -p_FQ(0);  // -x
-  const T mp1 = -p_FQ(1);  // -y
+  const T mp0 = -p_FQ(0);                   // -x
+  const T mp1 = -p_FQ(1);                   // -y
   return UnitInertia<T>(
       // Gxx = y² + z²,  Gyy = x² + z²,  Gzz = x² + y²
       p2m[1] + p2m[2], p2m[0] + p2m[2], p2m[0] + p2m[1],
@@ -113,8 +29,8 @@ UnitInertia<T> UnitInertia<T>::PointMass(const Vector3<T>& p_FQ) {
 }
 
 template <typename T>
-UnitInertia<T> UnitInertia<T>::SolidEllipsoid(
-    const T& a, const T& b, const T& c) {
+UnitInertia<T> UnitInertia<T>::SolidEllipsoid(const T& a, const T& b,
+                                              const T& c) {
   const T a2 = a * a;
   const T b2 = b * b;
   const T c2 = c * c;
@@ -122,11 +38,11 @@ UnitInertia<T> UnitInertia<T>::SolidEllipsoid(
 }
 
 template <typename T>
-UnitInertia<T> UnitInertia<T>::SolidCylinder(
-    const T& radius, const T& length, const Vector3<T>& unit_vector) {
+UnitInertia<T> UnitInertia<T>::SolidCylinder(const T& radius, const T& length,
+                                             const Vector3<T>& unit_vector) {
   DRAKE_THROW_UNLESS(radius >= 0);
   DRAKE_THROW_UNLESS(length >= 0);
-  WarnUnlessVectorIsMagnitudeOne(unit_vector, __func__);
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
   const T rsq = radius * radius;
   const T lsq = length * length;
   const T J = 0.5 * rsq;                // Axial moment of inertia J = ½ r².
@@ -139,17 +55,18 @@ UnitInertia<T> UnitInertia<T>::SolidCylinderAboutEnd(
     const T& radius, const T& length, const Vector3<T>& unit_vector) {
   DRAKE_THROW_UNLESS(radius >= 0);
   DRAKE_THROW_UNLESS(length >= 0);
-  ThrowUnlessVectorIsMagnitudeOne(unit_vector, __func__);
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
   const T rsq = radius * radius;
   const T lsq = length * length;
-  const T J = 0.5 * rsq;                // Axial moment of inertia J = ½ r².
-  const T K = 0.25 * rsq  + lsq / 3.0;  // Transverse moment K = ¼ r² + ⅓ l².
+  const T J = 0.5 * rsq;               // Axial moment of inertia J = ½ r².
+  const T K = 0.25 * rsq + lsq / 3.0;  // Transverse moment K = ¼ r² + ⅓ l².
   return AxiallySymmetric(J, K, unit_vector);
 }
 
 template <typename T>
 UnitInertia<T> UnitInertia<T>::AxiallySymmetric(const T& moment_parallel,
-    const T& moment_perpendicular, const Vector3<T>& unit_vector) {
+                                                const T& moment_perpendicular,
+                                                const Vector3<T>& unit_vector) {
   const T& J = moment_parallel;
   const T& K = moment_perpendicular;
   DRAKE_THROW_UNLESS(moment_parallel >= 0.0);       // Ensure J ≥ 0.
@@ -165,34 +82,35 @@ UnitInertia<T> UnitInertia<T>::AxiallySymmetric(const T& moment_parallel,
       2.0 + 32 * std::numeric_limits<double>::epsilon();
   DRAKE_THROW_UNLESS(moment_parallel <= two_plus_tiny * moment_perpendicular);
 
-  // TODO(Mitiguy) consider a "trust_me" type of parameter that can skip
-  //  normalizing the unit_vector (it frequently is perfect on entry).
-  using std::sqrt;
-  const T mag_squared = WarnUnlessVectorIsMagnitudeOne(unit_vector, __func__);
-  const Vector3<T> uvec =
-      (mag_squared == 1.0) ? unit_vector : unit_vector / sqrt(mag_squared);
+  // TODO(Mitiguy) Consider a new UnitVector class to ensure the unit_vector
+  //  argument to this function is either already normalized by the calling
+  //  function (so a const reference to a UnitVector is passed) or if the
+  //  calling function passes a Vector3, the Vector3 is automatically converted
+  //  to a UnitVector (throwing an exception if the Vector3 contains NaN or
+  //  infinite elements or its magnitude is incredulously small).
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
 
   // Form B's unit inertia about a point Bp on B's symmetry axis,
   // expressed in the same frame E as the unit_vector is expressed.
-  const Matrix3<T> G_BBp_E =
-      K * Matrix3<T>::Identity() + (J - K) * uvec * uvec.transpose();
+  const Matrix3<T> G_BBp_E = K * Matrix3<T>::Identity() +
+                             (J - K) * unit_vector * unit_vector.transpose();
   return UnitInertia<T>(G_BBp_E(0, 0), G_BBp_E(1, 1), G_BBp_E(2, 2),
                         G_BBp_E(0, 1), G_BBp_E(0, 2), G_BBp_E(1, 2));
 }
 
 template <typename T>
 UnitInertia<T> UnitInertia<T>::StraightLine(const T& moment_perpendicular,
-    const Vector3<T>& unit_vector) {
+                                            const Vector3<T>& unit_vector) {
   DRAKE_THROW_UNLESS(moment_perpendicular > 0.0);
-  WarnUnlessVectorIsMagnitudeOne(unit_vector, __func__);
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
   return AxiallySymmetric(0.0, moment_perpendicular, unit_vector);
 }
 
 template <typename T>
 UnitInertia<T> UnitInertia<T>::ThinRod(const T& length,
-    const Vector3<T>& unit_vector) {
+                                       const Vector3<T>& unit_vector) {
   DRAKE_THROW_UNLESS(length > 0.0);
-  WarnUnlessVectorIsMagnitudeOne(unit_vector, __func__);
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
   return StraightLine(length * length / 12.0, unit_vector);
 }
 
@@ -209,10 +127,10 @@ UnitInertia<T> UnitInertia<T>::SolidBox(const T& Lx, const T& Ly, const T& Lz) {
 
 template <typename T>
 UnitInertia<T> UnitInertia<T>::SolidCapsule(const T& radius, const T& length,
-    const Vector3<T>& unit_vector) {
+                                            const Vector3<T>& unit_vector) {
   DRAKE_THROW_UNLESS(radius >= 0);
   DRAKE_THROW_UNLESS(length >= 0);
-  ThrowUnlessVectorIsMagnitudeOne(unit_vector, __func__);
+  math::internal::ThrowIfNotUnitVector(unit_vector, __func__);
 
   // A special case is required for radius = 0 because it creates a zero volume
   // capsule (and we divide by volume later on). No special case for length = 0
@@ -239,9 +157,9 @@ UnitInertia<T> UnitInertia<T>::SolidCapsule(const T& radius, const T& length,
   // Denoting mc as the mass of cylinder C and mh as the mass of half-sphere H,
   // and knowing the capsule has a uniform density and the capsule's mass is 1
   // (for unit inertia), calculate mc and mh.
-  const T v = vc + 2 * vh;    // Volume of capsule.
-  const T mc = vc / v;        // Mass in the cylinder (relates to volume).
-  const T mh = vh / v;        // Mass in each half-sphere (relates to volume).
+  const T v = vc + 2 * vh;  // Volume of capsule.
+  const T mc = vc / v;      // Mass in the cylinder (relates to volume).
+  const T mh = vh / v;      // Mass in each half-sphere (relates to volume).
 
   // The distance dH between Hcm (half-sphere H's center of mass) and Ccm
   // (cylinder C's center of mass) is given in [Kane, Figure A23, pg. 369] as
@@ -270,8 +188,9 @@ UnitInertia<T> UnitInertia<T>::SolidCapsule(const T& radius, const T& length,
   // The previous algorithm for Ixx and Izz is algebraically manipulated to a
   // more efficient result by factoring on mh and mc and computing numbers as
   const T lsq = length * length;
-  const T Ixx = mc * (lsq/12.0 + 0.25*rsq) + mh * (0.51875*rsq + 2*dH*dH);
-  const T Izz = (0.5*mc + 0.8*mh) * rsq;  // Axial moment of inertia.
+  const T Ixx =
+      mc * (lsq / 12.0 + 0.25 * rsq) + mh * (0.51875 * rsq + 2 * dH * dH);
+  const T Izz = (0.5 * mc + 0.8 * mh) * rsq;  // Axial moment of inertia.
   return UnitInertia<T>::AxiallySymmetric(Izz, Ixx, unit_vector);
 }
 
@@ -284,13 +203,15 @@ namespace {
 // @note This function is an efficient way to calculate outer-products that
 //   contribute via a sum to a symmetric matrix.
 template <typename T>
-Matrix3<T> UpperTriangularOuterProduct(
-    const Eigen::Ref<const Vector3<T>>& a,
-    const Eigen::Ref<const Vector3<T>>& b) {
+Matrix3<T> UpperTriangularOuterProduct(const Eigen::Ref<const Vector3<T>>& a,
+                                       const Eigen::Ref<const Vector3<T>>& b) {
   Matrix3<T> M;
-  M(0, 0) = a(0) * b(0);  M(0, 1) = a(0) * b(1);  M(0, 2) = a(0) * b(2);
-                          M(1, 1) = a(1) * b(1);  M(1, 2) = a(1) * b(2);
-                                                  M(2, 2) = a(2) * b(2);
+  M(0, 0) = a(0) * b(0);
+  M(0, 1) = a(0) * b(1);
+  M(0, 2) = a(0) * b(2);
+  M(1, 1) = a(1) * b(1);
+  M(1, 2) = a(1) * b(2);
+  M(2, 2) = a(2) * b(2);
   return M;
 }
 }  // namespace
@@ -306,14 +227,14 @@ UnitInertia<T> UnitInertia<T>::SolidTetrahedronAboutPoint(
   const Vector3<T> p_B0B1 = p1 - p0;  // Position from vertex B0 to vertex B1.
   const Vector3<T> p_B0B2 = p2 - p0;  // Position from vertex B0 to vertex B2.
   const Vector3<T> p_B0B3 = p3 - p0;  // Position from vertex B0 to vertex B3.
-  UnitInertia<T> G_BB0 =
+  const UnitInertia<T> G_BB0 =
       UnitInertia<T>::SolidTetrahedronAboutVertex(p_B0B1, p_B0B2, p_B0B3);
 
   // Shift unit inertia from about point B0 to about point A.
   const Vector3<T> p_B0Bcm = 0.25 * (p_B0B1 + p_B0B2 + p_B0B3);
   const Vector3<T>& p_AB0 = p0;  // Alias with monogram notation to clarify.
   const Vector3<T> p_ABcm = p_AB0 + p_B0Bcm;
-  RotationalInertia<T>& I_BA = G_BB0.ShiftToThenAwayFromCenterOfMassInPlace(
+  const RotationalInertia<T> I_BA = G_BB0.ShiftToThenAwayFromCenterOfMass(
       /* mass = */ 1, p_B0Bcm, p_ABcm);
   return UnitInertia<T>(I_BA);  // Returns G_BA (B's unit inertia about A).
 }
@@ -332,15 +253,15 @@ UnitInertia<T> UnitInertia<T>::SolidTetrahedronAboutVertex(
   const Vector3<T>& r = p3;  // Position from vertex B0 to vertex R.
   const Vector3<T> q_plus_r = q + r;
   const T p_dot_pqr = p.dot(p + q_plus_r);
-  const T q_dot_qr  = q.dot(q_plus_r);
-  const T r_dot_r   = r.dot(r);
+  const T q_dot_qr = q.dot(q_plus_r);
+  const T r_dot_r = r.dot(r);
   const T scalar = 0.1 * (p_dot_pqr + q_dot_qr + r_dot_r);
   const Vector3<T> p_half = 0.5 * p;
   const Vector3<T> q_half = 0.5 * q;
   const Vector3<T> r_half = 0.5 * r;
-  const Matrix3<T> G = UpperTriangularOuterProduct<T>(p, p + q_half + r_half)
-                     + UpperTriangularOuterProduct<T>(q, p_half + q + r_half)
-                     + UpperTriangularOuterProduct<T>(r, p_half + q_half + r);
+  const Matrix3<T> G = UpperTriangularOuterProduct<T>(p, p + q_half + r_half) +
+                       UpperTriangularOuterProduct<T>(q, p_half + q + r_half) +
+                       UpperTriangularOuterProduct<T>(r, p_half + q_half + r);
   const T Ixx = scalar - 0.1 * G(0, 0);
   const T Iyy = scalar - 0.1 * G(1, 1);
   const T Izz = scalar - 0.1 * G(2, 2);
@@ -356,10 +277,11 @@ UnitInertia<T>::CalcPrincipalHalfLengthsAndAxesForEquivalentShape(
     double inertia_shape_factor) const {
   DRAKE_THROW_UNLESS(inertia_shape_factor > 0 && inertia_shape_factor <= 1);
   // The formulas below are derived for a shape D whose principal unit moments
-  // of inertia Gmin, Gmed, Gmax about Dcm (D's center of mass) have the form:
+  // of inertia Gmin, Gmed, Gmax about Dcm (D's center of mass) have the form:,
   // Gmin = inertia_shape_factor * (b² + c²)
   // Gmed = inertia_shape_factor * (a² + c²)
   // Gmax = inertia_shape_factor * (a² + b²)
+  // e.g., where a, b, c are ½ lengths of boxes or semi-axes of ellipsoids.
   // Casting these equations into matrix form, gives
   // ⌈0  1  1⌉ ⌈a²⌉   ⌈Gmin ⌉
   // |1  0  1⌉ |b²⌉ = |Gmed ⌉ / inertia_shape_factor
@@ -369,7 +291,9 @@ UnitInertia<T>::CalcPrincipalHalfLengthsAndAxesForEquivalentShape(
   // |b²⌉ = | 1 -1  1⌉ |Gmed ⌉ * 0.5 / inertia_shape_factor
   // ⌊c²⌋   ⌊ 1  1 -1⌋ ⌊Gmax ⌉
   // Since Gmin ≤ Gmed ≤ Gmax, we can deduce a² ≥ b² ≥ c², so we designate
-  // lmax² = a², lmed² = b², lmin² = c².
+  // lmax² = a² = 0.5 / inertia_shape_factor * (Gmed + Gmax - Gmin)
+  // lmed² = b² = 0.5 / inertia_shape_factor * (Gmin + Gmax - Gmed)
+  // lmin² = c² = 0.5 / inertia_shape_factor * (Gmin + Gmed - Gmax)
 
   // Form principal moments Gmoments and principal axes stored in R_EA.
   auto [Gmoments, R_EA] = this->CalcPrincipalMomentsAndAxesOfInertia();
@@ -388,9 +312,8 @@ UnitInertia<T>::CalcPrincipalHalfLengthsAndAxesForEquivalentShape(
   return std::pair(Vector3<double>(lmax, lmed, lmin), R_EA);
 }
 
-
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::UnitInertia)
+    class drake::multibody::UnitInertia);

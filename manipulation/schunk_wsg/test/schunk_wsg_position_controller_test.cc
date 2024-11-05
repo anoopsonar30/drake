@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/eigen_types.h"
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -41,18 +40,18 @@ GTEST_TEST(SchunkWsgPdControllerTest, BasicTest) {
 }
 
 GTEST_TEST(SchunkWsgPdControllerTest, DefaultForceLimitTest) {
-    SchunkWsgPdController controller;
-    auto context = controller.CreateDefaultContext();
+  SchunkWsgPdController controller;
+  auto context = controller.CreateDefaultContext();
 
-    controller.get_desired_state_input_port().FixValue(context.get(),
-                                                       Eigen::Vector2d(0.1, 0));
-    controller.get_state_input_port().FixValue(
-        context.get(), Eigen::Vector4d(-0.05, 0.05, 0, 0));
-    // Do NOT connect the force limit input port.
+  controller.get_desired_state_input_port().FixValue(context.get(),
+                                                     Eigen::Vector2d(0.1, 0));
+  controller.get_state_input_port().FixValue(
+      context.get(), Eigen::Vector4d(-0.05, 0.05, 0, 0));
+  // Do NOT connect the force limit input port.
 
-    // Make sure that both output ports still evaluate without error.
-    controller.get_generalized_force_output_port().Eval(*context);
-    controller.get_grip_force_output_port().Eval(*context);
+  // Make sure that both output ports still evaluate without error.
+  controller.get_generalized_force_output_port().Eval(*context);
+  controller.get_grip_force_output_port().Eval(*context);
 }
 
 void FixInputsAndHistory(const SchunkWsgPositionController& controller,
@@ -74,10 +73,10 @@ GTEST_TEST(SchunkWsgPositionControllerTest, SimTest) {
   const auto wsg = builder.AddSystem<MultibodyPlant>(kTimeStep);
 
   // Add the Schunk gripper and weld it to the world.
-  const std::string wsg_sdf_path = FindResourceOrThrow(
-      "drake/manipulation/models/"
-      "wsg_50_description/sdf/schunk_wsg_50.sdf");
-  const auto wsg_model = Parser(wsg).AddModels(wsg_sdf_path).at(0);
+  const std::string wsg_sdf_url =
+      "package://drake_models/"
+      "wsg_50_description/sdf/schunk_wsg_50.sdf";
+  const auto wsg_model = Parser(wsg).AddModelsFromUrl(wsg_sdf_url).at(0);
   wsg->WeldFrames(wsg->world_frame(), wsg->GetFrameByName("body", wsg_model),
                   math::RigidTransformd::Identity());
   wsg->Finalize();
@@ -103,12 +102,12 @@ GTEST_TEST(SchunkWsgPositionControllerTest, SimTest) {
   double force_limit = 40;
   FixInputsAndHistory(*controller, desired_position, force_limit,
                       &controller_context);
-  EXPECT_LE(controller->get_grip_force_output_port().
-                Eval(controller_context)[0],
-            force_limit);
-  EXPECT_GE(controller->get_grip_force_output_port().
-                Eval(controller_context)[0],
-            -force_limit);
+  EXPECT_LE(
+      controller->get_grip_force_output_port().Eval(controller_context)[0],
+      force_limit);
+  EXPECT_GE(
+      controller->get_grip_force_output_port().Eval(controller_context)[0],
+      -force_limit);
 
   wsg->SetPositionsAndVelocities(&wsg_context, Vector4d::Zero());
   simulator.AdvanceTo(1.0);
@@ -121,9 +120,9 @@ GTEST_TEST(SchunkWsgPositionControllerTest, SimTest) {
       Vector4d(-desired_position / 2, desired_position / 2, 0.0, 0.0),
       kTolerance));
   // The steady-state force should be near zero.
-  EXPECT_NEAR(controller->get_grip_force_output_port().
-                  Eval(controller_context)[0],
-              0.0, kTolerance);
+  EXPECT_NEAR(
+      controller->get_grip_force_output_port().Eval(controller_context)[0], 0.0,
+      kTolerance);
 
   // Move in toward the middle of the range with lower force from the outside.
   desired_position = 0.05;
@@ -136,9 +135,9 @@ GTEST_TEST(SchunkWsgPositionControllerTest, SimTest) {
       Vector4d(-desired_position / 2, desired_position / 2, 0.0, 0.0),
       kTolerance));
   // The steady-state force should be near zero.
-  EXPECT_NEAR(controller->get_grip_force_output_port().
-                  Eval(controller_context)[0],
-              0.0, kTolerance);
+  EXPECT_NEAR(
+      controller->get_grip_force_output_port().Eval(controller_context)[0], 0.0,
+      kTolerance);
 
   // Move to more than closed, and see that the force is at the limit.
   desired_position = -1.0;
@@ -146,17 +145,18 @@ GTEST_TEST(SchunkWsgPositionControllerTest, SimTest) {
   FixInputsAndHistory(*controller, desired_position, force_limit,
                       &controller_context);
   simulator.AdvanceTo(3.0);
-  EXPECT_NEAR(controller->get_grip_force_output_port().
-                  Eval(controller_context)[0],
-              force_limit, kTolerance);
+  EXPECT_NEAR(
+      controller->get_grip_force_output_port().Eval(controller_context)[0],
+      force_limit, kTolerance);
 
   // Set the position to the target and observe zero force.
-  wsg->SetPositionsAndVelocities(&wsg_context,
+  wsg->SetPositionsAndVelocities(
+      &wsg_context,
       Vector4d(-desired_position / 2, desired_position / 2, 0.0, 0.0));
 
-  EXPECT_EQ(controller->get_grip_force_output_port().
-                Eval(controller_context)[0],
-            0.0);
+  EXPECT_EQ(
+      controller->get_grip_force_output_port().Eval(controller_context)[0],
+      0.0);
 }
 
 }  // namespace

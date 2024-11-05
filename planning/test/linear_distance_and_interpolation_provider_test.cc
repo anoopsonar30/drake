@@ -9,6 +9,8 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/math/rigid_transform.h"
+#include "drake/multibody/tree/quaternion_floating_joint.h"
+#include "drake/planning/robot_diagram_builder.h"
 #include "drake/planning/test/planning_test_helpers.h"
 
 namespace drake {
@@ -17,7 +19,10 @@ namespace test {
 namespace {
 using common_robotics_utilities::math::Distance;
 using common_robotics_utilities::math::Interpolate;
+using multibody::Joint;
+using multibody::JointActuatorIndex;
 using multibody::JointIndex;
+using multibody::QuaternionFloatingJoint;
 
 void DoFixedIiwaTest(const RobotDiagram<double>& model,
                      const LinearDistanceAndInterpolationProvider& provider,
@@ -180,7 +185,7 @@ directives:
       child: ground_plane_box::ground_plane_box
   - add_model:
       name: iiwa
-      file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+      file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
   - add_weld:
       parent: world
       child: iiwa::base
@@ -270,7 +275,7 @@ directives:
     has_no_such_joint[JointIndex(20)] = Vector1d(1.0);
     DRAKE_EXPECT_THROWS_MESSAGE(LinearDistanceAndInterpolationProvider(
                                     model->plant(), has_no_such_joint),
-                                ".* 'joint_index < num_joints\\(\\)' failed.*");
+                                ".*Joint.*20.*bound.*");
   }
 
   // Invalid weights (vector).
@@ -317,7 +322,7 @@ directives:
       file: package://drake/planning/test_utilities/flying_robot_base.sdf
   - add_model:
       name: iiwa
-      file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+      file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
   - add_weld:
       parent: flying_robot_base::flying_robot_base
       child: iiwa::base
@@ -402,6 +407,72 @@ directives:
                                                invalid_quat_weights),
         ".* for quaternion dof .* must be .* instead.*");
   }
+}
+
+// Reproduction case from issue #21215.
+GTEST_TEST(QuaternionFloatingJointTest, Test) {
+  const auto model = MakePlanningTestModel("dmd.yaml", R"""(
+directives:
+- add_model:
+    name: arm
+    file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+- add_weld:
+    parent: world
+    child: arm::base
+- add_model:
+    name: cracker
+    file: package://drake_models/ycb/003_cracker_box.sdf
+    default_free_body_pose:
+        base_link_cracker:
+            base_frame: arm::iiwa_link_ee
+)""");
+
+  const LinearDistanceAndInterpolationProvider provider(model->plant());
+
+  // Make sure that the floating joint between iiwa_link_ee and cracker box has
+  // been identified as quaternion DoF by the interpolation provider.
+  const auto& cracker_floating_joint =
+      model->plant().GetJointByName("base_link_cracker");
+
+  EXPECT_EQ(provider.quaternion_dof_start_indices().size(), 1);
+  EXPECT_EQ(provider.quaternion_dof_start_indices().at(0),
+            cracker_floating_joint.position_start());
+}
+
+// Test to solve issue #21860
+GTEST_TEST(IterationTest, Test) {
+  const std::string& model_ext = "dmd.yaml";
+  const std::string& model_contents = R"""(
+directives:
+- add_model:
+    name: arm
+    file: package://drake_models/iiwa_description/urdf/iiwa14_spheres_dense_collision.urdf
+- add_weld:
+    parent: world
+    child: arm::base
+)""";
+  auto builder = std::make_unique<RobotDiagramBuilder<double>>();
+  builder->parser().AddModelsFromString(model_contents, model_ext);
+  auto& plant = builder->plant();
+
+  const JointIndex joint_index(
+      3);  // picking an arbitrary number not at the start or the end
+  const Joint<double>& joint = plant.get_joint(joint_index);
+
+  const JointActuatorIndex joint_actuator_index(
+      2);  // this is the actuator index associated with the joint 3
+  auto& actuator = plant.get_joint_actuator(joint_actuator_index);
+  plant.RemoveJointActuator(actuator);
+
+  plant.RemoveJoint(joint);
+
+  const auto model = builder->Build();
+
+  EXPECT_NO_THROW(LinearDistanceAndInterpolationProvider(model->plant()));
+
+  const LinearDistanceAndInterpolationProvider provider(model->plant());
+
+  EXPECT_NO_THROW(provider.quaternion_dof_start_indices());
 }
 
 }  // namespace

@@ -7,7 +7,7 @@
 #include "drake/multibody/tree/multibody_tree.h"
 #include "drake/multibody/tree/multibody_tree_system.h"
 #include "drake/multibody/tree/rigid_body.h"
-#include "drake/multibody/tree/space_xyz_mobilizer.h"
+#include "drake/multibody/tree/rpy_ball_mobilizer.h"
 #include "drake/systems/framework/basic_vector.h"
 #include "drake/systems/framework/leaf_system.h"
 
@@ -21,10 +21,10 @@ namespace test {
 /// its axis of revolution.
 ///
 /// @tparam_default_scalar
-template<typename T>
+template <typename T>
 class FreeRotatingBodyPlant final : public internal::MultibodyTreeSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FreeRotatingBodyPlant)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FreeRotatingBodyPlant);
 
   /// Constructor from known rotational inertia values.
   /// Rotational inertia values have units of kg⋅m².
@@ -52,8 +52,8 @@ class FreeRotatingBodyPlant final : public internal::MultibodyTreeSystem<T> {
 
   /// Stores in `context` the value of the angular velocity `w_WB` of the body
   /// in the world frame W.
-  void set_angular_velocity(
-      systems::Context<T>* context, const Vector3<T>& w_WB) const;
+  void set_angular_velocity(systems::Context<T>* context,
+                            const Vector3<T>& w_WB) const;
 
   /// Computes the pose `X_WB` of the body in the world frame.
   math::RigidTransform<T> CalcPoseInWorldFrame(
@@ -92,4 +92,4 @@ class FreeRotatingBodyPlant final : public internal::MultibodyTreeSystem<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::test::FreeRotatingBodyPlant)
+    class ::drake::multibody::test::FreeRotatingBodyPlant);

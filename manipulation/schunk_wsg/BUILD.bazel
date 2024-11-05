@@ -1,14 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load(
-    "//tools/vector_gen:vector_gen.bzl",
-    "drake_cc_vector_gen_library",
-)
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -52,10 +48,22 @@ drake_cc_library(
     ],
 )
 
-drake_cc_vector_gen_library(
+drake_cc_library(
     name = "schunk_wsg_trajectory_generator_state_vector",
-    srcs = ["schunk_wsg_trajectory_generator_state_vector_named_vector.yaml"],
+    srcs = [
+        "schunk_wsg_trajectory_generator_state_vector.cc",
+    ],
+    hdrs = [
+        "schunk_wsg_trajectory_generator_state_vector.h",
+    ],
     visibility = [":__subpackages__"],
+    deps = [
+        "//common:dummy_value",
+        "//common:essential",
+        "//common:name_value",
+        "//common/symbolic:expression",
+        "//systems/framework:vector",
+    ],
 )
 
 drake_cc_library(
@@ -154,11 +162,10 @@ drake_cc_library(
 drake_cc_googletest(
     name = "schunk_wsg_constants_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":schunk_wsg_constants",
-        "//common:find_resource",
         "//multibody/parsing",
         "//multibody/plant",
     ],
@@ -176,7 +183,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "schunk_wsg_position_controller_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":schunk_wsg_position_controller",
@@ -190,7 +197,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "schunk_wsg_lcm_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":schunk_wsg_lcm",
@@ -202,7 +209,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "schunk_wsg_trajectory_generator_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":schunk_wsg_trajectory_generator",
@@ -213,12 +220,11 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "build_schunk_wsg_control_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":build_schunk_wsg_control",
         ":schunk_wsg_lcm",
-        "//common:find_resource",
         "//lcm",
         "//multibody/parsing:parser",
         "//multibody/plant",
@@ -231,11 +237,10 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "schunk_wsg_driver_functions_test",
     data = [
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":schunk_wsg_driver_functions",
-        "//common:find_resource",
         "//lcm:drake_lcm_params",
         "//multibody/parsing:parser",
         "//multibody/plant",
@@ -245,4 +250,4 @@ drake_cc_googletest(
     ],
 )
 
-add_lint_tests(enable_clang_format_lint = False)
+add_lint_tests()

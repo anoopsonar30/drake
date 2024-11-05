@@ -5,6 +5,7 @@
 #include <fmt/format.h>
 
 #include "drake/common/drake_assert.h"
+#include "drake/common/trajectories/derivative_trajectory.h"
 
 namespace drake {
 namespace trajectories {
@@ -16,6 +17,9 @@ PathParameterizedTrajectory<T>::PathParameterizedTrajectory(
   DRAKE_DEMAND(time_scaling.rows() == 1);
   DRAKE_DEMAND(time_scaling.cols() == 1);
 }
+
+template <typename T>
+PathParameterizedTrajectory<T>::~PathParameterizedTrajectory() = default;
 
 template <typename T>
 std::unique_ptr<Trajectory<T>> PathParameterizedTrajectory<T>::Clone() const {
@@ -79,8 +83,14 @@ MatrixX<T> PathParameterizedTrajectory<T>::DoEvalDerivative(
   }
 }
 
+template <typename T>
+std::unique_ptr<Trajectory<T>> PathParameterizedTrajectory<T>::DoMakeDerivative(
+    int derivative_order) const {
+  return std::make_unique<DerivativeTrajectory<T>>(*this, derivative_order);
+}
+
 }  // namespace trajectories
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PathParameterizedTrajectory)
+    class drake::trajectories::PathParameterizedTrajectory);

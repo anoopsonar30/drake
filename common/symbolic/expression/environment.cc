@@ -57,6 +57,8 @@ Environment::Environment(map m) : map_{std::move(m)} {
   }
 }
 
+Environment::~Environment() = default;
+
 void Environment::insert(const key_type& key, const mapped_type& elem) {
   throw_if_nan(elem);
   map_.emplace(key, elem);
@@ -99,7 +101,7 @@ Environment::mapped_type& Environment::operator[](const key_type& key) {
 
 const Environment::mapped_type& Environment::operator[](
     const key_type& key) const {
-  if (map_.count(key) == 0) {
+  if (!map_.contains(key)) {
     ostringstream oss;
     oss << "Environment::operator[] was called on a const Environment "
         << "with a missing key \"" << key << "\".";

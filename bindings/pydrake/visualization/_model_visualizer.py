@@ -20,6 +20,11 @@ from pydrake.geometry import (
 )
 from pydrake.math import RigidTransform, RotationMatrix
 from pydrake.multibody.meshcat import JointSliders
+from pydrake.multibody.tree import (
+    FixedOffsetFrame,
+    FrameIndex,
+    default_model_instance,
+)
 from pydrake.planning import RobotDiagramBuilder
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.planar_scenegraph_visualizer import (
@@ -40,8 +45,7 @@ from pydrake.visualization._triad import (
 
 class ModelVisualizer:
     """
-    Visualizes models from a file or string buffer in MeshCat, Meldis,
-    or the legacy ``drake_visualizer`` application of days past.
+    Visualizes models from a file or string buffer in MeshCat or Meldis.
 
     To use this class to visualize model(s), create an instance with
     any desired options, add any models, and then call Run()::
@@ -71,9 +75,9 @@ class ModelVisualizer:
                  browser_new=False,
                  pyplot=False,
                  meshcat=None,
-                 environment_map: Path = Path()):
-        """
-        Initializes a ModelVisualizer.
+                 environment_map: Path = Path(),
+                 compliance_type: str = "undefined"):
+        """Initializes a ModelVisualizer.
 
         Args:
           visualize_frames: a flag that visualizes frames as triads for all
@@ -86,7 +90,15 @@ class ModelVisualizer:
              up a local preview window of the rgb image. At the moment, the
              image display uses a native window so will not work in a remote or
              cloud runtime environment.
-
+          environment_map: Meshcat environment map filename.
+          compliance_type: Overrides the DefaultProximityProperties setting
+             with same name. Can be set to either "rigid" or "compliant" for
+             hydroelastic contact, or "undefined" to use point contact.
+             When a model file doesn't say something more specific for the
+             hydroelastic compliance mode, this default will take effect.
+             In the common case of model files that have not been customized
+             for Drake, this is a convenient way to visualize what collisions
+             would look like under the given hydroelastic mode.
           browser_new: a flag that will open the MeshCat display in a new
             browser window during Run().
           pyplot: a flag that will open a pyplot figure for rendering using
@@ -94,6 +106,7 @@ class ModelVisualizer:
 
           meshcat: an existing Meshcat instance to re-use instead of creating
             a new instance. Useful in, e.g., Python notebooks.
+
         """
         self._visualize_frames = visualize_frames
         self._triad_length = triad_length
@@ -105,6 +118,7 @@ class ModelVisualizer:
         self._pyplot = pyplot
         self._meshcat = meshcat
         self._environment_map = environment_map
+        self._compliance_type = compliance_type
 
         # This is the list of loaded models, to enable the Reload button.
         # If set to None, it means that we won't support reloading because
@@ -120,11 +134,21 @@ class ModelVisualizer:
         self._builder = RobotDiagramBuilder()
         self._builder.parser().SetAutoRenaming(True)
 
+        # Adjust the SceneGraph's compliance_type.
+        old_config = self._builder.scene_graph().get_config()
+        new_config = copy.deepcopy(old_config)
+        new_config.default_proximity_properties.compliance_type = (
+            self._compliance_type)
+        self._builder.scene_graph().set_config(new_config)
+
         # The following fields are set non-None during Finalize().
         self._original_package_map = None
         self._diagram = None  # This will be a planning.RobotDiagram.
         self._sliders = None
         self._context = None
+
+        # State necessary for self._render_if_necessary().
+        self._last_camera_time = time.time()
 
     def _check_rep(self, *, finalized):
         """
@@ -168,7 +192,8 @@ class ModelVisualizer:
                 "show_rgbd_sensor",
                 "browser_new",
                 "pyplot",
-                "environment_map"]:
+                "environment_map",
+                "compliance_type"]:
             value = getattr(prototype, f"_{name}")
             assert value is not None
             result[name] = value
@@ -258,39 +283,35 @@ class ModelVisualizer:
             raise RuntimeError("Finalize has already been called.")
 
         if self._visualize_frames:
-            # Find all the frames and draw them.
-            # The frames are drawn using the parsed length.
-            # The world frame is drawn thicker than the rest.
-            inspector = self._builder.scene_graph().model_inspector()
-            for frame_id in inspector.GetAllFrameIds():
-                world_id = self._builder.scene_graph().world_frame_id()
-                radius = self._triad_radius * (
-                    3 if frame_id == world_id else 1
-                    )
+            # Find all the frames (except the world frame) and draw them.
+            # The frames are drawn using the configured length.
+            for i in range(1, self._builder.plant().num_frames()):
                 AddFrameTriadIllustration(
                     plant=self._builder.plant(),
                     scene_graph=self._builder.scene_graph(),
-                    frame_id=frame_id,
+                    frame_index=FrameIndex(i),
                     length=self._triad_length,
-                    radius=radius,
+                    radius=self._triad_radius,
                     opacity=self._triad_opacity,
                 )
 
-        # Add a model that will provide rgbd pose sliders automatically when we
-        # add JointSliders later on.
+        # Add a model to provide a pose-able anchor for the camera.
         if self._show_rgbd_sensor:
-            camera_sliders, = self._builder.parser().AddModels(url=(
-                "package://drake/bindings/pydrake/visualization/"
-                "_rgbd_camera_sliders.dmd.yaml"))
-            # Remove the perception role from the new geometry; we don't want
-            # the RgbdSensor to render it. TODO(#13689) The file should itself
-            # opt-out of the perception role, so we don't need to mop up here.
-            inspect = self._builder.scene_graph().model_inspector()
-            for frame_id in inspect.GetAllFrameIds():
-                if inspect.GetFrameGroup(frame_id) == camera_sliders:
-                    self._builder.scene_graph().RemoveRole(
-                        role=Role.kPerception, frame_id=frame_id,
-                        source_id=self._builder.plant().get_source_id())
+            sensor_offset_frame = self._builder.plant().AddFrame(
+                FixedOffsetFrame(
+                    name="$rgbd_sensor_offset",
+                    P=self._builder.plant().world_frame(),
+                    X_PF=RigidTransform.Identity(),
+                    model_instance=default_model_instance()))
+            sensor_body = self._builder.plant().AddRigidBody(
+                name="$rgbd_sensor_body",
+                model_instance=default_model_instance())
+            self._builder.plant().WeldFrames(
+                frame_on_parent_F=sensor_offset_frame,
+                frame_on_child_M=sensor_body.body_frame())
+
+        # We're not going to step time, so we don't want output port sampling.
+        self._builder.plant().SetUseSampledOutputPorts(False)
 
         self._builder.plant().Finalize()
 
@@ -308,7 +329,7 @@ class ModelVisualizer:
             self._reload_button_name = "Reload Model Files"
             self._meshcat.AddButton(self._reload_button_name)
 
-        # Connect to drake_visualizer, meldis, and meshcat.
+        # Connect to meldis and meshcat.
         # Meldis and meshcat provide simultaneous visualization of
         # illustration and proximity geometry.
         ApplyVisualizationConfig(
@@ -320,11 +341,13 @@ class ModelVisualizer:
             builder=self._builder.builder(),
             meshcat=self._meshcat)
 
-        # Add a render camera so we can show role=perception images.
+        # Add a render camera so we can show role=perception images. The
+        # sensor is affixed to the world frame and we'll modify that pose
+        # below.
         if self._show_rgbd_sensor:
             camera_config = CameraConfig(width=1440, height=1080)
             camera_config.name = "preview"
-            camera_config.X_PB.base_frame = "_rgbd_camera_sliders::pinhole"
+            camera_config.X_PB.base_frame = "$rgbd_sensor_body"
             camera_config.z_far = 3  # Show 3m of frustum.
             camera_config.fps = 1.0  # Ignored -- we're not simulating.
             is_unit_test = "TEST_SRCDIR" in os.environ
@@ -383,18 +406,6 @@ class ModelVisualizer:
         Simulator(self._diagram).Initialize()
         # Publish draw messages with current state.
         self._diagram.ForcedPublish(self._context)
-
-        # Visualize the camera frustum.
-        if self._show_rgbd_sensor:
-            camera_path = "/drake/illustration/_rgbd_camera_sliders/pinhole"
-            frustum_path = f"{camera_path}/frustum"
-            (vertices, faces) = self._camera_config_to_frustum(camera_config)
-            self._meshcat.SetTriangleMesh(
-                path=frustum_path, vertices=vertices, faces=faces,
-                rgba=Rgba(1.0, 0.33, 0, 0.2))
-            self._meshcat.SetTriangleMesh(
-                path=f"{frustum_path}/wire", vertices=vertices, faces=faces,
-                rgba=Rgba(0.5, 0.5, 0.5), wireframe=True)
 
         self._check_rep(finalized=True)
 
@@ -460,6 +471,27 @@ class ModelVisualizer:
         # Finalize the rest of the systems and widgets.
         self.Finalize()
 
+    def _render_if_necessary(self, *, loop_once):
+        """This evaluates the state of the camera and plant and possibly
+        triggers a rendering (up to a maximum hard-coded rate).
+        """
+        if not self._show_rgbd_sensor:
+            return
+        # When we only have a loop once, we should get one rendering.
+        if not loop_once and time.time() < (self._last_camera_time + 0.0625):
+            return
+
+        self._last_camera_time = time.time()
+        X_WC = self._meshcat.GetTrackedCameraPose()
+        if X_WC is None:
+            return
+
+        frame = self._diagram.plant().GetFrameByName("$rgbd_sensor_offset")
+        frame.SetPoseInParentFrame(
+            context=self._diagram.plant().GetMyContextFromRoot(self._context),
+            X_PF=X_WC)
+        self._diagram.GetOutputPort("preview_image").Eval(self._context)
+
     def Run(self, position=None, loop_once=False):
         """
         Runs the model. If Finalize() hasn't already been explicitly called
@@ -492,8 +524,17 @@ class ModelVisualizer:
         # more sense as an argument to Run() vs an argument to our constructor.
         if self._browser_new:
             self._browser_new = False
-            url = self._meshcat.web_url()
+            url_params = ""
+            if self._show_rgbd_sensor:
+                url_params = "?tracked_camera=on"
+            url = self._meshcat.web_url() + url_params
             _webbrowser_open(url=url, new=True)
+        elif self._show_rgbd_sensor:
+            logging.getLogger("drake").info(
+                "You've requested to show the RGBD Sensor. To control the "
+                "sensor position, make sure you open one browser to the "
+                "following url:\n\n"
+                f"\t{self._meshcat.web_url()}?tracked_camera=on\n")
 
         # Wait for the user to cancel us.
         stop_button_name = "Stop Running"
@@ -501,7 +542,6 @@ class ModelVisualizer:
             logging.getLogger("drake").info(
                 f"Click '{stop_button_name}' or press Esc to quit")
 
-        last_camera_time = 0
         try:
             self._meshcat.AddButton(stop_button_name, "Escape")
 
@@ -511,13 +551,7 @@ class ModelVisualizer:
                 return self._meshcat.GetButtonClicks(button_name) > 0
 
             while True:
-                # Refresh the relatively expensive preview camera at a slower
-                # rate (2 Hz) than everything else (32 Hz).
-                if self._show_rgbd_sensor:
-                    if time.time() > (last_camera_time + 0.5):
-                        last_camera_time = time.time()
-                        self._diagram.GetOutputPort("preview_image").Eval(
-                            self._context)
+                self._render_if_necessary(loop_once=loop_once)
                 time.sleep(1 / 32.0)
                 if has_clicks(self._reload_button_name):
                     self._meshcat.DeleteButton(stop_button_name)

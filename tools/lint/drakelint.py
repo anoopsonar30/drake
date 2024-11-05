@@ -2,11 +2,11 @@ import os
 import re
 import sys
 
-from drake.tools.lint.formatter import IncludeFormatter
+from tools.lint.formatter import IncludeFormatter
 
 
 def _check_unguarded_openmp_uses(filename):
-    """Return 0 if all OpenMP uses in @p filename are properly guarded by
+    """Returns 0 if all OpenMP uses in `filename` are properly guarded by
     #if defined(_OPENMP), and 1 otherwise.
     """
     openmp_include = "#include <omp.h>"
@@ -36,8 +36,44 @@ def _check_unguarded_openmp_uses(filename):
     return 0
 
 
+def _check_header_using_overloaded(filename):
+    """Returns 1 if the file is a header and (wrongly) includes overloaded.h.
+    Returns 0 otherwise."""
+    forbidden_re = re.compile(
+        # This expression approximates section 6.10.2 except 6.10.2.4 of
+        # https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf
+        r'\s*#\s*include\s*[<"]drake/common/overloaded.h\s*[>"]')
+    if filename.endswith(".h"):
+        with open(filename, mode='r', encoding='utf-8') as file:
+            for line in file.readlines():
+                if forbidden_re.match(line):
+                    print("ERROR:  Header files must not include "
+                          "drake/common/overloaded.h")
+                    return 1
+    return 0
+
+
+def _check_header_doxygen_file_spelling(filename):
+    """Returns 1 if the file is a header and mis-uses Doxygen's `@file` markup.
+    (The `@file` markup should always be followed immediately by a newline.)
+    Returns 0 otherwise."""
+    message = (
+        "Always add a line break after a Doxygen @file marker. "
+        "The description must start on the following line."
+    )
+    forbidden_re = re.compile(r'\s*(///?|/\*\*?)\s+@file.')
+    if filename.endswith(".h"):
+        with open(filename, mode='r', encoding='utf-8') as file:
+            lines = file.readlines()
+        for index, current_line in enumerate(lines):
+            if forbidden_re.match(current_line):
+                print(f"ERROR: {filename}:{index + 1}: {message}")
+                return 1
+    return 0
+
+
 def _check_invalid_line_endings(filename):
-    """Return 0 if all of the newlines in @p filename are Unix, and 1
+    """Returns 0 if all of the newlines in `filename` are Unix, and 1
     otherwise.
     """
     # Ask Python to read the file and determine the newlines convention.
@@ -58,7 +94,7 @@ def _check_invalid_line_endings(filename):
 
 
 def _check_includes(filename):
-    """Return 0 if clang-format-includes is a no-op, and 1 otherwise."""
+    """Returns 0 if clang-format-includes is a no-op, and 1 otherwise."""
     try:
         tool = IncludeFormatter(filename)
     except Exception as e:
@@ -79,7 +115,7 @@ def _check_includes(filename):
 
 
 def _check_shebang(filename, disallow_executable):
-    """Return 0 if the filename's executable bit is consistent with the
+    """Returns 0 if the filename's executable bit is consistent with the
     presence of a shebang line and the shebang line is in the whitelist of
     acceptable shebang lines, and 1 otherwise.
 
@@ -159,6 +195,46 @@ def _check_iostream(filename):
     return 1
 
 
+def _check_clang_format_toggles(filename):
+    """Checks that clang-format-{off,on} are correctly paired up.
+    """
+    # These are the needles we'll be looking for.
+    offs = [
+        "// clang-format off\n",
+        "// clang-format off ",
+        "/* clang-format off */",
+        "/* clang-format off to disable clang-format-includes */"
+    ]
+    ons = [
+        "// clang-format on\n",
+        "// clang-format on ",
+        "/* clang-format on */",
+    ]
+
+    with open(filename, mode='r', encoding='utf-8') as file:
+        lines = file.readlines()
+    enabled = True
+    num_errors = 0
+    for i, line in enumerate(lines):
+        line = line + "\n"
+        found_on = any([x in line for x in ons])
+        found_off = any([x in line for x in offs])
+        if found_on:
+            if enabled:
+                print(f"ERROR: {filename}:{i + 1}: "
+                      "This line is redundant; clang-format is already on")
+                num_errors += 1
+            enabled = True
+        if found_off:
+            if not enabled:
+                print(f"ERROR: {filename}:{i + 1}: "
+                      "This line is redundant; clang-format is already off")
+                num_errors += 1
+            enabled = False
+
+    return num_errors
+
+
 def main():
     """Run Drake lint checks on each path specified as a command-line argument.
     Exit 1 if any of the paths are invalid or any lint checks fail.
@@ -182,6 +258,9 @@ def main():
             total_errors += _check_includes(filename)
             total_errors += _check_unguarded_openmp_uses(filename)
             total_errors += _check_iostream(filename)
+            total_errors += _check_clang_format_toggles(filename)
+            total_errors += _check_header_using_overloaded(filename)
+            total_errors += _check_header_doxygen_file_spelling(filename)
 
     if total_errors == 0:
         sys.exit(0)

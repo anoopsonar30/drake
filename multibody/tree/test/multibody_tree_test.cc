@@ -51,40 +51,20 @@ template <typename T>
 void VerifyModelBasics(const MultibodyTree<T>& model) {
   const std::string kInvalidName = "InvalidName";
   const std::vector<std::string> kLinkNames = {
-      "iiwa_link_1",
-      "iiwa_link_2",
-      "iiwa_link_3",
-      "iiwa_link_4",
-      "iiwa_link_5",
-      "iiwa_link_6",
-      "iiwa_link_7"};
+      "iiwa_link_1", "iiwa_link_2", "iiwa_link_3", "iiwa_link_4",
+      "iiwa_link_5", "iiwa_link_6", "iiwa_link_7"};
 
   const std::vector<std::string> kFrameNames = {
-      "iiwa_link_1",
-      "iiwa_link_2",
-      "iiwa_link_3",
-      "iiwa_link_4",
-      "iiwa_link_5",
-      "iiwa_link_6",
-      "iiwa_link_7",
-      "tool_arbitrary"};
+      "iiwa_link_1", "iiwa_link_2", "iiwa_link_3", "iiwa_link_4",
+      "iiwa_link_5", "iiwa_link_6", "iiwa_link_7", "tool_arbitrary"};
 
   const std::vector<std::string> kJointNames = {
-      "iiwa_joint_1",
-      "iiwa_joint_2",
-      "iiwa_joint_3",
-      "iiwa_joint_4",
-      "iiwa_joint_5",
-      "iiwa_joint_6",
-      "iiwa_joint_7"};
+      "iiwa_joint_1", "iiwa_joint_2", "iiwa_joint_3", "iiwa_joint_4",
+      "iiwa_joint_5", "iiwa_joint_6", "iiwa_joint_7"};
 
   const std::vector<std::string> kActuatorNames = {
-      "iiwa_actuator_1",
-      "iiwa_actuator_2",
-      "iiwa_actuator_3",
-      "iiwa_actuator_4",
-      "iiwa_actuator_5",
-      "iiwa_actuator_6",
+      "iiwa_actuator_1", "iiwa_actuator_2", "iiwa_actuator_3",
+      "iiwa_actuator_4", "iiwa_actuator_5", "iiwa_actuator_6",
       "iiwa_actuator_7"};
 
   // Model Size. Counting the world body, there should be eight bodies.
@@ -129,44 +109,37 @@ void VerifyModelBasics(const MultibodyTree<T>& model) {
   // Get links by name.
   for (const std::string& link_name : kLinkNames) {
     drake::test::LimitMalloc guard;
-    const Body<T>& link = model.GetBodyByName(link_name);
-    EXPECT_EQ(link.name(), link_name);
-  }
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      model.GetBodyByName(kInvalidName),
-      ".*There is no Body named .*valid names are.* iiwa_link_1.*");
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      model.GetBodyByName(kLinkNames[0], world_model_instance()),
-      ".*There is no Body.*but one does exist in other model instances.*");
-
-  // Test that calling GetBodyByName() with an invalid ModelInstanceIndex
-  // throws.
-  const ModelInstanceIndex kInvalidIndex(1<<30);
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      model.GetBodyByName(kLinkNames[0], kInvalidIndex),
-      ".*There is no model instance.*in the model.*");
-
-  // Test we can also retrieve links as RigidBody objects.
-  for (const std::string& link_name : kLinkNames) {
-    drake::test::LimitMalloc guard;
     const RigidBody<T>& link = model.GetRigidBodyByName(link_name);
     EXPECT_EQ(link.name(), link_name);
   }
   DRAKE_EXPECT_THROWS_MESSAGE(
       model.GetRigidBodyByName(kInvalidName),
-      ".*There is no Body named .*valid names are.* iiwa_link_1.*");
+      ".*There is no RigidBody named .*valid names in model instance "
+      "'WorldModelInstance' are: world; valid names in model instance "
+      "'DefaultModelInstance' are: iiwa_link_1, iiwa_link_2.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.GetRigidBodyByName(kLinkNames[0], world_model_instance()),
+      ".*There is no RigidBody.*but one does exist in other model instances.*");
+
+  // Test that calling GetRigidBodyByName() with an invalid ModelInstanceIndex
+  // throws.
+  const ModelInstanceIndex kInvalidIndex(1 << 30);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.GetRigidBodyByName(kLinkNames[0], kInvalidIndex),
+      ".*There is no model instance.*in the model.*");
 
   // Get frames by name.
   for (const std::string& frame_name : kFrameNames) {
     drake::test::LimitMalloc guard;
     const Frame<T>& frame = model.GetFrameByName(frame_name);
     EXPECT_EQ(frame.name(), frame_name);
-    EXPECT_EQ(
-        &frame, &model.GetFrameByName(frame_name, default_model_instance()));
+    EXPECT_EQ(&frame,
+              &model.GetFrameByName(frame_name, default_model_instance()));
   }
   DRAKE_EXPECT_THROWS_MESSAGE(
       model.GetFrameByName(kInvalidName),
-      ".*There is no Frame named .*valid names are.* iiwa_link_1.*");
+      ".*There is no Frame named .*valid names in model instance "
+      "'DefaultModelInstance' are.* iiwa_link_1.*");
 
   // Get joints by name.
   for (const std::string& joint_name : kJointNames) {
@@ -176,7 +149,8 @@ void VerifyModelBasics(const MultibodyTree<T>& model) {
   }
   DRAKE_EXPECT_THROWS_MESSAGE(
       model.GetJointByName(kInvalidName),
-      ".*There is no Joint named .*valid names are.* iiwa_joint_1.*");
+      ".*There is no Joint named .*valid names in model instance "
+      "'DefaultModelInstance' are.* iiwa_joint_1.*");
 
   // Templatized version to obtain a particular known type of joint.
   for (const std::string& joint_name : kJointNames) {
@@ -187,7 +161,8 @@ void VerifyModelBasics(const MultibodyTree<T>& model) {
   }
   DRAKE_EXPECT_THROWS_MESSAGE(
       model.template GetJointByName<RevoluteJoint>(kInvalidName),
-      ".*There is no Joint named .*valid names are.* iiwa_joint_1.*");
+      ".*There is no Joint named .*valid names in model instance "
+      "'DefaultModelInstance' are.* iiwa_joint_1.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
       model.template GetJointByName<PrismaticJoint>(kJointNames[0]),
       ".*not of type.*PrismaticJoint.*but.*RevoluteJoint.*");
@@ -199,10 +174,10 @@ void VerifyModelBasics(const MultibodyTree<T>& model) {
         model.GetJointActuatorByName(actuator_name);
     EXPECT_EQ(actuator.name(), actuator_name);
   }
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      model.GetJointActuatorByName(kInvalidName),
-      ".*There is no JointActuator named .*valid names are.* "
-      "iiwa_actuator_1.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(model.GetJointActuatorByName(kInvalidName),
+                              ".*There is no JointActuator named .*valid names "
+                              "in model instance 'DefaultModelInstance' are.* "
+                              "iiwa_actuator_1.*");
 
   // Test we can retrieve joints from the actuators.
   int names_index = 0;
@@ -236,38 +211,36 @@ GTEST_TEST(MultibodyTree, VerifyModelBasics) {
   // model. This is not allowed and an exception should be thrown.
   DRAKE_EXPECT_THROWS_MESSAGE(
       model->AddRigidBody("iiwa_link_5", default_model_instance(),
-                          SpatialInertia<double>()),
+                          SpatialInertia<double>::NaN()),
       ".* already contains a body named 'iiwa_link_5'. "
       "Body names must be unique within a given model.");
 
   // Attempt to add a frame having the same name as a frame already part of the
   // model. This is not allowed and an exception should be thrown.
   DRAKE_EXPECT_THROWS_MESSAGE(
-      model->AddFrame<FixedOffsetFrame>("iiwa_link_5",
-                                        model->GetBodyByName("iiwa_link_1"),
-                                        RigidTransform<double>()),
+      model->AddFrame<FixedOffsetFrame>(
+          "iiwa_link_5", model->GetRigidBodyByName("iiwa_link_1"),
+          RigidTransform<double>()),
       ".* already contains a frame named 'iiwa_link_5'. "
       "Frame names must be unique within a given model.");
 
   // Attempt to add a joint having the same name as a joint already part of the
   // model. This is not allowed and an exception should be thrown.
   DRAKE_EXPECT_THROWS_MESSAGE(
-      model->AddJoint<RevoluteJoint>(
-          "iiwa_joint_4",
-          model->world_body(), std::nullopt,
-          model->GetBodyByName("iiwa_link_5"), std::nullopt,
-          Vector3<double>::UnitZ()),
+      model->AddJoint<RevoluteJoint>("iiwa_joint_4", model->world_body(),
+                                     std::nullopt,
+                                     model->GetRigidBodyByName("iiwa_link_5"),
+                                     std::nullopt, Vector3<double>::UnitZ()),
       ".* already contains a joint named 'iiwa_joint_4'. "
       "Joint names must be unique within a given model.");
 
   // Attempt to add an actuator having the same name as an actuator already part
   // of the model. This is not allowed and an exception should be thrown.
   DRAKE_EXPECT_THROWS_MESSAGE(
-      model->AddJointActuator(
-          "iiwa_actuator_4",
-          model->GetJointByName("iiwa_joint_4")),
+      model->AddJointActuator("iiwa_actuator_4",
+                              model->GetJointByName("iiwa_joint_4")),
       ".* already contains a joint actuator named 'iiwa_actuator_4'. "
-          "Joint actuator names must be unique within a given model.");
+      "Joint actuator names must be unique within a given model.");
 
   // Now we tested we cannot add body or joints with an existing name, finalize
   // the model.
@@ -277,6 +250,31 @@ GTEST_TEST(MultibodyTree, VerifyModelBasics) {
   EXPECT_THROW(model->Finalize(), std::logic_error);
 
   VerifyModelBasics(*model);
+}
+
+// Confirms that the error messages produced by GetElementByName are reasonable
+// even for an empty model.
+GTEST_TEST(MultibodyTree, EmptyGetElementByName) {
+  // Create an empty model.
+  MultibodyTree<double> model;
+  const std::string kInvalidName = "InvalidName";
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.GetRigidBodyByName(kInvalidName),
+      ".*There is no RigidBody named .*valid names in model instance "
+      "'WorldModelInstance' are.* world.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.GetFrameByName(kInvalidName),
+      ".*There is no Frame named .*valid names in model instance "
+      "'WorldModelInstance' are.* world.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(model.GetJointByName(kInvalidName),
+                              ".*There are no Joints defined in the model");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.template GetJointByName<RevoluteJoint>(kInvalidName),
+      ".*There are no Joints defined in the model");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      model.GetJointActuatorByName(kInvalidName),
+      ".*There are no JointActuators defined in the model");
 }
 
 // Exercises the error detection and reporting for retrieving model elements by
@@ -291,9 +289,8 @@ GTEST_TEST(MultibodyTree, RetrievingAmbiguousNames) {
   const ModelInstanceIndex other_model_instance =
       model->AddModelInstance("other");
   const std::string link_name = "iiwa_link_5";
-  EXPECT_NO_THROW(
-      model->AddRigidBody(link_name, other_model_instance,
-                          SpatialInertia<double>()));
+  EXPECT_NO_THROW(model->AddRigidBody(link_name, other_model_instance,
+                                      SpatialInertia<double>::NaN()));
   EXPECT_NO_THROW(model->Finalize());
 
   // Link name is ambiguous, there are more than one bodies that use the name.
@@ -308,9 +305,10 @@ GTEST_TEST(MultibodyTree, RetrievingAmbiguousNames) {
 
   // Accessing by name throws, unless we specify the intended model instance.
   DRAKE_EXPECT_THROWS_MESSAGE(
-      model->GetBodyByName(link_name),
-      ".*Body.*appears in multiple model instances.*disambiguate.*");
-  EXPECT_NO_THROW(model->GetBodyByName(link_name, default_model_instance()));
+      model->GetRigidBodyByName(link_name),
+      ".*RigidBody.*appears in multiple model instances.*disambiguate.*");
+  EXPECT_NO_THROW(
+      model->GetRigidBodyByName(link_name, default_model_instance()));
 }
 
 // MBPlant provides most of the testing for MBTreeSystem. Here we just want
@@ -319,7 +317,7 @@ class BadDerivedMBSystem : public MultibodyTreeSystem<double> {
  public:
   explicit BadDerivedMBSystem(bool double_finalize)
       : MultibodyTreeSystem<double>() {
-    mutable_tree().AddBody<RigidBody>("body", SpatialInertia<double>());
+    mutable_tree().AddRigidBody("body", SpatialInertia<double>::NaN());
     Finalize();
     if (double_finalize) {
       Finalize();
@@ -371,7 +369,7 @@ class KukaIiwaModelTests : public ::testing::Test {
           false /* do not finalize model yet */, gravity_);
 
       // Keep pointers to the modeling elements.
-      end_effector_link_ = &tree->GetBodyByName("iiwa_link_7");
+      end_effector_link_ = &tree->GetRigidBodyByName("iiwa_link_7");
       joints_.push_back(&tree->GetJointByName<RevoluteJoint>("iiwa_joint_1"));
       joints_.push_back(&tree->GetJointByName<RevoluteJoint>("iiwa_joint_2"));
       joints_.push_back(&tree->GetJointByName<RevoluteJoint>("iiwa_joint_3"));
@@ -382,12 +380,11 @@ class KukaIiwaModelTests : public ::testing::Test {
 
       // Add a frame H with a fixed pose X_GH in the end effector frame G.
       // Note: frame names are documented in MakeKukaIiwaModel().
-      frame_H_ = &tree->AddFrame<FixedOffsetFrame>(
-          "H", *end_effector_link_, X_GH_);
+      frame_H_ =
+          &tree->AddFrame<FixedOffsetFrame>("H", *end_effector_link_, X_GH_);
 
       // Create a system to manage context resources.
-      system_ =
-          std::make_unique<MultibodyTreeSystem<double>>(std::move(tree));
+      system_ = std::make_unique<MultibodyTreeSystem<double>>(std::move(tree));
     }
 
     context_ = system_->CreateDefaultContext();
@@ -402,8 +399,8 @@ class KukaIiwaModelTests : public ::testing::Test {
 
   // Get an arm state associated with an arbitrary configuration that avoids
   // in-plane motion and in which joint angles and rates are non-zero.
-  void GetArbitraryNonZeroJointAnglesAndRates(
-      VectorX<double>* q, VectorX<double>* v) {
+  void GetArbitraryNonZeroJointAnglesAndRates(VectorX<double>* q,
+                                              VectorX<double>* v) {
     const int kNumPositions = tree().num_positions();
     q->resize(kNumPositions);
     v->resize(kNumPositions);  // q and v have the same dimension for kuka.
@@ -433,9 +430,8 @@ class KukaIiwaModelTests : public ::testing::Test {
   // Computes the translational velocity `v_WE` of the end effector frame E in
   // the world frame W.
   template <typename T>
-  Vector3<T> CalcEndEffectorVelocity(
-      const MultibodyTree<T>& model_on_T,
-      const Context<T>& context_on_T) const {
+  Vector3<T> CalcEndEffectorVelocity(const MultibodyTree<T>& model_on_T,
+                                     const Context<T>& context_on_T) const {
     std::vector<SpatialVelocity<T>> V_WB_array;
     model_on_T.CalcAllBodySpatialVelocitiesInWorld(context_on_T, &V_WB_array);
     return V_WB_array[end_effector_link_->index()].translational();
@@ -454,15 +450,14 @@ class KukaIiwaModelTests : public ::testing::Test {
 
   // Computes p_WEo, the position of the end effector frame's origin Eo.
   template <typename T>
-  Vector3<T> CalcEndEffectorPosition(
-      const MultibodyTree<T>& model_on_T,
-      const Context<T>& context_on_T) const {
-    const Body<T>& linkG_on_T = model_on_T.get_variant(*end_effector_link_);
+  Vector3<T> CalcEndEffectorPosition(const MultibodyTree<T>& model_on_T,
+                                     const Context<T>& context_on_T) const {
+    const RigidBody<T>& linkG_on_T =
+        model_on_T.get_variant(*end_effector_link_);
     Vector3<T> p_WE;
-    model_on_T.CalcPointsPositions(
-        context_on_T, linkG_on_T.body_frame(),
-        Vector3<T>::Zero(),  // position in frame G
-        model_on_T.world_body().body_frame(), &p_WE);
+    model_on_T.CalcPointsPositions(context_on_T, linkG_on_T.body_frame(),
+                                   Vector3<T>::Zero(),  // position in frame G
+                                   model_on_T.world_body().body_frame(), &p_WE);
     return p_WE;
   }
 
@@ -471,27 +466,21 @@ class KukaIiwaModelTests : public ::testing::Test {
   // See MultibodyTree::CalcJacobianTranslationalVelocity() for details.
   template <typename T>
   void CalcPointsOnEndEffectorTranslationalVelocityJacobianWrtV(
-      const MultibodyTree<T>& model_on_T,
-      const Context<T>& context_on_T,
-      const MatrixX<T>& p_EoEi_E,
-      MatrixX<T>* p_WoEi_W,
+      const MultibodyTree<T>& model_on_T, const Context<T>& context_on_T,
+      const MatrixX<T>& p_EoEi_E, MatrixX<T>* p_WoEi_W,
       MatrixX<T>* Jv_WEi_W) const {
-    const Body<T>& linkG_on_T = model_on_T.get_variant(*end_effector_link_);
+    const RigidBody<T>& linkG_on_T =
+        model_on_T.get_variant(*end_effector_link_);
     const Frame<T>& frame_E = linkG_on_T.body_frame();
     const Frame<T>& frame_W = model_on_T.world_frame();
-    model_on_T.CalcJacobianTranslationalVelocity(context_on_T,
-                                                 JacobianWrtVariable::kV,
-                                                 frame_E,
-                                                 frame_E,
-                                                 p_EoEi_E,
-                                                 frame_W,
-                                                 frame_W,
-                                                 Jv_WEi_W);
+    model_on_T.CalcJacobianTranslationalVelocity(
+        context_on_T, JacobianWrtVariable::kV, frame_E, frame_E, p_EoEi_E,
+        frame_W, frame_W, Jv_WEi_W);
 
     // For each point Ei, calculate Ei's position from Wo (World origin),
     // expressed in world W.
-    model_on_T.CalcPointsPositions(context_on_T, frame_E, p_EoEi_E,   // From E
-                                                 frame_W, p_WoEi_W);  // to W.
+    model_on_T.CalcPointsPositions(context_on_T, frame_E, p_EoEi_E,  // From E
+                                   frame_W, p_WoEi_W);               // to W.
   }
 
   // For each point Hi fixed (welded) to frame H, calculates Jv_WHi_W,
@@ -499,26 +488,19 @@ class KukaIiwaModelTests : public ::testing::Test {
   // See MultibodyTree::CalcJacobianTranslationalVelocity() for details.
   template <typename T>
   void CalcPointsOnFrameHTranslationalVelocityJacobianWrtV(
-      const MultibodyTree<T>& model_on_T,
-      const Context<T>& context_on_T,
-      const MatrixX<T>& p_HoHi_H,
-      MatrixX<T>* p_WoHi_W,
+      const MultibodyTree<T>& model_on_T, const Context<T>& context_on_T,
+      const MatrixX<T>& p_HoHi_H, MatrixX<T>* p_WoHi_W,
       MatrixX<T>* Jv_WHi_W) const {
     const Frame<T>& frameH_on_T = model_on_T.get_variant(*frame_H_);
     const Frame<T>& frame_W = model_on_T.world_frame();
-    model_on_T.CalcJacobianTranslationalVelocity(context_on_T,
-                                                 JacobianWrtVariable::kV,
-                                                 frameH_on_T,
-                                                 frameH_on_T,
-                                                 p_HoHi_H,
-                                                 frame_W,
-                                                 frame_W,
-                                                 Jv_WHi_W);
+    model_on_T.CalcJacobianTranslationalVelocity(
+        context_on_T, JacobianWrtVariable::kV, frameH_on_T, frameH_on_T,
+        p_HoHi_H, frame_W, frame_W, Jv_WHi_W);
 
     // Calculate p_WoHi_W (Hi's position from World origin Wo, expressed in W)
     // from p_HoHi_H (Hi's position from Ho, expressed in H).
-    model_on_T.CalcPointsPositions(context_on_T, frameH_on_T, p_HoHi_H,
-                                                 frame_W, p_WoHi_W);
+    model_on_T.CalcPointsPositions(context_on_T, frameH_on_T, p_HoHi_H, frame_W,
+                                   p_WoHi_W);
   }
 
   // For a point Hp fixed/welded to frame H (attached to the end effector, see
@@ -527,19 +509,13 @@ class KukaIiwaModelTests : public ::testing::Test {
   // AutoDiffXd, this method can also calculate its time derivative J̇v_V_WHp.
   template <typename T>
   void CalcFrameHpJacobianSpatialVelocityInWorld(
-      const MultibodyTree<T>& model_on_T,
-      const Context<T>& context_on_T,
-      const Vector3<T>& p_HoHp_H,
-      MatrixX<T>* Jv_V_WHp) const {
+      const MultibodyTree<T>& model_on_T, const Context<T>& context_on_T,
+      const Vector3<T>& p_HoHp_H, MatrixX<T>* Jv_V_WHp) const {
     const Frame<T>& frameH_on_T = model_on_T.get_variant(*frame_H_);
     const Frame<T>& frame_W = model_on_T.world_frame();
-    model_on_T.CalcJacobianSpatialVelocity(context_on_T,
-                                           JacobianWrtVariable::kV,
-                                           frameH_on_T,
-                                           p_HoHp_H,
-                                           frame_W,
-                                           frame_W,
-                                           Jv_V_WHp);
+    model_on_T.CalcJacobianSpatialVelocity(
+        context_on_T, JacobianWrtVariable::kV, frameH_on_T, p_HoHp_H, frame_W,
+        frame_W, Jv_V_WHp);
   }
 
   const MultibodyTree<double>& tree() const {
@@ -558,7 +534,7 @@ class KukaIiwaModelTests : public ::testing::Test {
   // Workspace including context and derivatives vector:
   std::unique_ptr<Context<double>> context_;
   // Non-owning pointer to the end effector link:
-  const Body<double>* end_effector_link_{nullptr};
+  const RigidBody<double>* end_effector_link_{nullptr};
   // Non-owning pointer to a fixed pose frame on the end effector link:
   const Frame<double>* frame_H_{nullptr};
   const RigidTransform<double> X_GH_{
@@ -593,8 +569,9 @@ TEST_F(KukaIiwaModelTests, StateAccess) {
   ASSERT_EQ(tree().num_velocities(), 7);
   ASSERT_EQ(tree().num_states(), 14);
 
-  const Eigen::VectorXd qv_values = (Eigen::VectorXd(14)
-      << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14).finished();
+  const Eigen::VectorXd qv_values =
+      (Eigen::VectorXd(14) << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+          .finished();
 
   // Check whole-state access.
   tree().GetMutablePositionsAndVelocities(context_.get()) = qv_values;
@@ -632,10 +609,8 @@ TEST_F(KukaIiwaModelTests, StateAccess) {
 
   // Test that the state segment methods work.
   tree().GetMutablePositionsAndVelocities(context_.get()) = qv_values;
-  EXPECT_EQ(tree().get_state_segment<3>(*context_, 5),
-      qv_values.segment(5, 3));
-  EXPECT_EQ(tree().get_state_segment(*context_, 5, 4),
-      qv_values.segment(5, 4));
+  EXPECT_EQ(tree().get_state_segment<3>(*context_, 5), qv_values.segment(5, 3));
+  EXPECT_EQ(tree().get_state_segment(*context_, 5, 4), qv_values.segment(5, 4));
 
   // There are four segment-mutating methods. We'll use each
   // to make the same change, then verify with this lambda.
@@ -726,8 +701,9 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityA) {
   // variable of the problem.
   VectorX<AutoDiffXd> v_autodiff(kNumPositions);
   math::InitializeAutoDiff(v, &v_autodiff);
-  context_autodiff_->get_mutable_continuous_state().
-      get_mutable_generalized_velocity().SetFromVector(v_autodiff);
+  context_autodiff_->get_mutable_continuous_state()
+      .get_mutable_generalized_velocity()
+      .SetFromVector(v_autodiff);
 
   const Vector3<AutoDiffXd> v_WE_autodiff =
       CalcEndEffectorVelocity(tree_autodiff(), *context_autodiff_);
@@ -737,8 +713,8 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityA) {
 
   // Values obtained with <AutoDiffXd> should match those computed with
   // <double>.
-  EXPECT_TRUE(CompareMatrices(v_WE_value, v_WE,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(v_WE_value, v_WE, kTolerance,
+                              MatrixCompareType::relative));
 
   // Some sanity checks on the expected sizes of the derivatives.
   EXPECT_EQ(v_WE_derivs.rows(), 3);
@@ -751,36 +727,30 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityA) {
   const Frame<double>& frame_E = end_effector_link_->body_frame();
   const Frame<double>& frame_W = tree().world_frame();
   const Vector3<double> p_EoGo_E = Vector3<double>::Zero();
-  tree().CalcJacobianTranslationalVelocity(*context_,
-                                           JacobianWrtVariable::kV,
-                                           frame_E,
-                                           frame_E,
-                                           p_EoGo_E,
-                                           frame_W,
-                                           frame_W,
-                                           &Jv_WE);
+  tree().CalcJacobianTranslationalVelocity(*context_, JacobianWrtVariable::kV,
+                                           frame_E, frame_E, p_EoGo_E, frame_W,
+                                           frame_W, &Jv_WE);
 
   // Calculate p_WoEo_W (Eo's position from World origin Wo expressed in W)
   // from p_EoGo_E (Go's position from Eo expressed in E -- zero vector).
-  tree().CalcPointsPositions(*context_, frame_E, p_EoGo_E,
-                                        frame_W, &p_WE);
+  tree().CalcPointsPositions(*context_, frame_E, p_EoGo_E, frame_W, &p_WE);
 
   // Verify the computed Jacobian matches the one obtained using automatic
   // differentiation.
-  EXPECT_TRUE(CompareMatrices(Jv_WE, v_WE_derivs,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(Jv_WE, v_WE_derivs, kTolerance,
+                              MatrixCompareType::relative));
 
   // Verify that v_WE = Jv_WE * v:
   const Vector3<double> Jv_WE_times_v = Jv_WE * v;
-  EXPECT_TRUE(CompareMatrices(Jv_WE_times_v, v_WE,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(Jv_WE_times_v, v_WE, kTolerance,
+                              MatrixCompareType::relative));
 
   // Verify that MultibodyTree::CalcPointsPositions() computes the same value
   // of p_WE. Even both code paths resolve to CalcPointsPositions(), here we
   // call this method explicitly to provide unit testing for this API.
   Vector3<double> p2_WE = CalcEndEffectorPosition(tree(), *context_);
-  EXPECT_TRUE(CompareMatrices(p2_WE, p_WE,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(
+      CompareMatrices(p2_WE, p_WE, kTolerance, MatrixCompareType::relative));
 
   // The derivative with respect to time should equal v_WE.
   const VectorX<AutoDiffXd> q_autodiff =
@@ -788,19 +758,20 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityA) {
       // gradient for math::InitializeAutoDiff(). Eigen complains otherwise.
       math::InitializeAutoDiff(q, MatrixXd(v));
   v_autodiff = v.cast<AutoDiffXd>();
-  context_autodiff_->get_mutable_continuous_state().
-      get_mutable_generalized_position().SetFromVector(q_autodiff);
-  context_autodiff_->get_mutable_continuous_state().
-      get_mutable_generalized_velocity().SetFromVector(v_autodiff);
+  context_autodiff_->get_mutable_continuous_state()
+      .get_mutable_generalized_position()
+      .SetFromVector(q_autodiff);
+  context_autodiff_->get_mutable_continuous_state()
+      .get_mutable_generalized_velocity()
+      .SetFromVector(v_autodiff);
 
-  Vector3<AutoDiffXd> p_WE_autodiff = CalcEndEffectorPosition(
-      tree_autodiff(), *context_autodiff_);
-  Vector3<double> p_WE_derivs(
-      p_WE_autodiff[0].derivatives()[0],
-      p_WE_autodiff[1].derivatives()[0],
-      p_WE_autodiff[2].derivatives()[0]);
-  EXPECT_TRUE(CompareMatrices(p_WE_derivs, v_WE,
-                              kTolerance, MatrixCompareType::relative));
+  Vector3<AutoDiffXd> p_WE_autodiff =
+      CalcEndEffectorPosition(tree_autodiff(), *context_autodiff_);
+  Vector3<double> p_WE_derivs(p_WE_autodiff[0].derivatives()[0],
+                              p_WE_autodiff[1].derivatives()[0],
+                              p_WE_autodiff[2].derivatives()[0]);
+  EXPECT_TRUE(CompareMatrices(p_WE_derivs, v_WE, kTolerance,
+                              MatrixCompareType::relative));
 }
 
 // This test is used to verify the correctness of the method
@@ -869,14 +840,10 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityB) {
   // point P with position p_GP = 0 in the G frame.
   const Frame<double>& end_effector_frame = end_effector_link_->body_frame();
   const Frame<double>& world_frame = tree().world_frame();
-  tree().CalcJacobianTranslationalVelocity(*context_,
-                                           JacobianWrtVariable::kV,
-                                           end_effector_frame,
-                                           end_effector_frame,
-                                           Vector3<double>::Zero(),
-                                           world_frame,
-                                           world_frame,
-                                           &Jv_WE);
+  tree().CalcJacobianTranslationalVelocity(
+      *context_, JacobianWrtVariable::kV, end_effector_frame,
+      end_effector_frame, Vector3<double>::Zero(), world_frame, world_frame,
+      &Jv_WE);
 
   // Verify the computed Jacobian matches the one from auto-differentiation.
   EXPECT_TRUE(CompareMatrices(Jv_WE, v_WE_derivs, kTolerance,
@@ -890,14 +857,9 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityB) {
   // Use different frame arguments to again calculate the Jacobian.
   // Again verify the computed Jacobian matches that from auto-differentiation.
   const Vector3<double> p_WE = CalcEndEffectorPosition(tree(), *context_);
-  tree().CalcJacobianTranslationalVelocity(*context_,
-                                           JacobianWrtVariable::kV,
-                                           end_effector_frame,
-                                           world_frame,
-                                           p_WE,
-                                           world_frame,
-                                           world_frame,
-                                           &Jv_WE);
+  tree().CalcJacobianTranslationalVelocity(
+      *context_, JacobianWrtVariable::kV, end_effector_frame, world_frame, p_WE,
+      world_frame, world_frame, &Jv_WE);
   EXPECT_TRUE(CompareMatrices(Jv_WE, v_WE_derivs, kTolerance,
                               MatrixCompareType::relative));
 
@@ -906,7 +868,8 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityB) {
       math::InitializeAutoDiff(q, MatrixXd(v));
   v_autodiff = v.cast<AutoDiffXd>();
   tree_autodiff().GetMutablePositionsAndVelocities(context_autodiff_.get())
-      << q_autodiff, v_autodiff;
+      << q_autodiff,
+      v_autodiff;
 
   Vector3<AutoDiffXd> p_WE_autodiff =
       CalcEndEffectorPosition(tree_autodiff(), *context_autodiff_);
@@ -916,129 +879,6 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityB) {
   EXPECT_TRUE(CompareMatrices(p_WE_derivs, v_WE, kTolerance,
                               MatrixCompareType::relative));
 }
-
-
-// Unit tests MBT::CalcBiasForJacobianTranslationalVelocity() using
-// AutoDiffXd to compute time derivatives of a Jacobian to obtain a
-// reference solution.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-TEST_F(KukaIiwaModelTests, CalcBiasForJacobianTranslationalVelocity) {
-  // The number of generalized positions in the Kuka iiwa robot arm model.
-  const int kNumPositions = tree().num_positions();
-
-  // Numerical tolerance used to verify numerical results.
-  const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
-
-  // Get a set of joint angles and angular rates that avoids in-plane motion.
-  VectorX<double> q, v;
-  GetArbitraryNonZeroJointAnglesAndRates(&q, &v);
-
-  // Since the bias term is a function of q and v only (i.e. it is not a
-  // function of vdot), we choose a set of arbitrary values for the generalized
-  // accelerations. We do purposely set this values to be non-zero to stress
-  // the fact that the bias term is not a function of vdot.
-  VectorX<double> vdot(kNumPositions);
-  vdot << 1, 2, 3, 4, 5, 6, 7;
-
-  // Set generalized positions and velocities.
-  int angle_index = 0;
-  for (const RevoluteJoint<double>* joint : joints_) {
-    joint->set_angle(context_.get(), q[angle_index]);
-    joint->set_angular_rate(context_.get(), v[angle_index]);
-    angle_index++;
-  }
-
-  context_autodiff_->SetTimeStateAndParametersFrom(*context_);
-
-  // Initialize q_autodiff and v_autodiff so that we differentiate with respect
-  // to time.
-  // Note: here we pass MatrixXd(v) so that the return gradient uses AutoDiffXd
-  // (for which we do have explicit instantiations) instead of
-  // AutoDiffScalar<Matrix1d>.
-  auto q_autodiff = math::InitializeAutoDiff(q, MatrixXd(v));
-  auto v_autodiff = math::InitializeAutoDiff(v, MatrixXd(vdot));
-
-  VectorX<AutoDiffXd> x_autodiff(2 * kNumPositions);
-  x_autodiff << q_autodiff, v_autodiff;
-
-  // Set the context for AutoDiffXd computations.
-  tree_autodiff().GetMutablePositionsAndVelocities(context_autodiff_.get())
-      = x_autodiff;
-
-  // A set of points Pi attached to frame H on the end effector.
-  const int kNumPoints = 2;  // The set stores 2 points.
-  MatrixX<double> p_HPi(3, kNumPoints);
-  p_HPi.col(0) << 0.1, -0.05, 0.02;
-  p_HPi.col(1) << 0.2, 0.3, -0.15;
-
-  MatrixX<double> p_WPi(3, kNumPoints);
-  MatrixX<double> Jv_WHp(3 * kNumPoints, kNumPositions);
-
-  const MatrixX<AutoDiffXd> p_HPi_autodiff = p_HPi;
-  MatrixX<AutoDiffXd> p_WPi_autodiff(3, kNumPoints);
-  MatrixX<AutoDiffXd> Jv_WHp_autodiff(3 * kNumPoints, kNumPositions);
-
-  // Compute J̇v_v_WHp using AutoDiffXd.
-  CalcPointsOnFrameHTranslationalVelocityJacobianWrtV(
-      tree_autodiff(), *context_autodiff_, p_HPi_autodiff,
-      &p_WPi_autodiff, &Jv_WHp_autodiff);
-
-  // Extract time derivatives:
-  MatrixX<double> Jv_WHp_derivs = math::ExtractGradient(Jv_WHp_autodiff);
-  Jv_WHp_derivs.resize(3 * kNumPoints, kNumPositions);
-
-  // Compute the expected value of the bias terms using the time derivatives
-  // computed with AutoDiffXd.
-  const VectorX<double> abias_WHp_W_expected = Jv_WHp_derivs * v;
-
-  // Compute bias for Jacobian translational velocity.
-  const Frame<double>& world_frame = tree().world_frame();
-  const VectorX<double> abias_WHp_W =
-      tree().CalcBiasForJacobianTranslationalVelocity(
-      *context_, JacobianWrtVariable::kV, *frame_H_, p_HPi,
-      world_frame, world_frame);
-
-  // abias_WHp is of size 3⋅kNumPoints x num_velocities. CompareMatrices() below
-  // verifies this, in addition to the numerical values of each element.
-  EXPECT_TRUE(CompareMatrices(abias_WHp_W, abias_WHp_W_expected,
-                              kTolerance, MatrixCompareType::relative));
-
-  // Express the expected bias acceleration result in frame_H_.
-  const RotationMatrix<double> R_WH =
-      frame_H_->CalcRotationMatrixInWorld(*context_);
-  const RotationMatrix<double> R_HW = R_WH.inverse();
-  Vector6<double> abias_WHp_H_expected;
-  abias_WHp_H_expected.head(3) = R_HW * abias_WHp_W_expected.head(3);
-  abias_WHp_H_expected.tail(3) = R_HW * abias_WHp_W_expected.tail(3);
-
-  // Directly calculate abias_WHp_H.
-  const VectorX<double> abias_WHp_H =
-      tree().CalcBiasForJacobianTranslationalVelocity(
-          *context_, JacobianWrtVariable::kV, *frame_H_, p_HPi,
-          world_frame, *frame_H_);
-
-  // Ensure abias_WHp_H is nearly identical to abias_WHp_H_expected.
-  EXPECT_TRUE(CompareMatrices(abias_WHp_H, abias_WHp_H_expected,
-                              kTolerance, MatrixCompareType::relative));
-
-  // Verify CalcBiasForJacobianTranslationalVelocity() throws an exception if
-  // the input set of points is not represented as a matrix with three rows.
-  MatrixX<double> p_HQi(5, kNumPoints);  // an invalid size input set.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      tree().CalcBiasForJacobianTranslationalVelocity(
-          *context_, JacobianWrtVariable::kV, *frame_H_, p_HQi,
-          world_frame, world_frame),
-      ".* condition '.*.rows\\(\\) == 3' failed.");
-
-  // Verify CalcBiasForJacobianTranslationalVelocity() throws an exception if
-  // JacobianWrtVariable is KQDot (not kV).
-  EXPECT_THROW(tree().CalcBiasForJacobianTranslationalVelocity(
-                   *context_, JacobianWrtVariable::kQDot, *frame_H_, p_HPi,
-                   world_frame, world_frame),
-               std::exception);
-}
-#pragma GCC diagnostic pop  // pop -Wdeprecated-declarations
 
 // Given a set of points Pi attached to the end effector frame G, this test
 // calculates Jq̇_v_WPi (Pi's translational velocity Jacobian with respect to q̇)
@@ -1061,8 +901,9 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityC) {
   VectorX<double> q0, v0;  // v0 will not be used in this test.
   GetArbitraryNonZeroJointAnglesAndRates(&q0, &v0);
 
-  context_->get_mutable_continuous_state().
-      get_mutable_generalized_position().SetFromVector(q0);
+  context_->get_mutable_continuous_state()
+      .get_mutable_generalized_position()
+      .SetFromVector(q0);
 
   // A set of points Pi attached to the end effector, thus we a fixed position
   // in its frame G.
@@ -1089,16 +930,17 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityC) {
   // variable of the problem.
   VectorX<AutoDiffXd> q_autodiff(kNumPositions);
   math::InitializeAutoDiff(q0, &q_autodiff);
-  context_autodiff_->get_mutable_continuous_state().
-      get_mutable_generalized_position().SetFromVector(q_autodiff);
+  context_autodiff_->get_mutable_continuous_state()
+      .get_mutable_generalized_position()
+      .SetFromVector(q_autodiff);
 
   const MatrixX<AutoDiffXd> p_EPi_autodiff = p_EPi;
   MatrixX<AutoDiffXd> p_WPi_autodiff(3, kNumPoints);
   MatrixX<AutoDiffXd> Jq_WPi_autodiff(3 * kNumPoints, kNumPositions);
 
   CalcPointsOnEndEffectorTranslationalVelocityJacobianWrtV(
-      tree_autodiff(), *context_autodiff_,
-      p_EPi_autodiff, &p_WPi_autodiff, &Jq_WPi_autodiff);
+      tree_autodiff(), *context_autodiff_, p_EPi_autodiff, &p_WPi_autodiff,
+      &Jq_WPi_autodiff);
 
   // Extract values and derivatives:
   const Matrix3X<double> p_WPi_value = math::ExtractValue(p_WPi_autodiff);
@@ -1107,8 +949,8 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityC) {
   // Some sanity checks:
   // Values obtained with <AutoDiffXd> should match those computed with
   // <double>.
-  EXPECT_TRUE(CompareMatrices(p_WPi_value, p_WPi,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(p_WPi_value, p_WPi, kTolerance,
+                              MatrixCompareType::relative));
   // Sizes of the derivatives.
   EXPECT_EQ(p_WPi_derivs.rows(), 3 * kNumPoints);
   EXPECT_EQ(p_WPi_derivs.cols(), kNumPositions);
@@ -1116,8 +958,8 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityC) {
   // Verify the computed Jacobian Jq_WPi matches the one obtained using
   // automatic differentiation.  In this Kuka iiwa arm example, q̇ = v, so
   // these two Jacobian calculations should be nearly equal.
-  EXPECT_TRUE(CompareMatrices(Jq_WPi, p_WPi_derivs,
-                              kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(Jq_WPi, p_WPi_derivs, kTolerance,
+                              MatrixCompareType::relative));
 }
 
 TEST_F(KukaIiwaModelTests, EvalPoseAndSpatialVelocity) {
@@ -1146,8 +988,8 @@ TEST_F(KukaIiwaModelTests, EvalPoseAndSpatialVelocity) {
 
   // Independent benchmark solution.
   const SpatialKinematicsPVA<double> MG_kinematics =
-      benchmark_.CalcEndEffectorKinematics(
-          q, v, VectorX<double>::Zero(7) /* vdot */);
+      benchmark_.CalcEndEffectorKinematics(q, v,
+                                           VectorX<double>::Zero(7) /* vdot */);
   const SpatialVelocity<double>& V_WE_benchmark =
       MG_kinematics.spatial_velocity();
   const RigidTransform<double> X_WE_benchmark(MG_kinematics.transform());
@@ -1155,8 +997,8 @@ TEST_F(KukaIiwaModelTests, EvalPoseAndSpatialVelocity) {
   // Compare against benchmark.
   EXPECT_TRUE(V_WE.IsApprox(V_WE_benchmark, kTolerance));
   EXPECT_TRUE(CompareMatrices(X_WE.GetAsMatrix34(),
-                              X_WE_benchmark.GetAsMatrix34(),
-                              kTolerance, MatrixCompareType::relative));
+                              X_WE_benchmark.GetAsMatrix34(), kTolerance,
+                              MatrixCompareType::relative));
 }
 
 TEST_F(KukaIiwaModelTests, CalcJacobianSpatialVelocityA) {
@@ -1210,103 +1052,15 @@ TEST_F(KukaIiwaModelTests, CalcJacobianSpatialVelocityA) {
   // Compute the Jacobian Jv_WF for that relate the generalized velocities with
   // the spatial velocity of frame F.
   const Frame<double>& frame_W = tree().world_frame();
-  tree().CalcJacobianSpatialVelocity(*context_,
-                                     JacobianWrtVariable::kV,
+  tree().CalcJacobianSpatialVelocity(*context_, JacobianWrtVariable::kV,
                                      end_effector_link_->body_frame(), p_EoFo_E,
-                                     frame_W, frame_W,
-                                     &Jv_WF);
+                                     frame_W, frame_W, &Jv_WF);
 
   // Verify that V_WEf = Jv_WF * v:
   const SpatialVelocity<double> Jv_WF_times_v(Jv_WF * v);
 
   EXPECT_TRUE(Jv_WF_times_v.IsApprox(V_WEf, kTolerance));
 }
-
-
-// Unit tests MBT::CalcBiasForJacobianSpatialVelocity() use AutoDiffXd to time-
-// differentiate a spatial velocity Jacobian to form a reference solution.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-TEST_F(KukaIiwaModelTests, CalcBiasForJacobianSpatialVelocity) {
-  // The number of generalized velocities in the Kuka iiwa robot arm model.
-  const int kNumVelocities = tree().num_velocities();
-
-  // Numerical tolerance used to verify numerical results.
-  const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
-
-  // Get a set of joint angles and angular rates that avoids in-plane motion.
-  VectorX<double> q, v;
-  GetArbitraryNonZeroJointAnglesAndRates(&q, &v);
-
-  // Since the bias term is a function of q and v only (i.e. it is not a
-  // function of vdot), we choose a set of arbitrary values for the generalized
-  // accelerations. We do purposely set this values to be non-zero to stress
-  // the fact that the bias term is not a function of vdot.
-  const VectorX<double> vdot =
-      VectorX<double>::Constant(
-          kNumVelocities, std::numeric_limits<double>::quiet_NaN());
-
-  // Set generalized positions and velocities.
-  int angle_index = 0;
-  for (const RevoluteJoint<double>* joint : joints_) {
-    joint->set_angle(context_.get(), q[angle_index]);
-    joint->set_angular_rate(context_.get(), v[angle_index]);
-    angle_index++;
-  }
-
-  context_autodiff_->SetTimeStateAndParametersFrom(*context_);
-
-  // Initialize q_autodiff and v_autodiff so that we differentiate with respect
-  // to time.
-  // Note: here we pass MatrixXd(v) so that the return gradient uses AutoDiffXd
-  // (for which we do have explicit instantiations) instead of
-  // AutoDiffScalar<Matrix1d>.
-  auto q_autodiff = math::InitializeAutoDiff(q, MatrixXd(v));
-  auto v_autodiff = math::InitializeAutoDiff(v, MatrixXd(vdot));
-
-  VectorX<AutoDiffXd> x_autodiff(2 * kNumVelocities);
-  x_autodiff << q_autodiff, v_autodiff;
-
-  // Set the context for AutoDiffXd computations.
-  tree_autodiff().GetMutablePositionsAndVelocities(context_autodiff_.get())
-      = x_autodiff;
-
-  // Po specifies the position of a new frame Hp which is the result of shifting
-  // frame H from Ho to Po.
-  Vector3<double> p_HPo(0.1, -0.05, 0.02);
-
-  // Compute the spatial velocity Jacobian with respect to generalized
-  // velocities v for a frame H shifted to point Hp.
-  MatrixX<double> Jv_WHp(6, kNumVelocities);
-
-  const Vector3<AutoDiffXd> p_HPo_autodiff = p_HPo;
-  MatrixX<AutoDiffXd> Jv_WHp_autodiff(6, kNumVelocities);
-
-  // Compute J̇v_V_WHp using AutoDiffXd.
-  CalcFrameHpJacobianSpatialVelocityInWorld(
-      tree_autodiff(), *context_autodiff_, p_HPo_autodiff, &Jv_WHp_autodiff);
-
-  // Extract time derivatives:
-  MatrixX<double> Jv_WHp_derivs = math::ExtractGradient(Jv_WHp_autodiff);
-  Jv_WHp_derivs.resize(6, kNumVelocities);
-
-  // Compute the expected value of the bias terms using the time derivatives
-  // computed with AutoDiffXd.
-  const VectorX<double> Abias_WHp_expected = Jv_WHp_derivs * v;
-
-  // Compute point Hp's spatial velocity Jacobian bias in world W.
-  const Frame<double>& world_frame = tree().world_frame();
-  const VectorX<double> Abias_WHp =
-      tree().CalcBiasForJacobianSpatialVelocity(
-          *context_, JacobianWrtVariable::kV, *frame_H_, p_HPo,
-          world_frame, world_frame);
-
-  // Abias_WHp is of size 6 x num_velocities. CompareMatrices() below
-  // verifies this, in addition to the numerical values of each element.
-  EXPECT_TRUE(CompareMatrices(Abias_WHp, Abias_WHp_expected,
-                              kTolerance, MatrixCompareType::relative));
-}
-#pragma GCC diagnostic pop  // pop -Wdeprecated-declarations
 
 // Verify that even when the input set of points and/or the Jacobian might
 // contain garbage on input, a query for the world body Jacobian will always
@@ -1330,19 +1084,13 @@ TEST_F(KukaIiwaModelTests, CalcJacobianTranslationalVelocityD) {
   // For each point P, calculate Jv_v_WP (P's translational velocity Jacobian
   // in world W, expressed in W).  Note: This test case is somewhat degenerate.
   const Frame<double>& frame_W = tree().world_frame();
-  tree().CalcJacobianTranslationalVelocity(*context_,
-                                           JacobianWrtVariable::kV,
-                                           frame_W,
-                                           frame_W,
-                                           p_WP_set,
-                                           frame_W,
-                                           frame_W,
-                                           &Jv_WP);
+  tree().CalcJacobianTranslationalVelocity(*context_, JacobianWrtVariable::kV,
+                                           frame_W, frame_W, p_WP_set, frame_W,
+                                           frame_W, &Jv_WP);
 
   // For each point P, calculate p_WoP_W (P's position from World origin Wo,
   // expressed in world W).  Note: This test case is somewhat degenerate.
-  tree().CalcPointsPositions(*context_, frame_W, p_WP_set,
-                                        frame_W, &p_WP_out);
+  tree().CalcPointsPositions(*context_, frame_W, p_WP_set, frame_W, &p_WP_out);
 
   // Since in this case we are querying for the world frame:
   //   a) the output set should match the input set exactly and,
@@ -1369,13 +1117,9 @@ TEST_F(KukaIiwaModelTests, CalcJacobianSpatialVelocityB) {
   // The state stored in the context should not affect the result of this test.
   // Therefore we do not set it.
   const Frame<double>& frame_W = tree().world_frame();
-  tree().CalcJacobianSpatialVelocity(*context_,
-                                     JacobianWrtVariable::kV,
-                                     tree().world_body().body_frame(),
-                                     p_WoWp_W,
-                                     frame_W,
-                                     frame_W,
-                                     &Jv_WWp);
+  tree().CalcJacobianSpatialVelocity(*context_, JacobianWrtVariable::kV,
+                                     tree().world_body().body_frame(), p_WoWp_W,
+                                     frame_W, frame_W, &Jv_WWp);
 
   // Since in this case we are querying for the world frame, the Jacobian should
   // be exactly zero.
@@ -1411,9 +1155,9 @@ TEST_F(KukaIiwaModelTests, CalcJacobianSpatialVelocityC) {
   }
 
   // Three arbitrary frames on the robot.
-  const Body<double>& link3 = tree().GetBodyByName("iiwa_link_3");
-  const Body<double>& link5 = tree().GetBodyByName("iiwa_link_5");
-  const Body<double>& link7 = tree().GetBodyByName("iiwa_link_7");
+  const RigidBody<double>& link3 = tree().GetRigidBodyByName("iiwa_link_3");
+  const RigidBody<double>& link5 = tree().GetRigidBodyByName("iiwa_link_5");
+  const RigidBody<double>& link7 = tree().GetRigidBodyByName("iiwa_link_7");
 
   // An arbitrary point Q in the end effector link 7.
   const Vector3d p_L7Q = Vector3d(0.2, -0.1, 0.5);
@@ -1517,13 +1261,13 @@ class WeldMobilizerTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for each body. The actual value is not important for
     // these tests since they are all kinematic.
-    const SpatialInertia<double> M_B;
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<MultibodyTree<double>>();
 
-    body1_ = &model->AddBody<RigidBody>("body1", M_B);
-    body2_ = &model->AddBody<RigidBody>("body2", M_B);
+    body1_ = &model->AddRigidBody("body1", M_B);
+    body2_ = &model->AddRigidBody("body2", M_B);
 
     model->AddJoint(std::make_unique<WeldJoint<double>>(
         "weld0", model->world_body().body_frame(), body1_->body_frame(),
@@ -1545,13 +1289,13 @@ class WeldMobilizerTest : public ::testing::Test {
     context_ = system_->CreateDefaultContext();
 
     // Expected pose of body 2 in the world.
-    X_WB2_.set_translation(
-        Vector3d(M_SQRT2 / 4, -M_SQRT2 / 4, 0.0) - Vector3d::UnitY() / M_SQRT2);
+    X_WB2_.set_translation(Vector3d(M_SQRT2 / 4, -M_SQRT2 / 4, 0.0) -
+                           Vector3d::UnitY() / M_SQRT2);
     X_WB2_.set_rotation(math::RotationMatrixd::MakeZRotation(-3 * M_PI_4));
   }
 
   const MultibodyTree<double>& tree() const {
-      return internal::GetInternalTree(*system_);
+    return internal::GetInternalTree(*system_);
   }
 
  protected:

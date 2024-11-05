@@ -3,7 +3,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/geometry/scene_graph.h"
 #include "drake/multibody/parsing/parser.h"
@@ -40,9 +39,8 @@ class SlidingBoxTest : public ::testing::Test {
   // Creates a MultibodyPlant model with the given `discrete_period`
   // (discrete_period = 0 for a continuous model), runs a simulation to reach
   // steady state, and verifies contact results.
-  void RunSimulationToSteadyStateAndVerifyContactResults(
-      double discrete_period) {
-    auto diagram = MakeBoxDiagram(discrete_period);
+  void RunSimulationToSteadyStateAndVerifyContactResults(double time_step) {
+    auto diagram = MakeBoxDiagram(time_step);
     const auto& plant = dynamic_cast<const MultibodyPlant<double>&>(
         diagram->GetSubsystemByName("plant"));
 
@@ -85,8 +83,8 @@ class SlidingBoxTest : public ::testing::Test {
           contact_results.point_pair_contact_info(0);
 
       // Verify the bodies referenced by the contact info.
-      const Body<double>& ground = the_plant.GetBodyByName("ground");
-      const Body<double>& box = the_plant.GetBodyByName("box");
+      const RigidBody<double>& ground = the_plant.GetBodyByName("ground");
+      const RigidBody<double>& box = the_plant.GetBodyByName("box");
       EXPECT_TRUE((point_pair_contact_info.bodyA_index() == box.index() &&
                    point_pair_contact_info.bodyB_index() == ground.index()) ||
                   (point_pair_contact_info.bodyB_index() == box.index() &&
@@ -144,7 +142,7 @@ class SlidingBoxTest : public ::testing::Test {
     // simulation to set the new context. Thus contact results evaluation in the
     // following test is completely independent from the simulation above
     // (besides of course the initial condition).
-    auto diagram2 = MakeBoxDiagram(discrete_period);
+    auto diagram2 = MakeBoxDiagram(time_step);
     const auto& plant2 = dynamic_cast<const MultibodyPlant<double>&>(
         diagram2->GetSubsystemByName("plant"));
     std::unique_ptr<Context<double>> diagram_context2 =
@@ -155,19 +153,20 @@ class SlidingBoxTest : public ::testing::Test {
     // Set the state from the computed solution.
     plant2.SetPositionsAndVelocities(
         &plant_context2, plant.GetPositionsAndVelocities(plant_context));
+    // Take a step so that the sampled output ports will update.
+    diagram2->ExecuteForcedEvents(diagram_context2.get());
     VerifyContactResults(plant2, plant_context2);
   }
 
-  // Creates a MultibodyPlant model with the given `discrete_period`
-  // (discrete_period = 0 for a continuous model).
+  // Creates a MultibodyPlant model with the given `time_step` (time_step = 0
+  // for a continuous model).
   std::unique_ptr<Diagram<double>> MakeBoxDiagram(double time_step) {
     DiagramBuilder<double> builder;
-    const std::string full_name =
-        FindResourceOrThrow("drake/multibody/plant/test/box.sdf");
     MultibodyPlant<double>& plant = AddMultibodyPlantSceneGraph(
         &builder, std::make_unique<MultibodyPlant<double>>(time_step));
     plant.set_name("plant");
-    Parser(&plant).AddModels(full_name);
+    Parser(&plant).AddModelsFromUrl(
+        "package://drake/multibody/plant/test/box.sdf");
 
     // Add gravity to the model.
     plant.mutable_gravity_field().set_gravity_vector(-g_ *
@@ -205,11 +204,11 @@ class SlidingBoxTest : public ::testing::Test {
   const double kTolerance{1.0e-12};
 };
 
-TEST_F(SlidingBoxTest, ContinuousModel) {
+TEST_F(SlidingBoxTest, DiscreteModel) {
   RunSimulationToSteadyStateAndVerifyContactResults(1.0e-3);
 }
 
-TEST_F(SlidingBoxTest, DiscreteModel) {
+TEST_F(SlidingBoxTest, ContinuousModel) {
   RunSimulationToSteadyStateAndVerifyContactResults(0.0);
 }
 

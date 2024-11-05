@@ -19,7 +19,7 @@ namespace multibody {
 template <typename T>
 class UniformGravityFieldElement : public ForceElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(UniformGravityFieldElement)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(UniformGravityFieldElement);
 
   // TODO(sherm1) Switch to the NIST standard 9.80665 value but be sure that's
   // used consistently throughout the code, SDFs, etc.
@@ -43,15 +43,15 @@ class UniformGravityFieldElement : public ForceElement<T> {
       Vector3<double> g_W,
       std::set<ModelInstanceIndex> disabled_model_instances);
 
+  ~UniformGravityFieldElement() override;
+
   /// Returns the acceleration of the gravity vector in m/s², expressed in the
   /// world frame W.
   const Vector3<double>& gravity_vector() const { return g_W_; }
 
   /// Sets the acceleration of gravity vector, expressed in the world frame
   /// W in m/s².
-  void set_gravity_vector(const Vector3<double>& g_W) {
-    g_W_ = g_W;
-  }
+  void set_gravity_vector(const Vector3<double>& g_W) { g_W_ = g_W; }
 
   /// @returns `true` iff gravity is enabled for `model_instance`.
   /// @see enable(), disable().
@@ -60,7 +60,7 @@ class UniformGravityFieldElement : public ForceElement<T> {
     if (model_instance >= this->get_parent_tree().num_model_instances()) {
       throw std::logic_error("Model instance index is invalid.");
     }
-    return disabled_model_instances_.count(model_instance) == 0;
+    return !disabled_model_instances_.contains(model_instance);
   }
 
   /// Sets is_enabled() for `model_instance` to `is_enabled`.
@@ -140,4 +140,4 @@ class UniformGravityFieldElement : public ForceElement<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::UniformGravityFieldElement)
+    class ::drake::multibody::UniformGravityFieldElement);

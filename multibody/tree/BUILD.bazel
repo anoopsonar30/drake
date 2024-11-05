@@ -1,10 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -23,7 +23,6 @@ drake_cc_package_library(
         ":rotational_inertia",
         ":scoped_name",
         ":spatial_inertia",
-        ":string_view_map_key",
         ":unit_inertia",
     ],
 )
@@ -42,12 +41,15 @@ drake_cc_library(
 
 drake_cc_library(
     name = "multibody_tree_topology",
-    srcs = [],
+    srcs = [
+        "multibody_tree_topology.cc",
+    ],
     hdrs = [
         "multibody_tree_topology.h",
     ],
     deps = [
         ":multibody_tree_indexes",
+        "//multibody/topology",
     ],
 )
 
@@ -57,6 +59,7 @@ drake_cc_library(
         "acceleration_kinematics_cache.cc",
         "articulated_body_force_cache.cc",
         "articulated_body_inertia_cache.cc",
+        "frame_body_pose_cache.cc",
         "position_kinematics_cache.cc",
         "velocity_kinematics_cache.cc",
     ],
@@ -64,6 +67,7 @@ drake_cc_library(
         "acceleration_kinematics_cache.h",
         "articulated_body_force_cache.h",
         "articulated_body_inertia_cache.h",
+        "frame_body_pose_cache.h",
         "position_kinematics_cache.h",
         "velocity_kinematics_cache.h",
     ],
@@ -77,28 +81,23 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "string_view_map_key",
-    srcs = [],
-    hdrs = [
-        "string_view_map_key.h",
-    ],
-    deps = [],
-)
-
-drake_cc_library(
     name = "multibody_tree_core",
     srcs = [
         "ball_rpy_joint.cc",
-        "body.cc",
         "body_node.cc",
         "body_node_impl.cc",
+        "body_node_impl_mass_matrix.cc",
         "door_hinge.cc",
+        "element_collection.cc",
         "fixed_offset_frame.cc",
+        "force_element.cc",
         "frame.cc",
+        "frame_base.cc",
         "joint.cc",
         "joint_actuator.cc",
         "linear_bushing_roll_pitch_yaw.cc",
         "linear_spring_damper.cc",
+        "mobilizer.cc",
         "mobilizer_impl.cc",
         "model_instance.cc",
         "multibody_element.cc",
@@ -116,10 +115,11 @@ drake_cc_library(
         "revolute_mobilizer.cc",
         "revolute_spring.cc",
         "rigid_body.cc",
+        "rpy_ball_mobilizer.cc",
+        "rpy_floating_joint.cc",
+        "rpy_floating_mobilizer.cc",
         "screw_joint.cc",
         "screw_mobilizer.cc",
-        "space_xyz_floating_mobilizer.cc",
-        "space_xyz_mobilizer.cc",
         "uniform_gravity_field_element.cc",
         "universal_joint.cc",
         "universal_mobilizer.cc",
@@ -128,11 +128,11 @@ drake_cc_library(
     ],
     hdrs = [
         "ball_rpy_joint.h",
-        "body.h",
         "body_node.h",
         "body_node_impl.h",
         "body_node_world.h",
         "door_hinge.h",
+        "element_collection.h",
         "fixed_offset_frame.h",
         "force_element.h",
         "frame.h",
@@ -161,10 +161,11 @@ drake_cc_library(
         "revolute_mobilizer.h",
         "revolute_spring.h",
         "rigid_body.h",
+        "rpy_ball_mobilizer.h",
+        "rpy_floating_joint.h",
+        "rpy_floating_mobilizer.h",
         "screw_joint.h",
         "screw_mobilizer.h",
-        "space_xyz_floating_mobilizer.h",
-        "space_xyz_mobilizer.h",
         "uniform_gravity_field_element.h",
         "universal_joint.h",
         "universal_mobilizer.h",
@@ -179,13 +180,13 @@ drake_cc_library(
         ":multibody_tree_indexes",
         ":scoped_name",
         ":spatial_inertia",
-        ":string_view_map_key",
         "//common:default_scalars",
         "//common:name_value",
         "//common:nice_type_name",
+        "//common:string_container",
         "//common:unused",
         "//math:geometric_transform",
-        "//multibody/topology:multibody_graph",
+        "//multibody/topology",
         "//systems/framework:leaf_system",
     ],
 )
@@ -239,6 +240,7 @@ drake_cc_library(
         "//common:default_scalars",
         "//common:essential",
         "//math:geometric_transform",
+        "//math:vector3_util",
     ],
 )
 
@@ -263,9 +265,13 @@ drake_cc_library(
     hdrs = ["geometry_spatial_inertia.h"],
     deps = [
         ":spatial_inertia",
+        "//common:overloaded",
         "//geometry:shape_specification",
+        "//geometry/proximity:make_mesh_from_vtk",
         "//geometry/proximity:obj_to_surface_mesh",
+        "//geometry/proximity:polygon_to_triangle_mesh",
         "//geometry/proximity:triangle_surface_mesh",
+        "//geometry/proximity:volume_to_surface_mesh",
     ],
 )
 
@@ -288,6 +294,14 @@ drake_cc_googletest(
     deps = [
         ":multibody_tree_core",
         ":rotational_inertia",
+        "//common/test_utilities:expect_throws_message",
+    ],
+)
+
+drake_cc_googletest(
+    name = "element_collection_test",
+    deps = [
+        ":multibody_tree_core",
         "//common/test_utilities:expect_throws_message",
     ],
 )
@@ -413,13 +427,6 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
-    name = "string_view_map_key_test",
-    deps = [
-        ":string_view_map_key",
-    ],
-)
-
-drake_cc_googletest(
     name = "unit_inertia_test",
     deps = [
         ":unit_inertia",
@@ -487,7 +494,7 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
-    name = "space_xyz_mobilizer_test",
+    name = "rpy_ball_mobilizer_test",
     deps = [
         ":mobilizer_tester",
         ":tree",
@@ -497,7 +504,7 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
-    name = "space_xyz_floating_mobilizer_test",
+    name = "rpy_floating_mobilizer_test",
     deps = [
         ":mobilizer_tester",
         ":tree",
@@ -608,6 +615,7 @@ drake_cc_googletest(
     name = "revolute_joint_test",
     deps = [
         ":tree",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -665,6 +673,15 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "rpy_floating_joint_test",
+    deps = [
+        ":tree",
+        "//common/test_utilities:eigen_matrix_compare",
+        "//common/test_utilities:expect_no_throw",
+    ],
+)
+
+drake_cc_googletest(
     name = "joint_actuator_test",
     deps = [
         ":tree",
@@ -674,7 +691,11 @@ drake_cc_googletest(
 
 drake_cc_googletest(
     name = "geometry_spatial_inertia_test",
-    data = ["//multibody/parsing:test_models"],
+    data = [
+        "//geometry:test_obj_files",
+        "//geometry:test_vtk_files",
+        "//multibody/parsing:test_models",
+    ],
     deps = [
         ":geometry_spatial_inertia",
         "//common:find_resource",
@@ -686,4 +707,4 @@ drake_cc_googletest(
     ],
 )
 
-add_lint_tests(enable_clang_format_lint = False)
+add_lint_tests()

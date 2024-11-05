@@ -207,8 +207,8 @@ void CspaceFreePolytopeBase::CalcSBoundsPolynomial(
 
 void CspaceFreePolytopeBase::SetIndicesOfSOnChainForBodyPair(
     const SortedPair<multibody::BodyIndex>& body_pair) {
-  if (map_body_pair_to_s_on_chain_.count(body_pair) == 0) {
-    const std::vector<multibody::internal::MobilizerIndex> mobilizer_indices =
+  if (!map_body_pair_to_s_on_chain_.contains(body_pair)) {
+    const std::vector<multibody::internal::MobodIndex> mobilizer_indices =
         multibody::internal::FindMobilizersOnPath(rational_forward_kin_.plant(),
                                                   body_pair.first(),
                                                   body_pair.second());
@@ -236,10 +236,8 @@ void CspaceFreePolytopeBase::SetIndicesOfSOnChainForBodyPair(
 void CspaceFreePolytopeBase::SolveCertificationForEachPlaneInParallel(
     const std::vector<int>& active_plane_indices,
     const std::function<std::pair<bool, int>(int)>& solve_plane_sos,
-    int num_threads, bool verbose, bool terminate_at_failure) const {
-  num_threads = num_threads > 0
-                    ? num_threads
-                    : static_cast<int>(std::thread::hardware_concurrency());
+    Parallelism parallelism, bool verbose, bool terminate_at_failure) const {
+  const int num_threads = parallelism.num_threads();
   // We implement the "thread pool" idea here, by following
   // MonteCarloSimulationParallel class. This implementation doesn't use openMP
   // library.
@@ -352,7 +350,7 @@ VectorX<symbolic::Variable> CspaceFreePolytopeBase::GetSForPlane(
 
 int CspaceFreePolytopeBase::GetSeparatingPlaneIndex(
     const SortedPair<geometry::GeometryId>& pair) const {
-  return (map_geometries_to_separating_planes_.count(pair) == 0)
+  return (!map_geometries_to_separating_planes_.contains(pair))
              ? -1
              : map_geometries_to_separating_planes_.at(pair);
 }
@@ -367,7 +365,7 @@ int CspaceFreePolytopeBase::GetGramVarSizeForPolytopeSearchProgram(
   int ret = 0;
   for (const auto& plane_geometries : plane_geometries_vec) {
     const auto& plane = separating_planes()[plane_geometries.plane_index];
-    if (ignored_collision_pairs.count(plane.geometry_pair()) == 0) {
+    if (!ignored_collision_pairs.contains(plane.geometry_pair())) {
       const auto& monomial_basis_array_positive_side =
           this->map_body_to_monomial_basis_array().at(
               SortedPair<multibody::BodyIndex>(

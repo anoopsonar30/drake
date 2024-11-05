@@ -7,10 +7,16 @@
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/plant/sap_driver.h"
 #include "drake/multibody/plant/test/compliant_contact_manager_tester.h"
-#include "drake/multibody/tree/space_xyz_mobilizer.h"
+#include "drake/multibody/tree/rpy_ball_mobilizer.h"
 
 /* @file This file provides testing for the SapDriver's limited support for
-joint limits on joints with multiple degrees of freedom. */
+joint limits on joints with multiple degrees of freedom.
+
+    Constraints are only supported by the SAP solver. Therefore, to exercise the
+  relevant code paths, we arbitrarily choose one contact approximation that uses
+  the SAP solver. More precisely, in the unit tests below we call
+  set_discrete_contact_approximation(DiscreteContactApproximation::kSap) on the
+  MultibodyPlant used for testing, before constraints are added. */
 
 using drake::multibody::contact_solvers::internal::SapContactProblem;
 using drake::systems::Context;
@@ -42,7 +48,7 @@ class SapDriverTest {
 template <typename T>
 class MultiDofJointWithLimits final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MultiDofJointWithLimits)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MultiDofJointWithLimits);
 
   // Arbitrary number of DOFs, though larger than one for these tests.
   static constexpr int kNumDofs = 3;
@@ -85,15 +91,18 @@ class MultiDofJointWithLimits final : public Joint<T> {
   int do_get_velocity_start() const override { return 0; }
   int do_get_position_start() const override { return 0; }
 
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const override {
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const SpanningForest::Mobod& mobod) const override {
     auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+    const auto [inboard_frame, outboard_frame] =
+        this->tree_frames(mobod.is_reversed());
+    // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
     // The only restriction here relevant for these tests is that we provide a
     // mobilizer with kNumDofs positions and velocities, so that indexes are
     // consistent during MultibodyPlant::Finalize().
-    auto revolute_mobilizer = std::make_unique<internal::SpaceXYZMobilizer<T>>(
-        this->frame_on_parent(), this->frame_on_child());
-    blue_print->mobilizers_.push_back(std::move(revolute_mobilizer));
+    auto revolute_mobilizer = std::make_unique<internal::RpyBallMobilizer<T>>(
+        mobod, *inboard_frame, *outboard_frame);
+    blue_print->mobilizer = std::move(revolute_mobilizer);
     return blue_print;
   }
 
@@ -141,7 +150,7 @@ class MultiDofJointWithLimits final : public Joint<T> {
 GTEST_TEST(MultiDofJointWithLimitsTest, ThrowForUnsupportedJoints) {
   MultibodyPlant<double> plant(1.0e-3);
   // N.B. Currently only SAP goes through the manager.
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   // To avoid unnecessary warnings/errors, use a non-zero spatial inertia.
   const RigidBody<double>& body =
       plant.AddRigidBody("DummyBody", SpatialInertia<double>::MakeUnitary());
@@ -176,7 +185,7 @@ GTEST_TEST(MultiDofJointWithLimitsTest,
            VerifyMultiDofJointsWithoutLimitsAreSupported) {
   MultibodyPlant<double> plant(1.0e-3);
   // N.B. Currently only SAP goes through the manager.
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   // To avoid unnecessary warnings/errors, use a non-zero spatial inertia.
   const RigidBody<double>& body =
       plant.AddRigidBody("DummyBody", SpatialInertia<double>::MakeUnitary());

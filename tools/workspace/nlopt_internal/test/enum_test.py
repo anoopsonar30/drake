@@ -1,7 +1,7 @@
 import re
 import unittest
 
-from bazel_tools.tools.python.runfiles import runfiles
+from python import runfiles
 
 
 class TestEnum(unittest.TestCase):
@@ -31,6 +31,7 @@ class TestEnum(unittest.TestCase):
 
         # When CMake is processing the header file, it removes blank lines.
         # We will do the same to our actual file to prep for comparison.
+        actual = actual.replace("\n\n\n", "\n")
         actual = actual.replace("\n\n", "\n")
 
         # CMake also does something inexplicable to tab-spaced macro line

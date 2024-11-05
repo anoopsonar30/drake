@@ -7,8 +7,8 @@ template <typename T>
 Propeller<T>::Propeller(const BodyIndex& body_index,
                         const math::RigidTransform<double>& X_BP,
                         double thrust_ratio, double moment_ratio)
-    : Propeller({PropellerInfo(body_index, X_BP, thrust_ratio,
-                               moment_ratio)}) {}
+    : Propeller({PropellerInfo(body_index, X_BP, thrust_ratio, moment_ratio)}) {
+}
 
 template <typename T>
 Propeller<T>::Propeller(const std::vector<PropellerInfo>& propeller_info)
@@ -24,6 +24,9 @@ Propeller<T>::Propeller(const std::vector<PropellerInfo>& propeller_info)
       std::vector<ExternallyAppliedSpatialForce<T>>(num_propellers()),
       &Propeller<T>::CalcSpatialForces);
 }
+
+template <typename T>
+Propeller<T>::~Propeller() = default;
 
 template <typename T>
 void Propeller<T>::CalcSpatialForces(
@@ -61,4 +64,4 @@ void Propeller<T>::CalcSpatialForces(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::Propeller)
+    class drake::multibody::Propeller);

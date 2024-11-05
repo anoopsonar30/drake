@@ -53,6 +53,29 @@ only updated nightly.</p>
   @ingroup terminology_and_notation
 */
 
+// Define the order of groups within group "multibody".
+/** @addtogroup multibody
+ @{
+   @defgroup drake_contacts Contact Modeling in Drake
+   @defgroup multibody_solvers Simulation of Multibody Systems
+   @defgroup multibody_parsing Parsing Models for Multibody Dynamics
+   @defgroup hydroelastic_user_guide Hydroelastic Contact User Guide   
+ @}
+
+ @addtogroup drake_contacts
+ @{
+   @defgroup compliant_contact Modeling Compliant Contact
+   @defgroup friction_model Modeling of Dry Friction
+   @defgroup hydro_margin Margin for Hydroelastic Contact
+ @}
+
+ @addtogroup multibody_solvers
+ @{
+   @defgroup mbp_discrete Discrete Models for Simulation
+   @defgroup mbp_continuous Continuous Models for Simulation
+ @}
+ */
+
 /** @addtogroup accuracy_and_tolerance
  @{
  Most numerical methods are approximate, and many can trade speed for quality
@@ -167,11 +190,6 @@ namespace solvers {
 */
 } // namespace solvers
 
-/**
-  @defgroup constraint_overview Multibody Dynamics Constraints
-  @ingroup multibody
-*/
-
 // TODO(russt): Take a thorough pass through the algorithms group
 // documentation, adding brief descriptions of each and tagging the relevant
 // algorithms throughout the code.
@@ -220,6 +238,7 @@ namespace solvers {
  - <b>\ref drake::Parallelism "DRAKE_NUM_THREADS"</b>
  - <b>\ref pydrake_python_logging "DRAKE_PYTHON_LOGGING"</b>
  - <b>\ref drake::common::FindResource() "DRAKE_RESOURCE_ROOT"</b>
+ - <b>\ref drake::solvers::SnoptSolver "DRAKE_SNOPT_SOLVER_ENABLED"</b>
  - <b>\ref drake::solvers::GurobiSolver "GRB_LICENSE_FILE"</b> (see also 
    <a href="https://support.gurobi.com/hc/en-us/articles/360013417211-Where-do-I-place-the-Gurobi-license-file-gurobi-lic-">upstream documentation</a>)
  - <b>\ref drake::solvers::GurobiSolver "GUROBI_NUM_THREADS"</b>

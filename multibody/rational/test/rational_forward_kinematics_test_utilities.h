@@ -51,7 +51,7 @@ class IiwaTest : public ::testing::Test {
   const internal::MultibodyTree<double>& iiwa_tree_;
   const BodyIndex world_;
   std::array<BodyIndex, 8> iiwa_link_;
-  std::array<internal::MobilizerIndex, 8> iiwa_joint_;
+  std::array<internal::MobodIndex, 8> iiwa_joint_;
 };
 
 /*
@@ -66,7 +66,7 @@ class FinalizedIiwaTest : public ::testing::Test {
   const internal::MultibodyTree<double>& iiwa_tree_;
   const BodyIndex world_;
   std::array<BodyIndex, 8> iiwa_link_;
-  std::array<internal::MobilizerIndex, 8> iiwa_joint_;
+  std::array<internal::MobodIndex, 8> iiwa_joint_;
 };
 
 /*
@@ -76,17 +76,5 @@ class FinalizedIiwaTest : public ::testing::Test {
 void AddIiwaWithSchunk(const math::RigidTransformd& X_7S,
                        MultibodyPlant<double>* plant);
 
-/*
- * @param X_WL the pose of the left IIWA base in the world frame.
- * @param X_WR the pose of the right IIWA base in the world frame.
- * @param X_7S The weld pose of Schunk gripper in IIWA link 7 frame.
- * @note `plant` is not finalized at the end of this function.
- */
-void AddDualArmIiwa(const drake::math::RigidTransformd& X_WL,
-                    const drake::math::RigidTransformd& X_WR,
-                    const drake::math::RigidTransformd& X_7S,
-                    MultibodyPlant<double>* plant,
-                    ModelInstanceIndex* left_iiwa_instance,
-                    ModelInstanceIndex* right_iiwa_instance);
 }  // namespace multibody
 }  // namespace drake

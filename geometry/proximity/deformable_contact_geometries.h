@@ -8,7 +8,7 @@
 #include "drake/common/copyable_unique_ptr.h"
 #include "drake/common/drake_assert.h"
 #include "drake/common/text_logging.h"
-#include "drake/geometry/proximity/deformable_volume_mesh.h"
+#include "drake/geometry/deformable_mesh_with_bvh.h"
 #include "drake/geometry/proximity/hydroelastic_internal.h"
 #include "drake/geometry/proximity/triangle_surface_mesh.h"
 #include "drake/geometry/proximity/volume_mesh_field.h"
@@ -41,7 +41,7 @@ class DeformableGeometry {
 
   /* Returns the volume mesh representation of the deformable geometry at
    current configuration. */
-  const DeformableVolumeMesh<double>& deformable_mesh() const {
+  const DeformableVolumeMeshWithBvh<double>& deformable_mesh() const {
     return *deformable_mesh_;
   }
 
@@ -67,7 +67,7 @@ class DeformableGeometry {
   const VolumeMeshFieldLinear<double, double>& CalcSignedDistanceField() const;
 
  private:
-  std::unique_ptr<DeformableVolumeMesh<double>> deformable_mesh_;
+  std::unique_ptr<DeformableVolumeMeshWithBvh<double>> deformable_mesh_;
   /* Note: we don't provide an accessor to `signed_distance_field_` as it may be
    invalidated by calls to `UpdateVertexPositions()`. Instead, we provide
    `CalcSignedDistanceField()` that guarantees to return the up-to-date mesh
@@ -81,7 +81,7 @@ class DeformableGeometry {
  aren't relying on FCL's broadphase. */
 class RigidGeometry {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidGeometry)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidGeometry);
 
   explicit RigidGeometry(
       std::unique_ptr<internal::hydroelastic::RigidMesh> rigid_mesh)
@@ -107,33 +107,21 @@ class RigidGeometry {
 
 /* Generic interface for handling rigid Shapes. By default, we support all
  shapes that are supported by rigid hydroelastic. Unsupported shapes (e.g. half
- space) can choose to opt out. Unsupported geometries will return a
- std::nullopt. The rigid mesh created upon a successful creation of
- RigidGeometry will be the same mesh as used for rigid hydroelastics. */
+ space) can choose to opt out. Geometries not supported by rigid hydroelastics
+ will return a std::nullopt. The rigid mesh created upon a successful creation
+ of RigidGeometry will be the same mesh as used for rigid hydroelastics. */
 template <typename Shape>
 std::optional<RigidGeometry> MakeRigidRepresentation(
     const Shape& shape, const ProximityProperties& props) {
   std::optional<internal::hydroelastic::RigidGeometry> hydro_rigid_geometry =
       internal::hydroelastic::MakeRigidRepresentation(shape, props);
-  if (!hydro_rigid_geometry) {
-    static const logging::Warn log_once(
-        "Rigid {} shapes are not currently supported for deformable "
-        "contact; registration is allowed, but an error will be thrown "
-        "during contact.",
-        ShapeName(shape));
+  if (!hydro_rigid_geometry || hydro_rigid_geometry->is_half_space()) {
     return {};
   }
-  auto surface_mesh = std::make_unique<TriangleSurfaceMesh<double>>(
-      (*hydro_rigid_geometry).mesh());
-  auto rigid_mesh = std::make_unique<internal::hydroelastic::RigidMesh>(
-      std::move(surface_mesh));
-  return RigidGeometry(std::move(rigid_mesh));
+  /* RigidGeometry is documented as having a mesh or having a half space. We've
+   excluded the latter, so we know we have a mesh. */
+  return RigidGeometry(hydro_rigid_geometry->release_mesh());
 }
-
-/* Half space is not supported for deformable contact at the moment as we
- require a surface mesh. */
-std::optional<RigidGeometry> MakeRigidRepresentation(
-    const HalfSpace&, const ProximityProperties&);
 
 }  // namespace deformable
 }  // namespace internal

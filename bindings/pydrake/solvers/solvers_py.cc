@@ -19,6 +19,7 @@ top-level documentation for :py:mod:`pydrake.math`.
 
   // The order of these calls matters. Some modules rely on prior definitions.
   internal::DefineSolversEvaluators(m);
+  internal::DefineProgramAttribute(m);
   internal::DefineSolversMathematicalProgram(m);
   internal::DefineSolversAugmentedLagrangian(m);
   internal::DefineSolversBranchAndBound(m);
@@ -26,6 +27,7 @@ top-level documentation for :py:mod:`pydrake.math`.
   internal::DefineSolversMixedIntegerRotationConstraint(m);
   internal::DefineSolversSdpaFreeFormat(m);
   internal::DefineSolversSemidefiniteRelaxation(m);
+  internal::DefineSolversClarabel(m);
   internal::DefineSolversClp(m);
   internal::DefineSolversCsdp(m);
   internal::DefineSolversGurobi(m);

@@ -6,6 +6,7 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/eigen_types.h"
+#include "drake/math/autodiff.h"
 
 namespace drake {
 namespace multibody {
@@ -22,15 +23,15 @@ SapHolonomicConstraint<T>::Parameters::Parameters(
       relaxation_times_(std::move(relaxation_times)),
       beta_(beta) {
   constexpr double kInf = std::numeric_limits<double>::infinity();
-  DRAKE_DEMAND(impulse_lower_limits.size() == impulse_upper_limits.size());
-  DRAKE_DEMAND(impulse_lower_limits.size() == stiffnesses.size());
-  DRAKE_DEMAND(impulse_lower_limits.size() == relaxation_times.size());
-  DRAKE_DEMAND((impulse_lower_limits.array() <= kInf).all());
-  DRAKE_DEMAND((impulse_upper_limits.array() >= -kInf).all());
+  DRAKE_DEMAND(impulse_lower_limits_.size() == impulse_upper_limits_.size());
+  DRAKE_DEMAND(impulse_lower_limits_.size() == stiffnesses_.size());
+  DRAKE_DEMAND(impulse_lower_limits_.size() == relaxation_times_.size());
+  DRAKE_DEMAND((impulse_lower_limits_.array() <= kInf).all());
+  DRAKE_DEMAND((impulse_upper_limits_.array() >= -kInf).all());
   DRAKE_DEMAND(
-      (impulse_lower_limits.array() <= impulse_upper_limits.array()).all());
-  DRAKE_DEMAND((stiffnesses.array() > 0).all());
-  DRAKE_DEMAND((relaxation_times.array() >= 0).all());
+      (impulse_lower_limits_.array() <= impulse_upper_limits_.array()).all());
+  DRAKE_DEMAND((stiffnesses_.array() > 0).all());
+  DRAKE_DEMAND((relaxation_times_.array() >= 0).all());
 }
 
 template <typename T>
@@ -184,10 +185,25 @@ void SapHolonomicConstraint<T>::DoCalcCostHessian(
   }
 }
 
+template <typename T>
+std::unique_ptr<SapConstraint<double>> SapHolonomicConstraint<T>::DoToDouble()
+    const {
+  const typename SapHolonomicConstraint<T>::Parameters& p = parameters_;
+  SapHolonomicConstraint<double>::Parameters p_to_double(
+      math::DiscardGradient(p.impulse_lower_limits()),
+      math::DiscardGradient(p.impulse_upper_limits()),
+      math::DiscardGradient(p.stiffnesses()),
+      math::DiscardGradient(p.relaxation_times()), p.beta());
+  return std::make_unique<SapHolonomicConstraint<double>>(
+      math::DiscardGradient(constraint_function()), this->jacobian().ToDouble(),
+      math::DiscardGradient(bias()), std::move(p_to_double));
+}
+
 }  // namespace internal
 }  // namespace contact_solvers
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::multibody::contact_solvers::internal::SapHolonomicConstraint)
+    class ::drake::multibody::contact_solvers::internal::
+        SapHolonomicConstraint);

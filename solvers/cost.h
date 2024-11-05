@@ -12,6 +12,7 @@
 
 #include "drake/solvers/decision_variable.h"
 #include "drake/solvers/evaluator_base.h"
+#include "drake/solvers/sparse_and_dense_matrix.h"
 
 namespace drake {
 namespace solvers {
@@ -23,7 +24,7 @@ namespace solvers {
  */
 class Cost : public EvaluatorBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Cost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Cost);
 
  protected:
   /**
@@ -42,7 +43,7 @@ class Cost : public EvaluatorBase {
  */
 class LinearCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearCost);
 
   /**
    * Construct a linear cost of the form @f[ a'x + b @f].
@@ -51,9 +52,11 @@ class LinearCost : public Cost {
    */
   // NOLINTNEXTLINE(runtime/explicit) This conversion is desirable.
   LinearCost(const Eigen::Ref<const Eigen::VectorXd>& a, double b = 0.)
-      : Cost(a.rows()), a_(a), b_(b) {}
+      : Cost(a.rows()), a_(a), b_(b) {
+    set_is_thread_safe(true);
+  }
 
-  ~LinearCost() override {}
+  ~LinearCost() override;
 
   Eigen::SparseMatrix<double> GetSparseMatrix() const {
     // TODO(eric.cousineau): Consider storing or caching sparse matrix, such
@@ -111,7 +114,7 @@ class LinearCost : public Cost {
  */
 class QuadraticCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuadraticCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(QuadraticCost);
 
   /**
    * Constructs a cost of the form @f[ .5 x'Qx + b'x + c @f].
@@ -130,8 +133,9 @@ class QuadraticCost : public Cost {
                 const Eigen::MatrixBase<Derivedb>& b, double c = 0.,
                 std::optional<bool> is_hessian_psd = std::nullopt)
       : Cost(Q.rows()), Q_((Q + Q.transpose()) / 2), b_(b), c_(c) {
-    DRAKE_ASSERT(Q_.rows() == Q_.cols());
-    DRAKE_ASSERT(Q_.cols() == b_.rows());
+    set_is_thread_safe(true);
+    DRAKE_THROW_UNLESS(Q_.rows() == Q_.cols());
+    DRAKE_THROW_UNLESS(Q_.cols() == b_.rows());
     if (is_hessian_psd.has_value()) {
       is_convex_ = is_hessian_psd.value();
     } else {
@@ -139,7 +143,7 @@ class QuadraticCost : public Cost {
     }
   }
 
-  ~QuadraticCost() override {}
+  ~QuadraticCost() override;
 
   /// Returns the symmetric matrix Q, as the Hessian of the cost.
   const Eigen::MatrixXd& Q() const { return Q_; }
@@ -243,17 +247,18 @@ std::shared_ptr<QuadraticCost> Make2NormSquaredCost(
  */
 class L1NormCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(L1NormCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(L1NormCost);
 
   /**
    * Construct a cost of the form ‖Ax + b‖₁.
    * @param A Linear term.
    * @param b Constant term.
+   * @throws std::exception if the size of A and b don't match.
    */
   L1NormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
              const Eigen::Ref<const Eigen::VectorXd>& b);
 
-  ~L1NormCost() override {}
+  ~L1NormCost() override;
 
   const Eigen::MatrixXd& A() const { return A_; }
 
@@ -295,7 +300,7 @@ class L1NormCost : public Cost {
  */
 class L2NormCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(L2NormCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(L2NormCost);
 
   // TODO(russt): Add an option to select an implementation that smooths the
   // gradient discontinuity at the origin.
@@ -303,13 +308,26 @@ class L2NormCost : public Cost {
    * Construct a cost of the form ‖Ax + b‖₂.
    * @param A Linear term.
    * @param b Constant term.
+   * @throws std::exception if the size of A and b don't match.
+   * @pydrake_mkdoc_identifier{dense_A}
    */
   L2NormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
              const Eigen::Ref<const Eigen::VectorXd>& b);
 
-  ~L2NormCost() override {}
+  /**
+   * Overloads constructor with a sparse A matrix.
+   * @pydrake_mkdoc_identifier{sparse_A}
+   */
+  L2NormCost(const Eigen::SparseMatrix<double>& A,
+             const Eigen::Ref<const Eigen::VectorXd>& b);
 
-  const Eigen::MatrixXd& A() const { return A_; }
+  ~L2NormCost() override;
+
+  const Eigen::SparseMatrix<double>& get_sparse_A() const {
+    return A_.get_as_sparse();
+  }
+
+  const Eigen::MatrixXd& GetDenseA() const { return A_.GetAsDense(); }
 
   const Eigen::VectorXd& b() const { return b_; }
 
@@ -318,8 +336,16 @@ class L2NormCost : public Cost {
    * Note that the number of variables (columns of A) cannot change.
    * @param new_A New linear term.
    * @param new_b New constant term.
+   * @pydrake_mkdoc_identifier{dense_A}
    */
   void UpdateCoefficients(const Eigen::Ref<const Eigen::MatrixXd>& new_A,
+                          const Eigen::Ref<const Eigen::VectorXd>& new_b);
+
+  /**
+   * Overloads UpdateCoefficients but with a sparse A matrix.
+   * @pydrake_mkdoc_identifier{sparse_A}
+   */
+  void UpdateCoefficients(const Eigen::SparseMatrix<double>& new_A,
                           const Eigen::Ref<const Eigen::VectorXd>& new_b);
 
  protected:
@@ -338,7 +364,7 @@ class L2NormCost : public Cost {
   std::string DoToLatex(const VectorX<symbolic::Variable>&, int) const override;
 
  private:
-  Eigen::MatrixXd A_;
+  internal::SparseAndDenseMatrix A_;
   Eigen::VectorXd b_;
 };
 
@@ -350,17 +376,18 @@ class L2NormCost : public Cost {
  */
 class LInfNormCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LInfNormCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LInfNormCost);
 
   /**
    * Construct a cost of the form ‖Ax + b‖∞.
    * @param A Linear term.
    * @param b Constant term.
+   * @throws std::exception if the size of A and b don't match.
    */
   LInfNormCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
                const Eigen::Ref<const Eigen::VectorXd>& b);
 
-  ~LInfNormCost() override {}
+  ~LInfNormCost() override;
 
   const Eigen::MatrixXd& A() const { return A_; }
 
@@ -409,7 +436,7 @@ class LInfNormCost : public Cost {
  */
 class PerspectiveQuadraticCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PerspectiveQuadraticCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PerspectiveQuadraticCost);
 
   /**
    * Construct a cost of the form (z_1^2 + z_2^2 + ... + z_{n-1}^2) / z_0 where
@@ -420,7 +447,7 @@ class PerspectiveQuadraticCost : public Cost {
   PerspectiveQuadraticCost(const Eigen::Ref<const Eigen::MatrixXd>& A,
                            const Eigen::Ref<const Eigen::VectorXd>& b);
 
-  ~PerspectiveQuadraticCost() override {}
+  ~PerspectiveQuadraticCost() override;
 
   const Eigen::MatrixXd& A() const { return A_; }
 
@@ -471,14 +498,15 @@ class PerspectiveQuadraticCost : public Cost {
 template <typename EvaluatorType = EvaluatorBase>
 class EvaluatorCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EvaluatorCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EvaluatorCost);
 
   explicit EvaluatorCost(const std::shared_ptr<EvaluatorType>& evaluator)
       : Cost(evaluator->num_vars()),
         evaluator_{evaluator},
         a_{std::nullopt},
         b_{0} {
-    DRAKE_DEMAND(evaluator->num_outputs() == 1);
+    set_is_thread_safe(evaluator->is_thread_safe());
+    DRAKE_THROW_UNLESS(evaluator->num_outputs() == 1);
   }
 
   /**
@@ -488,7 +516,8 @@ class EvaluatorCost : public Cost {
   EvaluatorCost(const std::shared_ptr<EvaluatorType>& evaluator,
                 const Eigen::Ref<const Eigen::VectorXd>& a, double b = 0)
       : Cost(evaluator->num_vars()), evaluator_(evaluator), a_{a}, b_{b} {
-    DRAKE_DEMAND(evaluator->num_outputs() == a_->rows());
+    set_is_thread_safe(true);
+    DRAKE_THROW_UNLESS(evaluator->num_outputs() == a_->rows());
   }
 
  protected:
@@ -540,7 +569,7 @@ class EvaluatorCost : public Cost {
  */
 class PolynomialCost : public EvaluatorCost<PolynomialEvaluator> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PolynomialCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PolynomialCost);
 
   /**
    * Constructs a polynomial cost
@@ -569,7 +598,7 @@ class PolynomialCost : public EvaluatorCost<PolynomialEvaluator> {
  */
 class ExpressionCost : public Cost {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExpressionCost)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExpressionCost);
 
   explicit ExpressionCost(const symbolic::Expression& e);
 

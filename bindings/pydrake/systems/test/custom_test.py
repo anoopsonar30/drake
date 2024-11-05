@@ -84,13 +84,7 @@ class CustomAdder(LeafSystem):
         # N.B. We cannot use `header_lines.append(...)` here; the property
         # getter returns a _copy_ of the lines, not a _reference_.
         params.header_lines += ["hello=world"]
-        if sys.version_info[:2] >= (3, 9):
-            params.options |= {"split": "I/O"}
-        else:
-            # TODO(jwnimmer-tri) Kill this spelling when we drop Ubuntu 20.04.
-            options = params.options
-            options.update({"split": "I/O"})
-            params.options = options
+        params.options |= {"split": "I/O"}
         return super().DoGetGraphvizFragment(params)
 
 
@@ -105,7 +99,7 @@ class CustomVectorSystem(VectorSystem):
         # VectorSystem only supports pure Continuous or pure Discrete.
         # Dimensions:
         #   1 Input, 2 States, 3 Outputs.
-        VectorSystem.__init__(self, 1, 3)
+        VectorSystem.__init__(self, 1, 3, direct_feedthrough=True)
         self._is_discrete = is_discrete
         if self._is_discrete:
             self.DeclareDiscreteState(2)
@@ -352,9 +346,7 @@ class TestCustom(unittest.TestCase):
         class TrivialSystem(LeafSystem):
             def __init__(self):
                 LeafSystem.__init__(self)
-                self.called_publish = False
                 self.called_continuous = False
-                self.called_discrete = False
                 self.called_initialize = False
                 self.called_per_step = False
                 self.called_periodic = False
@@ -376,10 +368,6 @@ class TestCustom(unittest.TestCase):
                 self.called_reset = False
                 self.called_system_reset = False
                 # Ensure we have desired overloads.
-                self.DeclarePeriodicPublishNoHandler(1.0)
-                self.DeclarePeriodicPublishNoHandler(1.0, 0)
-                self.DeclarePeriodicPublishNoHandler(
-                    period_sec=1.0, offset_sec=0)
                 self.DeclareInitializationPublishEvent(
                     publish=self._on_initialize_publish)
                 self.DeclareInitializationDiscreteUpdateEvent(
@@ -390,8 +378,6 @@ class TestCustom(unittest.TestCase):
                     event=PublishEvent(
                         trigger_type=TriggerType.kInitialization,
                         callback=self._on_initialize))
-                self.DeclarePeriodicDiscreteUpdateNoHandler(
-                    period_sec=1.0, offset_sec=0.)
                 self.DeclarePeriodicPublishEvent(
                     period_sec=1.0,
                     offset_sec=0,
@@ -461,29 +447,11 @@ class TestCustom(unittest.TestCase):
                     self.system_reset_witness,
                 ]
 
-            def DoPublish(self, context, events):
-                # Call base method to ensure we do not get recursion.
-                LeafSystem.DoPublish(self, context, events)
-                # N.B. We do not test for a singular call to `DoPublish`
-                # (checking `assertFalse(self.called_publish)` first) because
-                # the above `_DeclareInitializationEvent` will call both its
-                # callback and this event when invoked via
-                # `Simulator::Initialize` from `call_leaf_system_overrides`,
-                # even when we explicitly say not to publish at initialize.
-                self.called_publish = True
-
             def DoCalcTimeDerivatives(self, context, derivatives):
                 # Note:  Don't call base method here; it would abort because
                 # derivatives.size() != 0.
                 test.assertEqual(derivatives.get_vector().size(), 2)
                 self.called_continuous = True
-
-            def DoCalcDiscreteVariableUpdates(
-                    self, context, events, discrete_state):
-                # Call base method to ensure we do not get recursion.
-                LeafSystem.DoCalcDiscreteVariableUpdates(
-                    self, context, events, discrete_state)
-                self.called_discrete = True
 
             def DoGetWitnessFunctions(self, context):
                 self.called_getwitness = True
@@ -607,15 +575,11 @@ class TestCustom(unittest.TestCase):
                 self.called_system_reset = True
 
         system = TrivialSystem()
-        self.assertFalse(system.called_publish)
         self.assertFalse(system.called_continuous)
-        self.assertFalse(system.called_discrete)
         self.assertFalse(system.called_initialize)
         results = call_leaf_system_overrides(system)
-        self.assertTrue(system.called_publish)
         self.assertFalse(results["has_direct_feedthrough"])
         self.assertTrue(system.called_continuous)
-        self.assertTrue(system.called_discrete)
         self.assertTrue(system.called_initialize)
         self.assertEqual(results["discrete_next_t"], 1.0)
 
@@ -628,7 +592,6 @@ class TestCustom(unittest.TestCase):
         system = TrivialSystem()
         context = system.CreateDefaultContext()
         system.ForcedPublish(context=context)
-        self.assertTrue(system.called_publish)
         self.assertTrue(system.called_forced_publish)
 
         context_update = context.Clone()
@@ -657,7 +620,6 @@ class TestCustom(unittest.TestCase):
         system.CalcForcedDiscreteVariableUpdate(
             context=context,
             discrete_state=context_update.get_mutable_discrete_state())
-        self.assertTrue(system.called_discrete)
         self.assertTrue(system.called_forced_discrete)
 
         system.CalcForcedUnrestrictedUpdate(
@@ -709,6 +671,14 @@ class TestCustom(unittest.TestCase):
         self.assertFalse(system.called_guard)
         self.assertFalse(system.called_reset)
         self.assertFalse(system.called_system_reset)
+
+        # Test ExecuteForcedEvents.
+        system = TrivialSystem()
+        context = system.CreateDefaultContext()
+        system.ExecuteForcedEvents(context=context, publish=True)
+        self.assertTrue(system.called_forced_publish)
+        self.assertTrue(system.called_forced_discrete)
+        self.assertTrue(system.called_forced_unrestricted)
 
         # Test witness function error messages.
         system = TrivialSystem()

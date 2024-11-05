@@ -113,7 +113,7 @@ Drake for readability.
 */
 class Formula {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Formula)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Formula);
 
   /** Default constructor.  Sets the value to Formula::False, to be consistent
    * with value-initialized `bool`s.
@@ -131,6 +131,9 @@ class Formula {
    * @pre @p var is of BOOLEAN type.
    */
   explicit Formula(const Variable& var);
+
+  // The destructor is inlined for performance.
+  ~Formula() = default;
 
   [[nodiscard]] FormulaKind get_kind() const;
   /** Gets free variables (unquantified variables). */

@@ -1,7 +1,9 @@
 #include "drake/common/find_resource.h"
 
 #include <cstdlib>
-#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -109,10 +111,6 @@ namespace {
 // A valid resource root will always contain this file.
 const char* const kSentinelRelpath = "drake/.drake-find_resource-sentinel";
 
-bool StartsWith(const string& str, const string& prefix) {
-  return str.compare(0, prefix.size(), prefix) == 0;
-}
-
 // Returns true iff the path is relative (not absolute nor empty).
 bool IsRelativePath(const string& path) {
   return !path.empty() && (path[0] != '/');
@@ -194,17 +192,27 @@ std::optional<string> MaybeGetEnvironmentResourceRoot() {
 std::optional<string> MaybeGetInstallResourceRoot() {
   // Ensure that we have the library loaded.
   DRAKE_DEMAND(drake::internal::drake_marker_lib_check() == 1234);
-  std::optional<string> libdrake_dir = LoadedLibraryPath("libdrake_marker.so");
-  if (libdrake_dir) {
-    const string root = *libdrake_dir + "/../share";
-    if (fs::is_directory({root})) {
-      return root;
-    } else {
-      log()->debug(
-          "FindResource ignoring CMake install candidate '{}' because it does "
-          "not exist",
-          root);
+  std::optional<string> maybe_libdrake_dir =
+      LoadedLibraryPath("libdrake_marker.so");
+  if (maybe_libdrake_dir) {
+    log()->debug("FindResource libdrake_dir='{}'", *maybe_libdrake_dir);
+    const fs::path libdrake_dir{*maybe_libdrake_dir};
+    const fs::path root = libdrake_dir / "../share";
+    if (fs::is_directory(root)) {
+      return root.string();
     }
+    const fs::path canonical_root =
+        fs::canonical(libdrake_dir / "libdrake_marker.so")
+            .parent_path()
+            .parent_path() /
+        "share";
+    if (fs::is_directory(canonical_root)) {
+      return canonical_root.string();
+    }
+    log()->debug(
+        "FindResource ignoring CMake install candidate '{}' ('{}') because it "
+        "does not exist",
+        root.string(), canonical_root.string());
   } else {
     log()->debug("FindResource has no CMake install candidate");
   }
@@ -236,7 +244,7 @@ Result FindResource(const string& resource_path) {
                     resource_path));
   }
   const string prefix("drake/");
-  if (!StartsWith(resource_path, prefix)) {
+  if (!resource_path.starts_with(prefix)) {
     return Result::make_error(
         resource_path,
         fmt::format("Drake resource_path '{}' does not start with {}.",
@@ -289,6 +297,26 @@ Result FindResource(const string& resource_path) {
 
 string FindResourceOrThrow(const string& resource_path) {
   return FindResource(resource_path).get_absolute_path_or_throw();
+}
+
+std::optional<string> ReadFile(const std::filesystem::path& path) {
+  std::optional<string> result;
+  std::ifstream input(path, std::ios::binary);
+  if (input.is_open()) {
+    std::stringstream content;
+    content << input.rdbuf();
+    result.emplace(std::move(content).str());
+  }
+  return result;
+}
+
+std::string ReadFileOrThrow(const std::filesystem::path& path) {
+  std::optional<string> result = ReadFile(path);
+  if (!result) {
+    throw std::runtime_error(
+        fmt::format("Error reading from '{}'", path.string()));
+  }
+  return std::move(*result);
 }
 
 }  // namespace drake

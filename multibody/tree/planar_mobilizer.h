@@ -24,33 +24,55 @@ namespace internal {
  translations along the x and y axes of frame F and rotaition about the z-axis
  of frame F.
  Zero (x, y, θ) define the "zero configuration" which corresponds to frame F and
- M being coincident and aligned, see set_zero_state(). The translations (x, y)
+ M being coincident and aligned, see SetZeroState(). The translations (x, y)
  are defined to be positive in the direction of their respective axes and the
  rotation θ is defined to be positive according to the right-hand-rule with the
  thumb aligned in the direction of frame F's z-axis.
  The generalized velocities for this mobilizer are the rate of change of the
  coordinates, v = q̇.
 
+ H_FM₆ₓ₃=[0 0 0]    Hdot_FM = 0₆ₓ₃
+         [0 0 0]
+         [0 0 1]
+         [1 0 0]
+         [0 1 0]
+         [0 0 0]
+
  @tparam_default_scalar */
 template <typename T>
 class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PlanarMobilizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PlanarMobilizer);
+  using MobilizerBase = MobilizerImpl<T, 3, 3>;
+  using MobilizerBase::kNq, MobilizerBase::kNv, MobilizerBase::kNx;
+  template <typename U>
+  using QVector = typename MobilizerBase::template QVector<U>;
+  template <typename U>
+  using VVector = typename MobilizerBase::template VVector<U>;
+  template <typename U>
+  using HMatrix = typename MobilizerBase::template HMatrix<U>;
 
   /* Constructor for a %PlanarMobilizer between an inboard frame F
    `inboard_frame_F` and an outboard frame M `outboard_frame_M` granting two
    translational and one rotational degrees of freedom as described in this
    class's documentation. */
-  PlanarMobilizer(const Frame<T>& inboard_frame_F,
+  PlanarMobilizer(const SpanningForest::Mobod& mobod,
+                  const Frame<T>& inboard_frame_F,
                   const Frame<T>& outboard_frame_M)
-      : MobilizerBase(inboard_frame_F, outboard_frame_M) {}
+      : MobilizerBase(mobod, inboard_frame_F, outboard_frame_M) {}
+
+  ~PlanarMobilizer() final;
+
+  std::unique_ptr<internal::BodyNode<T>> CreateBodyNode(
+      const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+      const Mobilizer<T>* mobilizer) const final;
 
   // Overloads to define the suffix names for the position and velocity
   // elements.
   std::string position_suffix(int position_index_in_mobilizer) const final;
   std::string velocity_suffix(int velocity_index_in_mobilizer) const final;
 
-  bool can_rotate() const final    { return true; }
+  bool can_rotate() const final { return true; }
   bool can_translate() const final { return true; }
 
   /* Retrieves from `context` the two translations (x, y) which describe the
@@ -88,8 +110,8 @@ class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
    @param[in] context The context of the model this mobilizer belongs to.
    @param[in] angle The desired angle in radians.
    @returns a constant reference to `this` mobilizer. */
-  const PlanarMobilizer<T>& set_angle(systems::Context<T>* context,
-                                      const T& angle) const;
+  const PlanarMobilizer<T>& SetAngle(systems::Context<T>* context,
+                                     const T& angle) const;
 
   /* Retrieves from `context` the rate of change, in meters per second, of
    `this` mobilizer's translations (see get_translations()).
@@ -104,7 +126,7 @@ class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
    @param[in] v_FM_F The desired rate of change of `this` mobilizer's
                      translations, packed as the vector [ẋ, ẏ].
    @returns A constant reference to `this` mobilizer. */
-  const PlanarMobilizer<T>& set_translation_rates(
+  const PlanarMobilizer<T>& SetTranslationRates(
       systems::Context<T>* context,
       const Eigen::Ref<const Vector2<T>>& v_FM_F) const;
 
@@ -120,23 +142,45 @@ class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
    @param[in] theta_dot The desired rate of change of `this` mobilizer's angle
                         in radians per second.
    @returns A constant reference to `this` mobilizer. */
-  const PlanarMobilizer<T>& set_angular_rate(systems::Context<T>* context,
-                                             const T& theta_dot) const;
+  const PlanarMobilizer<T>& SetAngularRate(systems::Context<T>* context,
+                                           const T& theta_dot) const;
 
   /* Computes the across-mobilizer transform `X_FM(q)` between the inboard
-   frame F and the outboard frame M as a function of the configuration q stored
-   in `context`. */
-  math::RigidTransform<T> CalcAcrossMobilizerTransform(
-      const systems::Context<T>& context) const override;
+  frame F and the outboard frame M as a function of the configuration q stored
+  in `context`. */
+  math::RigidTransform<T> calc_X_FM(const T* q) const {
+    return math::RigidTransform<T>(math::RotationMatrix<T>::MakeZRotation(q[2]),
+                                   Vector3<T>(q[0], q[1], 0.0));
+  }
 
-  /* Computes the across-mobilizer velocity `V_FM(q, v)` of the outboard frame
-   M measured and expressed in frame F as a function of the configuration q
-   stored in `context` and of the input velocity v, formatted as described in
-   the class documentation.
-   This method aborts in Debug builds if `v.size()` is not three. */
+  /* Computes the across-mobilizer velocity V_FM(q, v) of the outboard frame
+   M measured and expressed in frame F as a function of the input velocity v. */
+  SpatialVelocity<T> calc_V_FM(const T*, const T* v) const {
+    return SpatialVelocity<T>(Vector3<T>(0.0, 0.0, v[2]),
+                              Vector3<T>(v[0], v[1], 0.0));
+  }
+  /* Returns H_FM⋅vdot + Hdot_FM⋅v. See class description for definitions. */
+  SpatialAcceleration<T> calc_A_FM(const T*, const T*, const T* vdot) const {
+    return SpatialAcceleration<T>(Vector3<T>(0.0, 0.0, vdot[2]),
+                                  Vector3<T>(vdot[0], vdot[1], 0.0));
+  }
+
+  /* Returns tau = H_FMᵀ⋅F */
+  void calc_tau(const T*, const SpatialForce<T>& F_BMo_F, T* tau) const {
+    DRAKE_ASSERT(tau != nullptr);
+    const Vector3<T>& t_B_F = F_BMo_F.rotational();       // torque
+    const Vector3<T>& f_BMo_F = F_BMo_F.translational();  // force
+    tau[0] = f_BMo_F[0];                                  // force along x
+    tau[1] = f_BMo_F[1];                                  // force along y
+    tau[2] = t_B_F[2];                                    // torque about z
+  }
+
+  math::RigidTransform<T> CalcAcrossMobilizerTransform(
+      const systems::Context<T>& context) const final;
+
   SpatialVelocity<T> CalcAcrossMobilizerSpatialVelocity(
       const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v) const override;
+      const Eigen::Ref<const VectorX<T>>& v) const final;
 
   /* Computes the across-mobilizer acceleration `A_FM(q, v, v̇)` of the outboard
    frame M in the inboard frame F.
@@ -195,16 +239,6 @@ class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
       const MultibodyTree<symbolic::Expression>& tree_clone) const override;
 
  private:
-  typedef MobilizerImpl<T, 3, 3> MobilizerBase;
-  /* Bring the handy number of position and velocities MobilizerImpl enums into
-   this class' scope. This is useful when writing mathematical expressions with
-   fixed-sized vectors since we can do things like Vector<T, nq>.
-   Operations with fixed-sized quantities can be optimized at compile time and
-   therefore they are highly preferred compared to the very slow dynamic sized
-   quantities. */
-  using MobilizerBase::kNq;
-  using MobilizerBase::kNv;
-
   /* Helper method to make a clone templated on ToScalar. */
   template <typename ToScalar>
   std::unique_ptr<Mobilizer<ToScalar>> TemplatedDoCloneToScalar(
@@ -216,4 +250,4 @@ class PlanarMobilizer final : public MobilizerImpl<T, 3, 3> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::PlanarMobilizer)
+    class ::drake::multibody::internal::PlanarMobilizer);

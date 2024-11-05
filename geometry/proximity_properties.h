@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <ostream>
+#include <string>
 
 #include "drake/common/fmt_ostream.h"
 #include "drake/geometry/geometry_roles.h"
@@ -62,13 +63,14 @@ extern const char* const kPointStiffness;  ///< Point stiffness property
  */
 //@{
 
-extern const char* const kHydroGroup;       ///< Hydroelastic group name.
-extern const char* const kElastic;          ///< Hydroelastic modulus property
-                                            ///< name.
-extern const char* const kRezHint;          ///< Resolution hint property name.
-extern const char* const kComplianceType;   ///< Compliance type property name.
-extern const char* const kSlabThickness;    ///< Slab thickness property name
-                                            ///< (for half spaces).
+extern const char* const kHydroGroup;      ///< Hydroelastic group name.
+extern const char* const kElastic;         ///< Hydroelastic modulus property
+                                           ///< name.
+extern const char* const kRezHint;         ///< Resolution hint property name.
+extern const char* const kComplianceType;  ///< Compliance type property name.
+extern const char* const kSlabThickness;   ///< Slab thickness property name
+                                           ///< (for half spaces).
+extern const char* const kMargin;          ///< Margin for hydroelastic contact.
 
 //@}
 
@@ -79,12 +81,20 @@ extern const char* const kSlabThickness;    ///< Slab thickness property name
 //  consider the stiff object as effectively rigid and simplify the computation.
 //  In this case, the object would get two representations.
 /* Classification of the type of representation a shape has for the
- hydroelastic contact model: rigid or soft.  */
+ hydroelastic contact model: rigid or compliant.  */
 enum class HydroelasticType {
   kUndefined,
   kRigid,
-  kSoft
+  kCompliant,
+
+  // Legacy alias. TODO(#17147) Remove this alias.
+  kSoft = kCompliant,
 };
+
+/* Conversion functions between hydroelastic type and string. */
+HydroelasticType GetHydroelasticTypeFromString(
+    std::string_view hydroelastic_type);
+std::string GetStringFromHydroelasticType(HydroelasticType hydroelastic_type);
 
 /* Streaming operator for writing hydroelastic type to output stream.  */
 std::ostream& operator<<(std::ostream& out, const HydroelasticType& type);
@@ -106,8 +116,8 @@ std::ostream& operator<<(std::ostream& out, const HydroelasticType& type);
  * @pre `properties` is not nullptr.
  */
 void AddContactMaterial(
-    const std::optional<double>& dissipation,
-    const std::optional<double>& point_stiffness,
+    std::optional<double> dissipation,
+    std::optional<double> point_stiffness,
     const std::optional<multibody::CoulombFriction<double>>& friction,
     ProximityProperties* properties);
 

@@ -40,7 +40,7 @@ namespace symbolic {
  */
 class Environment {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Environment)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Environment);
 
   typedef Variable key_type;
   typedef double mapped_type;
@@ -74,6 +74,8 @@ class Environment {
    * @throws std::exception if @p m include a dummy variable or a NaN value.
    */
   explicit Environment(map m);
+
+  ~Environment();
 
   /** Returns an iterator to the beginning. */
   iterator begin() { return map_.begin(); }

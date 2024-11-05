@@ -32,7 +32,7 @@ the path representing the `cloud`.  If it is not connected, then we set
 template <typename T>
 class MeshcatPointCloudVisualizer final : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MeshcatPointCloudVisualizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(MeshcatPointCloudVisualizer);
 
   /** Creates an instance of %MeshcatPointCloudVisualizer
 
@@ -51,6 +51,8 @@ class MeshcatPointCloudVisualizer final : public systems::LeafSystem<T> {
   template <typename U>
   explicit MeshcatPointCloudVisualizer(
       const MeshcatPointCloudVisualizer<U>& other);
+
+  ~MeshcatPointCloudVisualizer() final;
 
   /** Sets the size of each point in the cloud.  The default is 0.001. The
    * units are undocumented in threejs
@@ -131,4 +133,4 @@ struct Traits<geometry::MeshcatPointCloudVisualizer>
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::MeshcatPointCloudVisualizer)
+    class ::drake::geometry::MeshcatPointCloudVisualizer);

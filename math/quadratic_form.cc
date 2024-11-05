@@ -11,7 +11,8 @@
 namespace drake {
 namespace math {
 Eigen::MatrixXd DecomposePSDmatrixIntoXtransposeTimesX(
-    const Eigen::Ref<const Eigen::MatrixXd>& Y, double zero_tol) {
+    const Eigen::Ref<const Eigen::MatrixXd>& Y, double zero_tol,
+    bool return_empty_if_not_psd) {
   if (Y.rows() != Y.cols()) {
     throw std::runtime_error("Y is not square.");
   }
@@ -31,6 +32,9 @@ Eigen::MatrixXd DecomposePSDmatrixIntoXtransposeTimesX(
       int X_row_count = 0;
       for (int i = 0; i < es_Y.eigenvalues().rows(); ++i) {
         if (es_Y.eigenvalues()(i) < -zero_tol) {
+          if (return_empty_if_not_psd) {
+            return Eigen::MatrixXd::Zero(0, Y.cols());
+          }
           throw std::runtime_error(fmt::format(
               "Y is not positive semidefinite. It has an eigenvalue {} "
               "that is less than the tolerance {}.",
@@ -42,6 +46,9 @@ Eigen::MatrixXd DecomposePSDmatrixIntoXtransposeTimesX(
       }
       return X.topRows(X_row_count);
     }
+  }
+  if (return_empty_if_not_psd) {
+    return Eigen::MatrixXd::Zero(0, Y.cols());
   }
   throw std::runtime_error("Y is not PSD.");
 }
@@ -60,10 +67,10 @@ std::pair<Eigen::MatrixXd, Eigen::MatrixXd> DecomposePositiveQuadraticForm(
   // [1]    [b/2   c]   [1]
   // We will call the matrix in the middle as M
   Eigen::MatrixXd M(Q.rows() + 1, Q.rows() + 1);
-  // clang-format on
-  M << (Q + Q.transpose()) / 2, b / 2,
-       b.transpose() / 2, c;
   // clang-format off
+  M << (Q + Q.transpose()) / 2, b / 2,
+       b.transpose() / 2,       c;
+  // clang-format on
 
   const Eigen::MatrixXd A = DecomposePSDmatrixIntoXtransposeTimesX(M, tol);
   Eigen::MatrixXd R = A.leftCols(Q.cols());
@@ -86,8 +93,8 @@ Eigen::MatrixXd BalanceQuadraticForms(
   const Eigen::JacobiSVD<Eigen::MatrixXd> svd(R * P * R.transpose(),
                                               Eigen::ComputeThinU);
   // Check that P was full rank (hence RPR' full-rank).
-  DRAKE_THROW_UNLESS(svd.singularValues()(svd.singularValues().size()-1) >=
-                         tolerance*std::max(1., svd.singularValues()(0)));
+  DRAKE_THROW_UNLESS(svd.singularValues()(svd.singularValues().size() - 1) >=
+                     tolerance * std::max(1., svd.singularValues()(0)));
 
   const Eigen::VectorXd sigmaRootN4 =
       svd.singularValues().array().pow(-0.25).matrix();

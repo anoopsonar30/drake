@@ -12,7 +12,8 @@ hood.
 
 Follow Drake's
 [platform-specific setup instructions](/from_source.html#mandatory-platform-specific-instructions)
-to install Bazel.
+to install bazelisk at ``/usr/bin/bazel``, which will then automatically
+download the correct version of Bazel necessary for the build.
 
 # Drake clone and platform setup
 
@@ -130,21 +131,6 @@ For a Python unittest that uses ``drake_py_unittest``, for example:
 ```
 bazel test bindings/pydrake:py/symbolic_test --test_output=streamed --nocache_test_results --test_arg=--trace=user --test_arg=TestSymbolicVariable
 ```
-
-## Debugging on macOS
-
-On macOS, DWARF debug symbols are emitted to a ``.dSYM`` file.  The Bazel
-``cc_binary`` and ``cc_test`` rules do not natively generate or expose this
-file, so we have implemented a workaround in Drake, ``--config=apple_debug``.
-This config turns off sandboxing, which allows a ``genrule`` to access the
-``.o`` files and process them into a ``.dSYM``.  Use as follows:
-
-```
-bazel build --config=apple_debug path/to/my:binary_or_test_dsym
-lldb ./bazel-bin/path/to/my/binary_or_test
-```
-
-For more information, see [https://github.com/bazelbuild/bazel/issues/2537](https://github.com/bazelbuild/bazel/issues/2537).
 
 # Updating BUILD files
 
@@ -322,7 +308,27 @@ tools/dynamic_analysis/kcov_tool clean
 ### kcov and Python
 
 Coverage reports for Python sources produced by kcov are useful, but can be
-misleading. As of Ubuntu 20.04 and kcov 38, Python reports do not render
+misleading. As of Ubuntu 22.04 and kcov 38, Python reports do not render
 coverage for multi-line statements properly. Statements that use delimiter
 pairs to span more than two lines, or statements that use string token pasting
 across multiple lines may be mistakenly shown as only partially executed.
+
+### Drake bazel rules and kcov
+
+Some Drake-specific bazel rules (e.g. `drake_cc_google_test`) use various
+heuristics to skip certain tests in `kcov` builds. This may hinder developers
+trying to use `kcov` locally on specific tests. For example:
+
+```
+bazel test --config=kcov //common:temp_directory_test
+```
+
+results in:
+```
+ERROR: No test targets were found, yet testing was requested
+```
+
+To force execution with kcov, add an empty `test_tag_filters` option:
+```
+bazel test --config=kcov --test_tag_filters= //common:temp_directory_test
+```

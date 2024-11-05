@@ -2,11 +2,14 @@
 
 #include <array>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <unordered_map>
 
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <tiny_gltf.h>
 
 // To ease build system upkeep, we annotate VTK includes with their deps.
 #include <vtkImageData.h>  // vtkCommonDataModel
@@ -15,15 +18,18 @@
 
 #include "drake/common/find_resource.h"
 #include "drake/common/fmt_eigen.h"
+#include "drake/common/temp_directory.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/geometry_ids.h"
 #include "drake/geometry/geometry_roles.h"
+#include "drake/geometry/read_gltf_to_memory.h"
 #include "drake/geometry/render/render_label.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/math/rotation_matrix.h"
-#include "drake/systems/sensors/color_palette.h"
 #include "drake/systems/sensors/image.h"
+#include "drake/systems/sensors/image_io.h"
+#include "drake/systems/sensors/test_utilities/image_compare.h"
 
 DEFINE_bool(show_window, false, "Display render windows locally for debugging");
 
@@ -31,6 +37,8 @@ namespace drake {
 namespace geometry {
 namespace render_gl {
 namespace internal {
+
+namespace fs = std::filesystem;
 
 using render::ColorRenderCamera;
 using render::DepthRenderCamera;
@@ -42,6 +50,8 @@ using render::RenderLabel;
 // Friend class that gives the tests access to a RenderEngineGl's OpenGlContext.
 class RenderEngineGlTester {
  public:
+  using Prop = RenderEngineGl::Prop;
+
   /* Constructs a tester on the given engine. The tester keeps a reference to
    the given `engine`; the engine must stay alive at least as long as the
    tester.  */
@@ -54,26 +64,17 @@ class RenderEngineGlTester {
     return *engine_.opengl_context_;
   }
 
-  // We assume that filename produces a single render mesh, return the geometry
-  // for that mesh.
-  const internal::OpenGlGeometry GetSingleMesh(
-      const std::string& filename) const {
-    // A dummy registration data; we'll learn if the filename was accepted
-    // by examining the data.
-    RenderEngineGl::RegistrationData data{GeometryId::get_new_id(), {}, {}};
-    const std::vector<int> indices =
-        const_cast<RenderEngineGl&>(engine_).GetMeshes(filename, &data);
-    if (indices.size() != 1) {
-      throw std::runtime_error(
-          "GetSingleMesh() used with a file that doesn't return a single "
-          "mesh.");
-    }
-    if (!data.accepted) {
-      throw std::runtime_error(
-          "GetSingleMesh() returned a mesh index, but claims it's not "
-          "accepted.");
-    }
-    return engine_.geometries_[indices.front()];
+  const Prop& GetVisual(GeometryId id) {
+    DRAKE_DEMAND(engine_.visuals_.contains(id));
+    return engine_.visuals_.at(id);
+  }
+
+  const TextureLibrary& texture_library() const {
+    return *engine_.texture_library_;
+  }
+
+  const std::vector<internal::OpenGlGeometry>& opengl_geometries() const {
+    return engine_.geometries_;
   }
 
  private:
@@ -83,19 +84,21 @@ class RenderEngineGlTester {
 namespace {
 
 using Eigen::AngleAxisd;
+using Eigen::DiagonalMatrix;
+using Eigen::Matrix4d;
 using Eigen::Translation3d;
 using Eigen::Vector2d;
 using Eigen::Vector3d;
 using Eigen::Vector4d;
+using Eigen::VectorXd;
 using math::RigidTransformd;
 using math::RotationMatrixd;
 using std::make_unique;
 using std::unique_ptr;
 using std::unordered_map;
 using systems::sensors::CameraInfo;
-using systems::sensors::ColorD;
-using systems::sensors::ColorI;
 using systems::sensors::ImageDepth32F;
+using systems::sensors::ImageIo;
 using systems::sensors::ImageLabel16I;
 using systems::sensors::ImageRgba8U;
 using systems::sensors::ImageTraits;
@@ -165,11 +168,12 @@ std::ostream& operator<<(std::ostream& out, const ScreenCoord& c) {
 
 // Utility struct for doing color testing; provides three mechanisms for
 // creating a common rgba color. We get colors from images (as a pointer to
-// unsigned bytes, as a (ColorI, alpha) pair, and from a normalized color. It's
+// unsigned bytes, as four separate ints, and from a normalized color. It's
 // nice to articulate tests without having to worry about those details.
 struct RgbaColor {
-  RgbaColor(const ColorI& c, int alpha) : r(c.r), g(c.g), b(c.b), a(alpha) {}
   explicit RgbaColor(const uint8_t* p) : r(p[0]), g(p[1]), b(p[2]), a(p[3]) {}
+  RgbaColor(int r_in, int g_in, int b_in, int a_in)
+      : r(r_in), g(g_in), b(b_in), a(a_in) {}
   // We'll allow *implicit* conversion from Rgba to RgbaColor to increase the
   // utility of IsColorNear(), but only in the scope of this test.
   // NOLINTNEXTLINE(runtime/explicit)
@@ -185,10 +189,10 @@ struct RgbaColor {
 
   bool operator!=(const RgbaColor& c) const { return !(*this == c); }
 
-  int r;
-  int g;
-  int b;
-  int a;
+  int r{};
+  int g{};
+  int b{};
+  int a{};
 };
 
 std::ostream& operator<<(std::ostream& out, const RgbaColor& c) {
@@ -229,7 +233,11 @@ class RenderEngineGlTest : public ::testing::Test {
         // Looking straight down from 3m above the ground.
         X_WR_(RotationMatrixd{AngleAxisd(M_PI, Vector3d::UnitY()) *
                               AngleAxisd(-M_PI_2, Vector3d::UnitZ())},
-              {0, 0, kDefaultDistance}) {}
+              {0, 0, kDefaultDistance}) {
+    // Tests of glTF support work by creating a family of related files. We'll
+    // work in this directory.
+    temp_dir_ = temp_directory();
+  }
 
  protected:
   // Method to allow the normal case (render with the built-in renderer against
@@ -345,8 +353,7 @@ class RenderEngineGlTest : public ::testing::Test {
   // Verifies the "outlier" pixels for the given camera belong to the terrain.
   // If images are provided, the given images will be tested, otherwise the
   // member images will be tested.
-  void VerifyOutliers(const RenderEngineGl& renderer,
-                      const DepthRenderCamera& camera,
+  void VerifyOutliers(const DepthRenderCamera& camera,
                       const ImageRgba8U* color_in = nullptr,
                       const ImageDepth32F* depth_in = nullptr,
                       const ImageLabel16I* label_in = nullptr) const {
@@ -464,9 +471,9 @@ class RenderEngineGlTest : public ::testing::Test {
     expected_color_ = RgbaColor{default_color_};
   }
 
-  // Performs the work to test the rendering with a sphere centered in the
+  // Performs the work to test the rendering with a shape centered in the
   // image. To pass, the renderer will have to have been populated with a
-  // compliant sphere and camera configuration (e.g., PopulateSphereTest()).
+  // compliant shape and camera configuration (e.g., PopulateSphereTest()).
   void PerformCenterShapeTest(RenderEngineGl* renderer,
                               const DepthRenderCamera* camera = nullptr) {
     const DepthRenderCamera& cam = camera ? *camera : depth_camera_;
@@ -479,15 +486,14 @@ class RenderEngineGlTest : public ::testing::Test {
     ImageLabel16I label(w, h);
     Render(renderer, &cam, &color, &depth, &label);
 
-    VerifyCenterShapeTest(*renderer, cam, color, depth, label);
+    VerifyCenterShapeTest(cam, color, depth, label);
   }
 
-  void VerifyCenterShapeTest(const RenderEngineGl& renderer,
-                             const DepthRenderCamera& camera,
+  void VerifyCenterShapeTest(const DepthRenderCamera& camera,
                              const ImageRgba8U& color,
                              const ImageDepth32F& depth,
                              const ImageLabel16I& label) const {
-    VerifyOutliers(renderer, camera, &color, &depth, &label);
+    VerifyOutliers(camera, &color, &depth, &label);
 
     // Verifies inside the sphere.
     const ScreenCoord inlier = GetInlier(camera.core().intrinsics());
@@ -500,6 +506,85 @@ class RenderEngineGlTest : public ::testing::Test {
     EXPECT_EQ(label.at(inlier.x, inlier.y)[0],
               static_cast<int>(expected_label_))
         << "Label at: " << inlier;
+  }
+
+  // Copies some supporting files for the glTF tests into this test's temp
+  // directory.
+  void SetupGltfTest() {
+    // Note: we're copying _all_ of the files associated with
+    // fully_textured_pyramid.gltf even though RenderEngineGl only uses a small
+    // fraction. tinygltf will attempt to load every named textures, so we need
+    // to make sure they're available to avoid warnings.
+    for (const char* resource :
+         {"fully_textured_pyramid.bin", "fully_textured_pyramid_base_color.png",
+          "fully_textured_pyramid_emissive.png",
+          "fully_textured_pyramid_normal.png", "fully_textured_pyramid_omr.png",
+          "fully_textured_pyramid_emissive.ktx2",
+          "fully_textured_pyramid_normal.ktx2",
+          "fully_textured_pyramid_omr.ktx2",
+          "fully_textured_pyramid_base_color.ktx2"}) {
+      const fs::path source_path = FindResourceOrThrow(
+          fmt::format("drake/geometry/render/test/meshes/{}", resource));
+      fs::copy_file(source_path, temp_dir_ / resource);
+    }
+  }
+
+  // Returns the path to the fully textured pyramid gltf file.
+  static fs::path gltf_pyramid_path() {
+    static never_destroyed<fs::path> path(FindResourceOrThrow(
+        "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf"));
+    return path.access();
+  }
+
+  void InitAndRegisterMesh(const fs::path& file_path) {
+    Init(RigidTransformd::Identity());
+    PerceptionProperties material;
+    material.AddProperty("label", "id", RenderLabel(1));
+    const GeometryId id = GeometryId::get_new_id();
+    renderer_->RegisterVisual(id, Mesh(file_path.string()), material,
+                              RigidTransformd::Identity(),
+                              false /* needs update */);
+  }
+
+  // Renders the built-in renderer with specific camera and rendering settings.
+  // Compares the resultant image with a reference image.
+  // @pre The renderer has been properly initialized.
+  void RenderAndCompareAgainstRef(std::string_view image_file_name,
+                                  RenderEngine* renderer_in = nullptr) {
+    RenderEngine* renderer =
+        renderer_in == nullptr ? renderer_.get() : renderer_in;
+    const RotationMatrixd R_WC(math::RollPitchYawd(-M_PI / 2.5, 0, M_PI / 4));
+    const RigidTransformd X_WC(
+        R_WC, R_WC * Vector3d(0, 0, -6) + Vector3d(0, 0, -0.15));
+    renderer->UpdateViewpoint(X_WC);
+
+    ImageRgba8U image(64, 64);
+    const ColorRenderCamera camera(
+        {"unused", {64, 64, kFovY / 2}, {0.01, 10}, {}}, FLAGS_show_window);
+    renderer->RenderColorImage(camera, &image);
+
+    if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+      const fs::path out_dir(dir);
+      systems::sensors::ImageIo{}.Save(
+          image, out_dir / fmt::format("{}.png", image_file_name));
+    }
+
+    ImageRgba8U expected_image;
+    const std::string ref_filename = FindResourceOrThrow(
+        "drake/geometry/render_gl/test/gl_fully_textured_pyramid_rendered.png");
+    systems::sensors::LoadImage(ref_filename, &expected_image);
+    // We're testing to see if the images are *mostly* equal. This accounts
+    // for the differences in CI's rendering technology from a local GPU. The
+    // images are deemed equivalent if 99% of the channel values are within 2
+    // of the reference color.
+    ASSERT_EQ(expected_image.size(), image.size());
+    Eigen::Map<VectorX<uint8_t>> data_expected(expected_image.at(0, 0),
+                                               expected_image.size());
+    Eigen::Map<VectorX<uint8_t>> data2(image.at(0, 0), image.size());
+    const auto differences =
+        (data_expected.cast<float>() - data2.cast<float>()).array().abs();
+    const int num_acceptable = (differences <= 2).count();
+    EXPECT_GE(num_acceptable / static_cast<float>(expected_image.size()), 0.99);
   }
 
   RgbaColor expected_color_{kDefaultVisualColor};
@@ -527,6 +612,8 @@ class RenderEngineGlTest : public ::testing::Test {
   unordered_map<GeometryId, RigidTransformd> X_WV_;
 
   unique_ptr<RenderEngineGl> renderer_;
+
+  fs::path temp_dir_;
 };
 
 // Tests an empty image -- confirms that it clears to the "empty" color -- no
@@ -725,7 +812,7 @@ TEST_F(RenderEngineGlTest, BoxTest) {
         //  within 1/255 on each channel). However, as I increase the scale
         //  factor from 1.5 to 3.5 to 10.5, the observed color stretches further
         //  into the red. This is clearly not an overly precise test.
-        expected_color_ = RgbaColor(ColorI{135, 116, 15}, 255);
+        expected_color_ = RgbaColor(135, 116, 15, 255);
         // Quick proof that we're testing for a different color -- we're drawing
         // the red channel from our expected color.
         ASSERT_NE(kTextureColor.r(), expected_color_.r);
@@ -809,6 +896,137 @@ TEST_F(RenderEngineGlTest, TransparentSphereTest) {
       << "\n  Found " << at_pixel;
 }
 
+// Performs the shape-centered-in-the-image test with a deformable mesh. In
+// particular, we register a deformable geometry with a single mesh (with or
+// without texture) and update the vertex positions and normals with some
+// curated values. We then render color, depth, and label images to verify they
+// match our expectations at certain pixel locations. Though this doesn't
+// explicitly confirm the vertex positions and normals of all vertices are
+// correctly updated, it proves some updates happened and provides strong
+// indications that the updates are as expected. Note that this only tests a
+// deformable geometry with a single render mesh, and we use the success of that
+// test to indicate vertices are correctly updated for all meshes.
+TEST_F(RenderEngineGlTest, DeformableTest) {
+  for (const bool use_texture : {false, true}) {
+    Init(X_WR_, true);
+    ResetExpectations();
+
+    // N.B. box_no_mtl.obj doesn't exist in the source tree and is generated
+    // from box.obj by stripping out material data in the build system.
+    const fs::path filename =
+        use_texture
+            ? FindResourceOrThrow("drake/geometry/render/test/meshes/box.obj")
+            : FindResourceOrThrow(
+                  "drake/geometry/render/test/meshes/box_no_mtl.obj");
+
+    RenderLabel deformable_label(847);
+    expected_label_ = deformable_label;
+    PerceptionProperties material = simple_material(use_texture);
+    // This is a dummy placeholder to allow invoking LoadRenderMeshesFromObj(),
+    // the actual diffuse color either comes from the mtl file or the
+    // perception properties.
+    Rgba unused_diffuse_color(1, 1, 1, 1);
+    std::vector<geometry::internal::RenderMesh> render_meshes =
+        geometry::internal::LoadRenderMeshesFromObj(filename, material,
+                                                    unused_diffuse_color);
+    ASSERT_EQ(render_meshes.size(), 1);
+
+    const GeometryId id = GeometryId::get_new_id();
+    renderer_->RegisterDeformableVisual(id, render_meshes, material);
+
+    expected_color_ = use_texture ? RgbaColor(kTextureColor) : default_color_;
+
+    SCOPED_TRACE(
+        fmt::format("Deformable test -- has texture: {}", use_texture));
+
+    PerformCenterShapeTest(renderer_.get());
+
+    const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+        initial_q_WG = render_meshes[0].positions;
+    const Eigen::Matrix<double, Eigen::Dynamic, 3, Eigen::RowMajor>&
+        initial_nhat_W = render_meshes[0].normals;
+    // Helper lambda to translate all vertex positions by the same vector.
+    auto translate_all_vertices = [&initial_q_WG](const Vector3d& t_W) {
+      auto result = initial_q_WG;
+      for (int i = 0; i < result.rows(); ++i) {
+        result.row(i) += t_W;
+      }
+      return result;
+    };
+    // Helper lambda to reshape an Nx3 matrix to a flat vector with 3N entries.
+    auto flatten = [](const Eigen::Matrix<double, Eigen::Dynamic, 3,
+                                          Eigen::RowMajor>& input) {
+      return VectorXd(Eigen::Map<const VectorXd>(input.data(), input.size()));
+    };
+
+    // The box has half edge length 1.0 and has its center and the center of the
+    // image. Assuming infinite resolution, when the box is translated by (t_x,
+    // 0, 0), we expect the center of the image to be part of the box if t_x is
+    // in the interval (-1, 1) and part of the terrain if t_x < -1 or if
+    // t_x > 1. With finite resolution, the boundary is somewhat "blurred".
+
+    // Pixel at center renders box.
+    renderer_->UpdateDeformableConfigurations(
+        id,
+        std::vector<VectorXd>{
+            flatten(translate_all_vertices(Vector3d(0.99, 0, 0)))},
+        std::vector<VectorXd>{flatten(initial_nhat_W)});
+    PerformCenterShapeTest(renderer_.get());
+
+    // Pixel at center renders the terrain.
+    expected_color_ = expected_outlier_color_;
+    expected_object_depth_ = expected_outlier_depth_;
+    expected_label_ = expected_outlier_label_;
+    renderer_->UpdateDeformableConfigurations(
+        id,
+        std::vector<VectorXd>{
+            flatten(translate_all_vertices(Vector3d(1.01, 0, 0.0)))},
+        std::vector<VectorXd>{flatten(initial_nhat_W)});
+    PerformCenterShapeTest(renderer_.get());
+
+    // Test normals are updated by making all vertex normals point along the
+    // direction of (1, 0, 1) in the world frame. As a result, angle between the
+    // normal and the light direction is 45 degrees.
+    auto new_nhat_W = initial_nhat_W;
+    for (int r = 0; r < new_nhat_W.rows(); ++r) {
+      new_nhat_W.row(r) = Vector3d(1, 0, 1).normalized();
+    }
+
+    // With the prescribed normals, we expect to see rgb values scaled by
+    // cos(π/4). We also expect the object depth to increase by 0.5 as we
+    // translate all vertices in the -z direction by 0.5.
+    ResetExpectations();
+    RgbaColor original_color =
+        use_texture ? RgbaColor(kTextureColor) : default_color_;
+    const Vector3d original_rgb(original_color.r, original_color.g,
+                                original_color.b);
+    const Vector3d expected_rgb = original_rgb * std::cos(M_PI / 4.0);
+    expected_color_ = RgbaColor(static_cast<int>(expected_rgb[0]),
+                                static_cast<int>(expected_rgb[1]),
+                                static_cast<int>(expected_rgb[2]), 255);
+    expected_label_ = deformable_label;
+    expected_object_depth_ += 0.5;
+
+    renderer_->UpdateDeformableConfigurations(
+        id,
+        std::vector<VectorXd>{
+            flatten(translate_all_vertices(Vector3d(0, 0, -0.5)))},
+        std::vector<VectorXd>{flatten(new_nhat_W)});
+    PerformCenterShapeTest(renderer_.get());
+
+    // Now we remove the geometry, and the center pixel should again render the
+    // terrain.
+    renderer_->RemoveGeometry(id);
+    expected_color_ = expected_outlier_color_;
+    expected_object_depth_ = expected_outlier_depth_;
+    expected_label_ = expected_outlier_label_;
+    PerformCenterShapeTest(renderer_.get());
+
+    // Confirm that we can still add the geometry back.
+    renderer_->RegisterDeformableVisual(id, render_meshes, material);
+  }
+}
+
 // Performs the shape-centered-in-the-image test with a capsule.
 TEST_F(RenderEngineGlTest, CapsuleTest) {
   Init(X_WR_, true);
@@ -871,7 +1089,7 @@ TEST_F(RenderEngineGlTest, CapsuleRotatedTest) {
   Render(renderer_.get());
 
   SCOPED_TRACE("Capsule rotated test");
-  VerifyOutliers(*renderer_, depth_camera_);
+  VerifyOutliers(depth_camera_);
 
   // Verifies the inliers towards the ends of the capsule and ensures its
   // length attribute is respected as opposed to just its radius. This
@@ -1015,6 +1233,593 @@ TEST_F(RenderEngineGlTest, MeshTest) {
   }
 }
 
+// Repeats various mesh-based tests, but this time the meshes are loaded from
+// memory. We render the scene twice: once with the one mesh and once with the
+// other to confirm they are rendered the same.
+TEST_F(RenderEngineGlTest, InMemoryMesh) {
+  // Pose the camera so we can see three sides of the cubes.
+  const RotationMatrixd R_WR(math::RollPitchYawd(-0.75 * M_PI, 0, M_PI_4));
+  const RigidTransformd X_WR(R_WR,
+                             R_WR * -Vector3d(0, 0, 1.5 * kDefaultDistance));
+  Init(X_WR, true);
+
+  const GeometryId id = GeometryId::get_new_id();
+  auto do_test = [this, id](std::string_view file_prefix, const Mesh& file_mesh,
+                            const Mesh& memory_mesh) {
+    renderer_->RemoveGeometry(id);
+    renderer_->RegisterVisual(id, file_mesh, PerceptionProperties{},
+                              RigidTransformd::Identity(), false);
+    ImageRgba8U file_image(kWidth, kHeight);
+    Render(nullptr, nullptr, &file_image, nullptr, nullptr);
+
+    renderer_->RemoveGeometry(id);
+    renderer_->RegisterVisual(id, memory_mesh, PerceptionProperties{},
+                              RigidTransformd::Identity(), false);
+    ImageRgba8U memory_image(kWidth, kHeight);
+    Render(nullptr, nullptr, &memory_image, nullptr, nullptr);
+
+    if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+      const fs::path out_dir(dir);
+      ImageIo{}.Save(file_image,
+                     out_dir / fmt::format("{}_file.png", file_prefix));
+      ImageIo{}.Save(memory_image,
+                     out_dir / fmt::format("{}_memory.png", file_prefix));
+    }
+
+    EXPECT_TRUE(file_image == memory_image) << fmt::format(
+        "The glTF file loaded from disk didn't match that loaded from memory. "
+        "Check the bazel-testlogs for the saved images with the prefix '{}'.",
+        file_prefix);
+  };
+
+  // cube1.gltf has all internal data; this confirms that data uris are
+  // preserved.
+  {
+    const fs::path path =
+        FindResourceOrThrow("drake/geometry/render/test/meshes/cube1.gltf");
+    InMemoryMesh mesh_data = ReadGltfToMemory(path);
+    do_test("embedded_gltf", Mesh(path.string()), Mesh(std::move(mesh_data)));
+  }
+
+  // cube2.gltf uses all external files; confirming that file uris work.
+  {
+    const fs::path path =
+        FindResourceOrThrow("drake/geometry/render/test/meshes/cube2.gltf");
+    InMemoryMesh mesh_data = ReadGltfToMemory(path);
+    do_test("file_uri_gltf", Mesh(path.string()), Mesh(std::move(mesh_data)));
+  }
+
+  // rainbow_box.obj has some faces colored by texture, some by material. The
+  // rendering includes faces of both types so we can tell if the right
+  // materials and textures are getting loaded in the right way.
+  {
+    const fs::path obj_path = FindResourceOrThrow(
+        "drake/geometry/render/test/meshes/rainbow_box.obj");
+    const fs::path mtl_path = FindResourceOrThrow(
+        "drake/geometry/render/test/meshes/rainbow_box.mtl");
+    const fs::path png_path = FindResourceOrThrow(
+        "drake/geometry/render/test/meshes/rainbow_stripes.png");
+    do_test("textured_obj", Mesh(obj_path.string()),
+            Mesh(InMemoryMesh{
+                MemoryFile::Make(obj_path),
+                {{"rainbow_box.mtl", MemoryFile::Make(mtl_path)},
+                 {"rainbow_stripes.png", MemoryFile::Make(png_path)}}}));
+  }
+}
+
+// A note on testing the glTF support.
+//
+// These tests are *not* exhaustive. These cover major features and general
+// regression tests. Some aspects have actively been left untested. If these
+// cause problems in the future, more tests can be added. Such untested features
+// include:
+//
+//  - Support for different numerical types (for both indices and vertex
+//    attributes).
+//  - Various kinds of primitives (triangle strips, points, lines, etc).
+//  - The requirement that all vertex attribute data for a single primitive be
+//    contained in a single buffer. The probability of this not being the case
+//    is quite small and if Drake encounters such a case, it should throw.
+//  - Correct handling of normals with anisotropic scale factors (computation of
+//    N_WN). We'll wait to see if people complain about the appearance. But as
+//    it is unlikely this will happen and it is difficult to articulate a unit
+//    test to verify the correctness, we'll defer it.
+//  - There are a number of throwing conditions. Most of them should be
+//    considered adversarially bad glTF files. These are conditions in which
+//    the glTF is syntactically "legal" but either meaningless or unsupported
+//    by Drake. (For this latter case, such cases are deemed to be unlikely.)
+//    For example, an index that is larger than the collection it indexes into.
+//    Such a glTF is syntactically valid, but meaningless. We're not going to
+//    put those throwing conditions under test.
+
+using GltfTweaker = std::function<void(nlohmann::json*)>;
+
+// Loads the json of the input glTF file, applies the `tweaker` operator to it
+// and writes it to the output glTF file.
+void TweakGltf(const fs::path& gltf_in, const fs::path& gltf_out,
+               GltfTweaker tweaker) {
+  std::ifstream in(gltf_in);
+  DRAKE_DEMAND(in.good());
+  nlohmann::json json = nlohmann::json::parse(in);
+  tweaker(&json);
+  std::ofstream out(gltf_out);
+  DRAKE_DEMAND(out.good());
+  out << std::setw(2) << json << "\n";
+  // TODO(SeanCurtis-TRI): Consider also dumping the modified file to the
+  // test output directory.
+}
+
+#define DoCompareTest(name)            \
+  {                                    \
+    SCOPED_TRACE(#name);               \
+    InitAndRegisterMesh(name);         \
+    RenderAndCompareAgainstRef(#name); \
+  }
+
+// Errors detected by tinygltf are forwarded.
+TEST_F(RenderEngineGlTest, GltfTinygltfErrors) {
+  SetupGltfTest();
+
+  // Malformed gltf file - removed a required field. This error is caught by
+  // tinygltf and represents all errors that tinygltf catches (including bad
+  // json and the like).
+  const fs::path malformed_gltf = temp_dir_ / "malformed_gltf.gltf";
+  TweakGltf(gltf_pyramid_path(), malformed_gltf, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    model["accessors"][0].erase("count");
+  });
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      InitAndRegisterMesh(malformed_gltf),
+      ".*Failed parsing the on-disk glTF file.*property is missing[^]*");
+}
+
+// The error conditions for GltfMeshExtractor::FindTargetRootNodes().
+TEST_F(RenderEngineGlTest, GltfFindTargetRootNodesErrors) {
+  SetupGltfTest();
+
+  // Out of range default scene index.
+  const fs::path default_scene_oor = temp_dir_ / "default_scene_oor.gltf";
+  TweakGltf(gltf_pyramid_path(), default_scene_oor,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              model["scene"] = 10;
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(default_scene_oor),
+                              ".*has an invalid value for the .glTF.scene..*");
+
+  // Scene references no nodes.
+  const fs::path empty_scene = temp_dir_ / "empty_scene.gltf";
+  TweakGltf(gltf_pyramid_path(), empty_scene, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    model["scenes"][0]["nodes"] = {};
+  });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(empty_scene),
+                              ".*scene 0 has no root nodes.*");
+
+  // No nodes or scenes.
+  const fs::path no_nodes_scenes = temp_dir_ / "no_nodes_scenes.gltf";
+  TweakGltf(gltf_pyramid_path(), no_nodes_scenes,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              model.erase("nodes");
+              model.erase("scenes");
+              model.erase("scene");
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(no_nodes_scenes),
+                              ".*no scenes and no nodes.*");
+
+  // Node cycle (no scenes) --> there are no roots.
+  const fs::path node_cycle = temp_dir_ / "node_cycle.gltf";
+  TweakGltf(gltf_pyramid_path(), node_cycle, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    // Node is its own parent.
+    model["nodes"][0]["children"].push_back(0);
+    model.erase("scenes");
+    model.erase("scene");
+  });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(node_cycle),
+                              ".*none of its 1 nodes are root nodes.*");
+}
+
+// The error conditions for GltfMeshExtractor::InstantiateMesh().
+TEST_F(RenderEngineGlTest, GltfInstantiateMeshErrors) {
+  SetupGltfTest();
+
+  // All attributes reference the same buffer.
+  const fs::path cross_buffer_attribs = temp_dir_ / "cross_buffer_attribs.gltf";
+  TweakGltf(gltf_pyramid_path(), cross_buffer_attribs,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              DRAKE_DEMAND(model["bufferViews"][0]["buffer"].get<int>() == 0);
+              model["bufferViews"][0]["buffer"] = 2;
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(cross_buffer_attribs),
+                              ".*All attributes.*same buffer.*");
+}
+
+// The error conditions for GltfMeshExtractor::ConfigureIndexBuffer().
+TEST_F(RenderEngineGlTest, GltfConfigureIndexBufferErrors) {
+  SetupGltfTest();
+
+  // Primitives must be indexed.
+  const fs::path non_indexed_prim = temp_dir_ / "non_indexed_prim.gltf";
+  TweakGltf(gltf_pyramid_path(), non_indexed_prim,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              model["meshes"][0]["primitives"][0].erase("indices");
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(non_indexed_prim),
+                              ".*All meshes must be indexed.*");
+
+  // Accessors for index arrays must have "SCALAR" type.
+  const fs::path bad_index_type = temp_dir_ / "bad_index_type.gltf";
+  TweakGltf(gltf_pyramid_path(), bad_index_type, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    const int a = model["meshes"][0]["primitives"][0]["indices"].get<int>();
+    model["accessors"][a]["type"] = "VEC2";
+  });
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      InitAndRegisterMesh(bad_index_type),
+      ".*type of an accessor for mesh indices to be 'SCALAR'.*");
+
+  // Index buffer_view byteStride is 0.
+  const fs::path bad_index_stride = temp_dir_ / "bad_index_stride.gltf";
+  TweakGltf(gltf_pyramid_path(), bad_index_stride,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              const int accessor_index =
+                  model["meshes"][0]["primitives"][0]["indices"].get<int>();
+              const int bufferView_index =
+                  model["accessors"][accessor_index]["bufferView"].get<int>();
+              model["bufferViews"][bufferView_index]["byteStride"] = 4;
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(bad_index_stride),
+                              ".*indices must be compactly stored.*");
+}
+
+// Tests RenderEngineGl's handling of embedded textures:
+//
+//  - An embedded texture for baseColorTexture gets used.
+//  - Unused textures don't get handled at all.
+//
+// We'll replace the reference to an external base color texture with an
+// embedded texture representation of the same image and then confirm a) that we
+// get the same rendered image and b) the only image included in the engine's
+// texture library is the embedded image.
+//
+// Note: external images are implicitly tested in every other glTF test as the
+// renderings require the external image and its correct application.
+TEST_F(RenderEngineGlTest, GltfEmbeddedTextures) {
+  SetupGltfTest();
+
+  const fs::path embedded_path = temp_dir_ / "embedded_texture.gltf";
+  TweakGltf(gltf_pyramid_path(), embedded_path, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+
+    // Reads the base64 encoding of the pyramid's color texture.
+    std::ifstream data_file(
+        FindResourceOrThrow("drake/geometry/render/test/meshes/"
+                            "fully_textured_pyramid_base_color.base64"));
+    DRAKE_DEMAND(data_file.good());
+    std::stringstream data_contents;
+    data_contents << data_file.rdbuf();
+    // We know the decoded bytes from the .base64 file has this byte length.
+    const int byte_length = 10501;
+
+    // Adds a buffer with the embedded texture.
+    const int buffer_index = ssize(model["buffers"]);
+    model["buffers"].push_back(
+        {{"byteLength", byte_length},
+         {"uri", fmt::format("data:application/octet-stream;base64,{}",
+                             std::move(data_contents).str())}});
+
+    const int buffer_view_index = ssize(model["bufferViews"]);
+    model["bufferViews"].push_back({{"buffer", buffer_index},
+                                    {"byteLength", byte_length},
+                                    {"byteOffset", 0}});
+
+    // Creates an image based on the added buffer.
+    const int image_index = ssize(model["images"]);
+    model["images"].push_back({{"bufferView", buffer_view_index},
+                               {"byteLength", byte_length},
+                               {"mimeType", "image/png"},
+                               {"name", "embedded_base_color.png"}});
+
+    const int texture_index = ssize(model["textures"]);
+    // Confirms that the glTF already had textures and the resulting glTF will
+    // have multiple textures.
+    DRAKE_DEMAND(texture_index > 0);
+    model["textures"].push_back({{"sampler", 0}, {"source", image_index}});
+
+    // Replaces all baseColorTextures with the new texture.
+    bool replaced = false;
+    for (auto& material : model["materials"]) {
+      if (material.contains("pbrMetallicRoughness")) {
+        auto& pbr = material["pbrMetallicRoughness"];
+        if (pbr.contains("baseColorTexture")) {
+          pbr["baseColorTexture"]["index"] = texture_index;
+          replaced = true;
+        }
+      }
+    }
+    DRAKE_DEMAND(replaced);
+  });
+
+  DoCompareTest(embedded_path);
+
+  RenderEngineGlTester tester(renderer_.get());
+  const TextureLibrary& library = tester.texture_library();
+  // We only have a single texture in the library. The embedded image we expect.
+  // Also, we didn't copy any of the external textures to the temp directory;
+  // if we'd tried using them, we would've had a file access violation.
+  ASSERT_EQ(ssize(library.textures()), 1);
+  ASSERT_TRUE(library.textures().begin()->first.starts_with(
+      TextureLibrary::InMemoryPrefix()));
+}
+
+// Tests RenderEngineGl's node selection heuristics.
+//
+//  - If gltf.scene is not defined, use scene 0.
+//  - If gltf.scenes is not defined, use all nodes.
+TEST_F(RenderEngineGlTest, GltfIncludedNodes) {
+  SetupGltfTest();
+
+  // Remove the gltf.scene value.
+  const fs::path no_default_scene = temp_dir_ / "no_default_scene.gltf";
+  TweakGltf(gltf_pyramid_path(), no_default_scene,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              DRAKE_DEMAND(model.contains("scene"));
+              model.erase("scene");
+            });
+  DoCompareTest(no_default_scene);
+
+  // Remove the gltf.scene and gltf.scenes.
+  const fs::path no_scenes = temp_dir_ / "no_scenes.gltf";
+  TweakGltf(gltf_pyramid_path(), no_scenes, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    DRAKE_DEMAND(model.contains("scene"));
+    model.erase("scene");
+    DRAKE_DEMAND(model.contains("scenes"));
+    model.erase("scenes");
+  });
+  DoCompareTest(no_scenes);
+}
+
+// Tests the composition of transforms in the node hierarchy. We'll take the
+// pyramid model (which has a single node with no transforms). We'll inject a
+// new node into the hierarchy above it and apply a novel transform and define
+// the pyramid node's transform to be its inverse. The rendered result should
+// be the same as the original.
+//
+// Specifically, we want to show:
+//
+//    1. When defined, translation, scale, and rotation all contribute to the
+//       transform.
+//    2. Scale can be anisotropic.
+//    3. The transform can be given as a 4x4 homogeneous matrix.
+//
+// Note: by removing the gltf.scene and gltf.scenes, we are implicitly
+// confirming that the correct root nodes are identified (in
+// GltfMeshExtractor::FindAllRootNodes()).
+TEST_F(RenderEngineGlTest, GltfNodeTransforms) {
+  SetupGltfTest();
+
+  // First show that translation, scale, and rotation all combine. Note:
+  // we're using a *uniform* scale here because for a non-identity rotation and
+  // non-uniform scale, there may be no transform between pyramid and injected
+  // node that can undo the injected node's transformation.
+  const fs::path from_xform_elements = temp_dir_ / "from_xform_elements.gltf";
+  TweakGltf(
+      gltf_pyramid_path(), from_xform_elements, [](nlohmann::json* model_ptr) {
+        nlohmann::json& model = *model_ptr;
+        DRAKE_DEMAND(model["nodes"].size() == 1);
+        // Remove gltf.scene and gltf.scenes.
+        model.erase("scene");
+        model.erase("scenes");
+        const double scale = 2;
+        const double inv_scale = 1.0 / scale;
+        const Eigen::Quaterniond q_F1{0.5, 0.5, 0.5, 0.5};
+        const Eigen::Quaterniond q_10 = q_F1.inverse();
+        const Vector3d p_F1{1, 2, 3};
+        const Vector3d p_10 = inv_scale * (RotationMatrixd(q_10) * -p_F1);
+        model["nodes"].push_back(
+            {{"name", "injected"},
+             {"children", {0}},
+             {"translation", std::vector<double>(p_F1.data(), p_F1.data() + 3)},
+             {"rotation", {q_F1.x(), q_F1.y(), q_F1.z(), q_F1.w()}},
+             {"scale", {scale, scale, scale}}});
+        auto& pyramid = model["nodes"][0];
+        pyramid["translation"] =
+            std::vector<double>(p_10.data(), p_10.data() + 3);
+        pyramid["rotation"] = {q_10.x(), q_10.y(), q_10.z(), q_10.w()};
+        pyramid["scale"] = {inv_scale, inv_scale, inv_scale};
+        model["scenes"][0]["nodes"] = {1};
+      });
+  DoCompareTest(from_xform_elements);
+
+  // Test against non-uniform scale.
+  const fs::path non_uniform_scale = temp_dir_ / "non_uniform_scale.gltf";
+  TweakGltf(
+      gltf_pyramid_path(), non_uniform_scale, [](nlohmann::json* model_ptr) {
+        nlohmann::json& model = *model_ptr;
+        DRAKE_DEMAND(model["nodes"].size() == 1);
+        model["nodes"].push_back(
+            {{"name", "injected"}, {"children", {0}}, {"scale", {4, 2, 5}}});
+        auto& pyramid = model["nodes"][0];
+        pyramid["scale"] = {1.0 / 4.0, 1.0 / 2.0, 1.0 / 5.0};
+        model["scenes"][0]["nodes"] = {1};
+      });
+  DoCompareTest(non_uniform_scale);
+
+  // Test a general matrix. We can use non-uniform scale here because we don't
+  // need to decompose T_10 into scale, rotation, and translation. A weird
+  // skew matrix is fine, as long as it is equal to T_F1⁻¹.
+  const fs::path transform_matrix = temp_dir_ / "transform_matrix.gltf";
+  TweakGltf(
+      gltf_pyramid_path(), transform_matrix, [](nlohmann::json* model_ptr) {
+        nlohmann::json& model = *model_ptr;
+        RigidTransformd X_F1(RotationMatrixd(), Vector3d(1, 2, 3));
+        const Matrix4d T_F1 =
+            DiagonalMatrix<double, 4>(4, 2, 5, 1) * X_F1.GetAsMatrix4();
+        const Matrix4d T_10 = X_F1.inverse().GetAsMatrix4() *
+                              DiagonalMatrix<double, 4>(0.25, 0.5, 0.2, 1);
+        auto matrix_vector = [](const Matrix4d& T) {
+          std::vector<double> result;
+          for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+              // glTF uses column-major ordering.
+              result.push_back(T(r, c));
+            }
+          }
+          return result;
+        };
+        DRAKE_DEMAND(model["nodes"].size() == 1);
+        model["nodes"].push_back({{"name", "injected"},
+                                  {"children", {0}},
+                                  {"matrix", matrix_vector(T_F1)}});
+        auto& pyramid = model["nodes"][0];
+        pyramid["matrix"] = matrix_vector(T_10);
+        model["scenes"][0]["nodes"] = {1};
+      });
+  DoCompareTest(transform_matrix);
+}
+
+// Tests various requirements and behaviors relating to vertex attributes:
+//
+//   1. Missing normals throw.
+//   2. Missing texture coordinates won't apply textures.
+//   3. Textures that reference any uv set other than 0 are ignored.
+TEST_F(RenderEngineGlTest, GltfVertexAttributes) {
+  SetupGltfTest();
+
+  // Missing normals are an error.
+  const fs::path missing_normals = temp_dir_ / "missing_normals.gltf";
+  TweakGltf(gltf_pyramid_path(), missing_normals,
+            [](nlohmann::json* model_ptr) {
+              nlohmann::json& model = *model_ptr;
+              for (auto& mesh : model["meshes"]) {
+                for (auto& primitive : mesh["primitives"]) {
+                  primitive["attributes"].erase("NORMAL");
+                }
+              }
+            });
+  DRAKE_EXPECT_THROWS_MESSAGE(InitAndRegisterMesh(missing_normals),
+                              ".* missing the attribute 'NORMAL'.*");
+
+  // Missing uvs merely mean no texture gets applied.
+  const fs::path missing_uvs = temp_dir_ / "missing_uvs.gltf";
+  TweakGltf(gltf_pyramid_path(), missing_uvs, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    for (auto& mesh : model["meshes"]) {
+      for (auto& primitive : mesh["primitives"]) {
+        primitive["attributes"].erase("TEXCOORD_0");
+      }
+    }
+  });
+  // Registering it is not a problem. But no textures got registered.
+  EXPECT_NO_THROW(InitAndRegisterMesh(missing_uvs));
+  ASSERT_EQ(
+      ssize(RenderEngineGlTester(renderer_.get()).texture_library().textures()),
+      0);
+
+  // A texture referencing the wrong uv set (non-zero) is ignored.
+  const fs::path wrong_uv_set = temp_dir_ / "wrong_uv_set.gltf";
+  TweakGltf(gltf_pyramid_path(), wrong_uv_set, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    for (auto& mat : model["materials"]) {
+      auto& color_info = mat["pbrMetallicRoughness"]["baseColorTexture"];
+      color_info["texCoord"] = 1;
+    }
+  });
+  // Registering it is not a problem. But no textures got registered.
+  EXPECT_NO_THROW(InitAndRegisterMesh(wrong_uv_set));
+  ASSERT_EQ(
+      ssize(RenderEngineGlTester(renderer_.get()).texture_library().textures()),
+      0);
+}
+
+// Tests that the material heuristic is applied if the glTF mesh doesn't
+// apply one explicitly.
+//
+// In this case, we'll simply set a diffuse texture in the perception properties
+// and confirm its (sole) presence in the texture library as evidence that the
+// fallback material logic has been engaged.
+TEST_F(RenderEngineGlTest, GltfMaterialHeuristic) {
+  SetupGltfTest();
+
+  const fs::path no_material = temp_dir_ / "no_material.gltf";
+  TweakGltf(gltf_pyramid_path(), no_material, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    for (auto& mesh : model["meshes"]) {
+      for (auto& primitive : mesh["primitives"]) {
+        primitive.erase("material");
+      }
+    }
+  });
+
+  // Register with diffuse map specified as perception properties.
+  const std::string diffuse_map = FindResourceOrThrow(
+      "drake/geometry/render/test/meshes/rainbow_stripes.png");
+  Init(RigidTransformd::Identity());
+  PerceptionProperties material;
+  material.AddProperty("label", "id", RenderLabel(1));
+  material.AddProperty("phong", "diffuse_map", diffuse_map);
+  const GeometryId id = GeometryId::get_new_id();
+  renderer_->RegisterVisual(id, Mesh(no_material.string()), material,
+                            RigidTransformd::Identity(),
+                            false /* needs update */);
+
+  RenderEngineGlTester tester(renderer_.get());
+  const TextureLibrary& library = tester.texture_library();
+  // We only have a single texture in the library: the embedded image we expect.
+  // Also, we didn't copy any of the external textures to the temp directory;
+  // if we'd tried using them, we would've had a file access violation.
+  ASSERT_EQ(ssize(library.textures()), 1);
+  ASSERT_TRUE(
+      library.textures().begin()->first.ends_with("rainbow_stripes.png"));
+}
+
+// The baseline regression test against a typical Drake-compatible glTF file.
+// Also confirm that the functionality still works in the cloned engine.
+TEST_F(RenderEngineGlTest, GltfBaseline) {
+  InitAndRegisterMesh(gltf_pyramid_path());
+  {
+    SCOPED_TRACE("baseline");
+    RenderAndCompareAgainstRef("gltf_baseline");
+    // The only texture type currently supported is the base color.
+    RenderEngineGlTester tester(renderer_.get());
+    const TextureLibrary& library = tester.texture_library();
+    ASSERT_EQ(ssize(library.textures()), 1);
+    ASSERT_TRUE(library.textures().begin()->first.ends_with("base_color.png"));
+  }
+
+  {
+    SCOPED_TRACE("from_clone");
+    auto base_engine = renderer_->Clone();
+    RenderAndCompareAgainstRef("from_clone", base_engine.get());
+  }
+}
+
+// Confirm that a glTF buffer gets registered once and reused. We'll duplicate
+// the primitive and confirm they both reference the same vertex buffer.
+TEST_F(RenderEngineGlTest, GltfOpenGlBufferReuse) {
+  SetupGltfTest();
+
+  const fs::path multi_prim = temp_dir_ / "multi_prim.gltf";
+  TweakGltf(gltf_pyramid_path(), multi_prim, [](nlohmann::json* model_ptr) {
+    nlohmann::json& model = *model_ptr;
+    auto& primitives = model["meshes"][0]["primitives"];
+    primitives.push_back(primitives[0]);
+  });
+  InitAndRegisterMesh(multi_prim);
+
+  RenderEngineGlTester tester(renderer_.get());
+  const auto& geometries = tester.opengl_geometries();
+  ASSERT_EQ(geometries.size(), 2);
+  EXPECT_EQ(geometries[0].vertex_buffer, geometries[1].vertex_buffer);
+}
+
 // A variant of MeshTest. Confirms the support for mesh files which contain
 // multiple materials/parts. Conceptually, the mesh file is a cube with
 // different colors on each side. We'll render the cube six times with different
@@ -1029,6 +1834,11 @@ TEST_F(RenderEngineGlTest, MeshTest) {
 //
 // If all of that is processed correctly, we should get a cube with a different
 // color on each face. We'll test for those colors.
+//
+// This test renders against an original engine and its clone (to confirm that
+// the render artifacts survive cloning). This has a secondary benefit of
+// detecting if anything happens to corrupt the relationship between original
+// and cloned context (see, e.g., #21326).
 TEST_F(RenderEngineGlTest, MultiMaterialObj) {
   struct Face {
     // The expected *illuminated* material color. The simple illumination model
@@ -1114,51 +1924,51 @@ TEST_F(RenderEngineGlTest, MultiMaterialObj) {
   }
 }
 
-// Mostly identical as `MeshTest` except for the geometry type being Convex.
+// For the Convex shape, we're confirming that the convex hull gets rendered
+// and not the shape with a hole.
 TEST_F(RenderEngineGlTest, ConvexTest) {
-  for (const bool use_texture : {false, true}) {
-    Init(X_WR_, true);
+  Init(X_WR_, true);
 
-    // N.B. box_no_mtl.obj doesn't exist in the source tree and is generated
-    // from box.obj by stripping out material data by the build system.
-    auto filename =
-        use_texture
-            ? FindResourceOrThrow("drake/geometry/render/test/meshes/box.obj")
-            : FindResourceOrThrow(
-                  "drake/geometry/render/test/meshes/box_no_mtl.obj");
+  // Note: it is expected that in addition to the hole, this file does not have
+  // normals. Therefore, if it were processed with the Mesh logic, this test
+  // would throw complaining about missing normals.
+  auto filename = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
 
-    Convex convex(filename);
-    expected_label_ = RenderLabel(4);
+  // It's important to instantiate a *scaled* Convex because of how
+  // RenderEngineGl caches convex hulls. We'll detect that it got cached and
+  // instantiated as expected by examining the depth return.
+  //
+  // The cuboctahedron is bound by an aligned bounding box that extends to
+  // +/-1 along each axis. Scaling it by 0.5 means the box will only extend to
+  // 0.5 in each direction. The top has moved down 0.5 m which increases the
+  // depth value by 0.5.
+  Convex convex(filename, 0.5);
+  expected_object_depth_ += 0.5;
+  expected_label_ = RenderLabel(4);
 
-    // We do *not* pass use_texture = true to simple_material(), because we want
-    // to see that the texture comes through the natural processing.
-    PerceptionProperties material = simple_material();
-    const GeometryId id = GeometryId::get_new_id();
-    renderer_->RegisterVisual(id, convex, material, RigidTransformd::Identity(),
-                              true /* needs update */);
-    renderer_->UpdatePoses(unordered_map<GeometryId, RigidTransformd>{
-        {id, RigidTransformd::Identity()}});
+  PerceptionProperties material = simple_material();
+  const GeometryId id = GeometryId::get_new_id();
+  renderer_->RegisterVisual(id, convex, material, RigidTransformd::Identity(),
+                            true /* needs update */);
+  renderer_->UpdatePoses(unordered_map<GeometryId, RigidTransformd>{
+      {id, RigidTransformd::Identity()}});
 
-    expected_color_ = use_texture ? RgbaColor(kTextureColor) : default_color_;
-    SCOPED_TRACE("Convex test");
-    PerformCenterShapeTest(renderer_.get());
-  }
+  SCOPED_TRACE("Convex test");
+  PerformCenterShapeTest(renderer_.get());
 }
 
-// Confirms that meshes/convex referencing a file with an unsupported extension
-// are ignored. (There's also an untested one-time warning.)
-TEST_F(RenderEngineGlTest, UnsupportedMeshConvex) {
+// Confirms that Meshes referencing a file with an unsupported extension are
+// ignored. (There's also an untested one-time warning.)
+// This doesn't include Convex, because Convex support is predicated on whether
+// we can compute a convex hull for the named file -- that is tested elsewhere.
+TEST_F(RenderEngineGlTest, UnsupportedMeshFileType) {
   Init(X_WR_, false);
   const PerceptionProperties material = simple_material();
   const GeometryId id = GeometryId::get_new_id();
 
   const Mesh mesh("invalid.fbx");
   EXPECT_FALSE(renderer_->RegisterVisual(id, mesh, material,
-                                         RigidTransformd::Identity(),
-                                         false /* needs update */));
-
-  const Convex convex("invalid.fbx");
-  EXPECT_FALSE(renderer_->RegisterVisual(id, convex, material,
                                          RigidTransformd::Identity(),
                                          false /* needs update */));
 }
@@ -1497,7 +2307,7 @@ TEST_F(RenderEngineGlTest, DefaultProperties) {
   EXPECT_NO_THROW(Render());
 }
 
-// Tests the ability to configure the RenderEngineGl's default render label.
+// Tests that RenderEngineGl's default render label is kDontCare.
 TEST_F(RenderEngineGlTest, DefaultProperties_RenderLabel) {
   // A variation of PopulateSphereTest(), but uses an empty set of properties.
   // The result should be compatible with the running the sphere test.
@@ -1511,56 +2321,15 @@ TEST_F(RenderEngineGlTest, DefaultProperties_RenderLabel) {
     engine->UpdatePoses(unordered_map<GeometryId, RigidTransformd>{{id, X_WV}});
   };
 
-  // Case: The engine's default is "don't care".
-  {
-    RenderEngineGl renderer;
-    InitializeRenderer(X_WR_, true /* add terrain */, &renderer);
+  // The engine's default is "don't care".
+  RenderEngineGl renderer;
+  InitializeRenderer(X_WR_, true /* add terrain */, &renderer);
 
-    DRAKE_EXPECT_NO_THROW(populate_default_sphere(&renderer));
-    expected_label_ = RenderLabel::kDontCare;
-    expected_color_ = RgbaColor(renderer.parameters().default_diffuse);
+  DRAKE_EXPECT_NO_THROW(populate_default_sphere(&renderer));
+  expected_label_ = RenderLabel::kDontCare;
+  expected_color_ = RgbaColor(renderer.parameters().default_diffuse);
 
-    SCOPED_TRACE("Default properties; don't care label");
-    PerformCenterShapeTest(&renderer);
-  }
-
-  // Case: Change render engine's default to explicitly be unspecified; must
-  // throw.
-  {
-    RenderEngineGl renderer{{.default_label = RenderLabel::kUnspecified}};
-    InitializeRenderer(X_WR_, false /* no terrain */, &renderer);
-
-    DRAKE_EXPECT_THROWS_MESSAGE(
-        populate_default_sphere(&renderer),
-        ".* geometry with the 'unspecified' or 'empty' render labels.*");
-  }
-
-  // Case: Change render engine's default to don't care. Label image should
-  // report don't care.
-  {
-    ResetExpectations();
-    RenderEngineGlParams params;
-    params.default_label = RenderLabel::kDontCare;
-    RenderEngineGl renderer{params};
-    InitializeRenderer(X_WR_, true /* no terrain */, &renderer);
-
-    DRAKE_EXPECT_NO_THROW(populate_default_sphere(&renderer));
-    expected_label_ = RenderLabel::kDontCare;
-    expected_color_ = RgbaColor(renderer.parameters().default_diffuse);
-
-    SCOPED_TRACE("Default properties; don't care label");
-    PerformCenterShapeTest(&renderer);
-  }
-
-  // Case: Change render engine's default to invalid default value; must throw.
-  {
-    for (RenderLabel label :
-         {RenderLabel::kEmpty, RenderLabel(1), RenderLabel::kDoNotRender}) {
-      DRAKE_EXPECT_THROWS_MESSAGE(
-          RenderEngineGl({.default_label = label}),
-          ".* default render label .* either 'kUnspecified' or 'kDontCare'.*");
-    }
-  }
+  PerformCenterShapeTest(&renderer);
 }
 
 // Tests to see if the two images are *exactly* equal - down to the last bit.
@@ -1661,6 +2430,37 @@ TEST_F(RenderEngineGlTest, ShowRenderLabel) {
   // TODO(SeanCurtis-TRI): Do the same for color labels when implemented.
 }
 
+// We need to confirm that two Convex shapes, referring to the same file name,
+// share the same underlying cached geometry.
+TEST_F(RenderEngineGlTest, ConvexGeometryReuse) {
+  RenderEngineGl engine;
+  RenderEngineGlTester tester(&engine);
+
+  auto filename = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+
+  auto add_convex = [&filename, &engine](double scale) {
+    const GeometryId id = GeometryId::get_new_id();
+    PerceptionProperties material;
+    material.AddProperty("label", "id", RenderLabel(17));
+    const bool accepted = engine.RegisterVisual(id, Convex(filename, scale),
+                                                material, RigidTransformd());
+    DRAKE_DEMAND(accepted);
+    return id;
+  };
+
+  const GeometryId id1 = add_convex(0.5);
+  const GeometryId id2 = add_convex(1.5);
+  const RenderEngineGlTester::Prop& prop1 = tester.GetVisual(id1);
+  const RenderEngineGlTester::Prop& prop2 = tester.GetVisual(id2);
+
+  EXPECT_EQ(prop1.instances.size(), 1);
+  EXPECT_EQ(prop1.instances.size(), prop2.instances.size());
+  // Different instances nevertheless share the same geometry.
+  EXPECT_NE(&prop1.instances[0], &prop2.instances[0]);
+  EXPECT_EQ(prop1.instances[0].geometry, prop2.instances[0].geometry);
+}
+
 // Confirms that when requesting the same mesh multiple times, only a single
 // OpenGlGeometry is produced.
 TEST_F(RenderEngineGlTest, MeshGeometryReuse) {
@@ -1669,16 +2469,27 @@ TEST_F(RenderEngineGlTest, MeshGeometryReuse) {
 
   auto filename =
       FindResourceOrThrow("drake/geometry/render/test/meshes/box.obj");
-  const internal::OpenGlGeometry& initial_geometry =
-      tester.GetSingleMesh(filename);
-  const internal::OpenGlGeometry& second_geometry =
-      tester.GetSingleMesh(filename);
 
-  EXPECT_EQ(initial_geometry.vertex_array, second_geometry.vertex_array);
-  EXPECT_EQ(initial_geometry.vertex_buffer, second_geometry.vertex_buffer);
-  EXPECT_EQ(initial_geometry.index_buffer, second_geometry.index_buffer);
-  EXPECT_EQ(initial_geometry.index_buffer_size,
-            second_geometry.index_buffer_size);
+  auto add_mesh = [&filename, &engine]() {
+    const GeometryId id = GeometryId::get_new_id();
+    PerceptionProperties material;
+    material.AddProperty("label", "id", RenderLabel(17));
+    const bool accepted =
+        engine.RegisterVisual(id, Mesh(filename), material, RigidTransformd());
+    DRAKE_DEMAND(accepted);
+    return id;
+  };
+
+  const GeometryId id1 = add_mesh();
+  const GeometryId id2 = add_mesh();
+  const RenderEngineGlTester::Prop& prop1 = tester.GetVisual(id1);
+  const RenderEngineGlTester::Prop& prop2 = tester.GetVisual(id2);
+
+  EXPECT_EQ(prop1.instances.size(), 1);
+  EXPECT_EQ(prop1.instances.size(), prop2.instances.size());
+  // Different instances nevertheless share the same geometry.
+  EXPECT_NE(&prop1.instances[0], &prop2.instances[0]);
+  EXPECT_EQ(prop1.instances[0].geometry, prop2.instances[0].geometry);
 }
 
 // Confirm the properties of the fallback camera using the following
@@ -1834,14 +2645,16 @@ TEST_F(RenderEngineGlTest, SingleLight) {
 
   // The baseline configuration implicitly tests white light, intensity = 1,
   // no attenuation (1, 0, 0), and transformation from camera to world frame of
-  // both position and direction of the light.
+  // both position and direction of the light. Note, light direction is
+  // *intentionally* specified with non-unit vectors to confirm that the
+  // render engine takes responsibility for normalizing.
   const std::vector<Config> configs{
       {.light = {.color = Rgba(1, 1, 1),
                  .attenuation_values = {1, 0, 0},
                  .position = {0, 0, 0},
                  .frame = "camera",
                  .intensity = 1.0,
-                 .direction = {0, 0, 1},
+                 .direction = {0, 0, 0.5},
                  // If you show the window for spotlight images, the spotlight
                  // circle will exactly fit from image top to bottom.
                  .cone_angle = 22.5},
@@ -1852,7 +2665,7 @@ TEST_F(RenderEngineGlTest, SingleLight) {
                  .position = {0, 0, dist},
                  .frame = "world",
                  .intensity = 1.0,
-                 .direction = {0, 0, -1},
+                 .direction = {0, 0, -2},
                  .cone_angle = 22.5},
        .expected_color = kTerrainColor,
        // Should be identical to the baseline image.
@@ -1862,7 +2675,7 @@ TEST_F(RenderEngineGlTest, SingleLight) {
                  .position = {0, 0, dist},
                  .frame = "camera",
                  .intensity = 1.0,
-                 .direction = {0, 0, -1},
+                 .direction = {0, 0, -0.01},
                  .cone_angle = 22.5},
        .expected_color = Rgba(0, 0, 0),
        // The lights are positioned badly to illuminate anything.

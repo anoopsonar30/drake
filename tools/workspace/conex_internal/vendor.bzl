@@ -48,8 +48,12 @@ def conex_cc_library(
         "drake_vendor/conex/" + x
         for x in srcs or []
     ]
-    edit_include = None
     strip_include_prefix = "drake_vendor"
+
+    # Mac clang is angry about this.
+    copts = copts or []
+    if "-Wno-unused-but-set-variable" not in copts:
+        copts.append("-Wno-unused-but-set-variable")
 
     # Compile the static library.
     cc_library_vendored(
@@ -58,7 +62,6 @@ def conex_cc_library(
         srcs_vendored = srcs_vendored,
         hdrs = hdrs,
         hdrs_vendored = hdrs_vendored,
-        edit_include = edit_include,
         strip_include_prefix = strip_include_prefix,
         copts = copts,
         deps = deps,

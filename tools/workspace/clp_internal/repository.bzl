@@ -6,11 +6,11 @@ def clp_internal_repository(
     github_archive(
         name = name,
         repository = "coin-or/Clp",
-        commit = "releases/1.17.8",
-        sha256 = "f9931b5ba44f0daf445c6b48fc2c250dc12e667e59ace8ea7b025f158fe31556",  # noqa
+        commit = "releases/1.17.10",
+        sha256 = "0d79ece896cdaa4a3855c37f1c28e6c26285f74d45f635046ca0b6d68a509885",  # noqa
         build_file = ":package.BUILD.bazel",
         patches = [
-            ":patches/missing_include.patch",
+            ":patches/upstream/missing_include.patch",
         ],
         mirrors = mirrors,
     )

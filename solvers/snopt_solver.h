@@ -33,6 +33,10 @@ struct SnoptSolverDetails {
    * general constraints F_lower <= F(x) <= F_upper.
    */
   Eigen::VectorXd Fmul;
+
+  /** The duration of the snopt solve in seconds.
+   */
+  double solve_time{0};
 };
 
 /**
@@ -48,12 +52,13 @@ struct SnoptSolverDetails {
  * SolverInterface::available() will return true.
  * Thanks to Philip E. Gill and Elizabeth Wong for their kind support.
  *
- * There is no license configuration required to use SNOPT, so
- * SolverInterface::enabled() will always return true.
+ * There is no license configuration required to use SNOPT, but you may set the
+ * environtment variable `DRAKE_SNOPT_SOLVER_ENABLED` to "0" to force-disable
+ * SNOPT, in which case SolverInterface::enabled() will return false.
  */
 class SnoptSolver final : public SolverBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SnoptSolver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SnoptSolver);
 
   /// Type of details stored in MathematicalProgramResult.
   using Details = SnoptSolverDetails;
@@ -68,6 +73,8 @@ class SnoptSolver final : public SolverBase {
   //@{
   static SolverId id();
   static bool is_available();
+  /// Returns true iff the environment variable DRAKE_SNOPT_SOLVER_ENABLED is
+  /// unset or set to anything other than "0".
   static bool is_enabled();
   static bool ProgramAttributesSatisfied(const MathematicalProgram&);
   //@}
@@ -76,8 +83,9 @@ class SnoptSolver final : public SolverBase {
   using SolverBase::Solve;
 
  private:
-  void DoSolve(const MathematicalProgram&, const Eigen::VectorXd&,
-               const SolverOptions&, MathematicalProgramResult*) const final;
+  void DoSolve2(const MathematicalProgram&, const Eigen::VectorXd&,
+                internal::SpecificOptions*,
+                MathematicalProgramResult*) const final;
 };
 
 }  // namespace solvers

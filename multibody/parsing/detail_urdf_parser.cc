@@ -62,11 +62,13 @@ class UrdfParser {
       const DataSource* data_source,
       const std::string& model_name,
       const std::optional<std::string>& parent_model_name,
+      std::optional<ModelInstanceIndex> merge_into_model_instance,
       const std::string& root_dir,
       XMLDocument* xml_doc,
       const ParsingWorkspace& w)
       : model_name_(model_name),
         parent_model_name_(parent_model_name),
+        merge_into_model_instance_(merge_into_model_instance),
         root_dir_(root_dir),
         xml_doc_(xml_doc),
         w_(w),
@@ -75,19 +77,21 @@ class UrdfParser {
     DRAKE_DEMAND(xml_doc != nullptr);
   }
 
-  // @return a model instance index, if one was created during parsing.
+  // @return a model instance index, if one was created during parsing, and name
+  // of model either passed in or parsed from document.
   // @throw std::exception on parse error.
   // @note: see AddModelFromUrdf for a full account of diagnostics, error
   // reporting, and return values.
-  std::optional<ModelInstanceIndex> Parse();
+  std::pair<std::optional<ModelInstanceIndex>, std::string> Parse();
   void ParseBushing(XMLElement* node);
   void ParseBallConstraint(XMLElement* node);
   void ParseFrame(XMLElement* node);
   void ParseTransmission(const JointEffortLimits& joint_effort_limits,
                          XMLElement* node);
   void ParseJoint(JointEffortLimits* joint_effort_limits, XMLElement* node);
-  const Body<double>* GetBodyForElement(const std::string& element_name,
-                                        const std::string& link_name);
+  void ParseMimicTag(XMLElement* node);
+  const RigidBody<double>* GetBodyForElement(const std::string& element_name,
+                                             const std::string& link_name);
   void ParseJointDynamics(XMLElement* node, double* damping);
   void ParseJointLimits(XMLElement* node, double* lower, double* upper,
                         double* velocity, double* acceleration, double* effort);
@@ -133,9 +137,12 @@ class UrdfParser {
     diagnostic_.WarnUnsupportedAttribute(node, attribute);
   }
 
+  const std::string& model_name() { return model_name_; }
+
  private:
   const std::string model_name_;
   const std::optional<std::string> parent_model_name_;
+  const std::optional<ModelInstanceIndex> merge_into_model_instance_;
   const std::string root_dir_;
   XMLDocument* const xml_doc_;
   const ParsingWorkspace& w_;
@@ -207,12 +214,9 @@ void UrdfParser::ParseBody(XMLElement* node, MaterialMap* materials) {
               " the world link. The <inertial> tag is being ignored.");
     }
   } else {
-    SpatialInertia<double> M_BBo_B;
+    auto M_BBo_B = SpatialInertia<double>::Zero();
     XMLElement* inertial_node = node->FirstChildElement("inertial");
-    if (!inertial_node) {
-      M_BBo_B = SpatialInertia<double>(0, Vector3d::Zero(),
-                                       UnitInertia<double>(0, 0, 0));
-    } else {
+    if (inertial_node) {
       M_BBo_B = ExtractSpatialInertiaAboutBoExpressedInB(inertial_node);
     }
 
@@ -416,7 +420,7 @@ void UrdfParser::ParseScrewJointThreadPitch(XMLElement* node,
   }
 }
 
-const Body<double>* UrdfParser::GetBodyForElement(
+const RigidBody<double>* UrdfParser::GetBodyForElement(
     const std::string& element_name,
     const std::string& link_name) {
   auto plant = w_.plant;
@@ -453,10 +457,10 @@ void UrdfParser::ParseJoint(
     return;
   }
 
-  const Body<double>* parent_body = GetBodyForElement(
+  const RigidBody<double>* parent_body = GetBodyForElement(
       name, parent_name);
   if (parent_body == nullptr) { return; }
-  const Body<double>* child_body = GetBodyForElement(
+  const RigidBody<double>* child_body = GetBodyForElement(
       name, child_name);
   if (child_body == nullptr) { return; }
 
@@ -620,76 +624,94 @@ void UrdfParser::ParseJoint(
   }
 
   joint_effort_limits->emplace(name, effort);
+}
 
+void UrdfParser::ParseMimicTag(XMLElement* node) {
   XMLElement* mimic_node = node->FirstChildElement("mimic");
-  if (mimic_node) {
-    if (!plant->is_discrete() ||
-        plant->get_discrete_contact_solver() != DiscreteContactSolver::kSap) {
-      Warning(
-          *mimic_node,
-          fmt::format("Joint '{}' specifies a mimic element that will be "
-                      "ignored. Mimic elements are currently only supported by "
-                      "MultibodyPlant with a discrete time step and using "
-                      "DiscreteContactSolver::kSap.",
-                      name));
-    } else {
-      std::string joint_to_mimic;
-      double gear_ratio{1.0};
-      double offset{0.0};
-      if (!ParseStringAttribute(mimic_node, "joint", &joint_to_mimic)) {
-        Error(*mimic_node,
-              fmt::format("Joint '{}' mimic element is missing the "
-                          "required 'joint' attribute.",
-                          name));
-        return;
-      }
-      if (!plant->HasJointNamed(joint_to_mimic, model_instance_)) {
-        Error(*mimic_node,
-              fmt::format("Joint '{}' mimic element specifies joint '{}' which"
-                          " does not exist.",
-                          name, joint_to_mimic));
-        return;
-      }
-      ParseScalarAttribute(mimic_node, "multiplier", &gear_ratio);
-      ParseScalarAttribute(mimic_node, "offset", &offset);
+  if (!mimic_node) return;
 
-      if (!index) {
-        // This can currently happen if we have a "floating" joint, which does
-        // not produce the actual QuaternionFloatingJoint above.
-        Warning(*mimic_node,
-                fmt::format("Drake only supports the mimic element for "
-                            "single-dof joints. The mimic element in joint "
-                            "'{}' will be ignored.",
-                            name));
-      } else {
-        const Joint<double>& joint0 = plant->get_joint(*index);
-        const Joint<double>& joint1 =
-            plant->GetJointByName(joint_to_mimic, model_instance_);
-        if (joint1.num_velocities() != joint0.num_velocities()) {
-          Error(*mimic_node,
-                fmt::format("Joint '{}' which has {} DOF cannot mimic "
-                            "joint '{}' which has {} DOF.",
-                            name, joint0.num_velocities(), joint_to_mimic,
-                            joint1.num_velocities()));
-          return;
-        }
-        if (joint0.num_velocities() != 1) {
-          // The URDF documentation is ambiguous as to whether multi-dof joints
-          // are supported by the mimic tag. So we only raise a warning, not an
-          // error.
-          Warning(*mimic_node,
-                  fmt::format("Drake only supports the mimic element for "
-                              "single-dof joints. The joint '{}' (with {} "
-                              "dofs) is attempting to mimic joint '{}' (with "
-                              "{} dofs). The mimic element will be ignored.",
-                              name, joint0.num_velocities(), joint_to_mimic,
-                              joint1.num_velocities()));
-        } else {
-          plant->AddCouplerConstraint(joint0, joint1, gear_ratio, offset);
-        }
-      }
-    }
+  auto plant = w_.plant;
+  std::string name;
+  ParseStringAttribute(node, "name", &name);
+
+  if (!plant->is_discrete() ||
+      plant->get_discrete_contact_solver() != DiscreteContactSolver::kSap) {
+    Warning(
+        *mimic_node,
+        fmt::format("Joint '{}' specifies a mimic element that will be "
+                    "ignored. Mimic elements are currently only supported by "
+                    "MultibodyPlant with a discrete time step and using "
+                    "DiscreteContactSolver::kSap.",
+                    name));
+    return;
   }
+
+  std::string joint_to_mimic;
+  if (!ParseStringAttribute(mimic_node, "joint", &joint_to_mimic)) {
+    Error(*mimic_node, fmt::format("Joint '{}' mimic element is missing the "
+                                   "required 'joint' attribute.",
+                                   name));
+    return;
+  }
+  if (!plant->HasJointNamed(joint_to_mimic, model_instance_)) {
+    Error(*mimic_node,
+          fmt::format("Joint '{}' mimic element specifies joint '{}' which"
+                      " does not exist.",
+                      name, joint_to_mimic));
+    return;
+  }
+
+  if (joint_to_mimic == name) {
+    Error(*mimic_node,
+          fmt::format("Joint '{}' mimic element specifies "
+                      "joint '{}'. Joints cannot mimic themselves.",
+                      name, joint_to_mimic));
+    return;
+  }
+
+  double gear_ratio{1.0};
+  double offset{0.0};
+  ParseScalarAttribute(mimic_node, "multiplier", &gear_ratio);
+  ParseScalarAttribute(mimic_node, "offset", &offset);
+
+  if (!plant->HasJointNamed(name, model_instance_)) {
+    // This can currently happen if we have a "floating" joint, which does
+    // not produce the actual QuaternionFloatingJoint above.
+    Warning(*mimic_node,
+            fmt::format("Drake only supports the mimic element for "
+                        "single-dof joints. The mimic element in joint "
+                        "'{}' will be ignored.",
+                        name));
+    return;
+  }
+
+  const Joint<double>& joint0 = plant->GetJointByName(name, model_instance_);
+  const Joint<double>& joint1 =
+      plant->GetJointByName(joint_to_mimic, model_instance_);
+
+  if (joint1.num_velocities() != joint0.num_velocities()) {
+    Error(*mimic_node, fmt::format("Joint '{}' which has {} DOF cannot mimic "
+                                   "joint '{}' which has {} DOF.",
+                                   name, joint0.num_velocities(),
+                                   joint_to_mimic, joint1.num_velocities()));
+    return;
+  }
+
+  if (joint0.num_velocities() != 1) {
+    // The URDF documentation is ambiguous as to whether multi-dof joints
+    // are supported by the mimic tag. So we only raise a warning, not an
+    // error.
+    Warning(*mimic_node,
+            fmt::format("Drake only supports the mimic element for "
+                        "single-dof joints. The joint '{}' (with {} "
+                        "dofs) is attempting to mimic joint '{}' (with "
+                        "{} dofs). The mimic element will be ignored.",
+                        name, joint0.num_velocities(), joint_to_mimic,
+                        joint1.num_velocities()));
+    return;
+  }
+
+  plant->AddCouplerConstraint(joint0, joint1, gear_ratio, offset);
 }
 
 void UrdfParser::ParseMechanicalReduction(const XMLElement& node) {
@@ -836,6 +858,32 @@ void UrdfParser::ParseTransmission(
     plant->get_mutable_joint_actuator(actuator.index())
         .set_default_gear_ratio(gear_ratio);
   }
+
+  // Parse and add the optional drake:controller_gains parameter.
+  XMLElement* controller_gains_node =
+      actuator_node->FirstChildElement("drake:controller_gains");
+  if (controller_gains_node) {
+    double p = 0.0;
+    if (!ParseScalarAttribute(controller_gains_node, "p", &p)) {
+      Error(*controller_gains_node,
+            fmt::format(
+                "joint actuator {}'s drake:controller_gains does not have a"
+                " 'p' attribute!",
+                actuator_name));
+      return;
+    }
+    double d = 0.0;
+    if (!ParseScalarAttribute(controller_gains_node, "d", &d)) {
+      Error(*controller_gains_node,
+            fmt::format(
+                "joint actuator {}'s drake:controller_gains does not have a"
+                " 'd' attribute!",
+                actuator_name));
+      return;
+    }
+    plant->get_mutable_joint_actuator(actuator.index())
+        .set_controller_gains({p, d});
+  }
 }
 
 void UrdfParser::ParseFrame(XMLElement* node) {
@@ -851,7 +899,7 @@ void UrdfParser::ParseFrame(XMLElement* node) {
     return;
   }
 
-  const Body<double>* body = GetBodyForElement(
+  const RigidBody<double>* body = GetBodyForElement(
       name, body_name);
   if (body == nullptr) { return; }
 
@@ -942,7 +990,7 @@ void UrdfParser::ParseBallConstraint(XMLElement* node) {
   // improperly formed, or if it does not refer to a frame already in the
   // model.
   auto read_body =
-      [node, this](const char* element_name) -> const Body<double>* {
+      [node, this](const char* element_name) -> const RigidBody<double>* {
     XMLElement* value_node = node->FirstChildElement(element_name);
 
     if (value_node != nullptr) {
@@ -972,7 +1020,7 @@ void UrdfParser::ParseBallConstraint(XMLElement* node) {
   internal::ParseBallConstraint(read_vector, read_body, w_.plant);
 }
 
-std::optional<ModelInstanceIndex> UrdfParser::Parse() {
+std::pair<std::optional<ModelInstanceIndex>, std::string> UrdfParser::Parse() {
   XMLElement* node = xml_doc_->FirstChildElement("robot");
   if (!node) {
     Error(*xml_doc_, "URDF does not contain a robot tag.");
@@ -989,8 +1037,12 @@ std::optional<ModelInstanceIndex> UrdfParser::Parse() {
     return {};
   }
 
-  model_name = MakeModelName(model_name, parent_model_name_, w_);
-  model_instance_ = w_.plant->AddModelInstance(model_name);
+  if (!merge_into_model_instance_.has_value()) {
+    model_name = MakeModelName(model_name, parent_model_name_, w_);
+    model_instance_ = w_.plant->AddModelInstance(model_name);
+  } else {
+    model_instance_ = *merge_into_model_instance_;
+  }
 
   // Parses the model's material elements. Throws an exception if there's a
   // material name clash regardless of whether the associated RGBA values are
@@ -1033,6 +1085,14 @@ std::optional<ModelInstanceIndex> UrdfParser::Parse() {
     }
   }
 
+  for (XMLElement* joint_node = node->FirstChildElement(); joint_node;
+       joint_node = joint_node->NextSiblingElement()) {
+    const std::string node_name(joint_node->Name());
+    if (node_name == "joint" || node_name == "drake:joint") {
+      ParseMimicTag(joint_node);
+    }
+  }
+
   // Parses the model's transmission elements.
   for (XMLElement* transmission_node = node->FirstChildElement("transmission");
        transmission_node;
@@ -1043,7 +1103,7 @@ std::optional<ModelInstanceIndex> UrdfParser::Parse() {
 
   if (node->FirstChildElement("loop_joint")) {
     Error(*node, "loop joints are not supported in MultibodyPlant");
-    return model_instance_;
+    return std::make_pair(model_instance_, model_name);
   }
 
   // Parses the model's Drake frame elements.
@@ -1069,16 +1129,15 @@ std::optional<ModelInstanceIndex> UrdfParser::Parse() {
     ParseBallConstraint(ball_constraint_node);
   }
 
-  return model_instance_;
+  return std::make_pair(model_instance_, model_name);
 }
 
-}  // namespace
-
-std::optional<ModelInstanceIndex> AddModelFromUrdf(
-    const DataSource& data_source,
-    const std::string& model_name_in,
+std::pair<std::optional<ModelInstanceIndex>, std::string>
+AddOrMergeModelFromUrdf(
+    const DataSource& data_source, const std::string& model_name_in,
     const std::optional<std::string>& parent_model_name,
-    const ParsingWorkspace& workspace) {
+    const ParsingWorkspace& workspace,
+    std::optional<ModelInstanceIndex> merge_into_model_instance) {
   MultibodyPlant<double>* plant = workspace.plant;
   DRAKE_THROW_UNLESS(plant != nullptr);
   DRAKE_THROW_UNLESS(!plant->is_finalized());
@@ -1091,20 +1150,31 @@ std::optional<ModelInstanceIndex> AddModelFromUrdf(
     if (xml_doc.ErrorID()) {
       diag.Error(xml_doc, fmt::format("Failed to parse XML file: {}",
                                       xml_doc.ErrorName()));
-      return std::nullopt;
+      return std::make_pair(std::nullopt, "");
     }
   } else {
     xml_doc.Parse(data_source.contents().c_str());
     if (xml_doc.ErrorID()) {
       diag.Error(xml_doc, fmt::format("Failed to parse XML string: {}",
                                       xml_doc.ErrorName()));
-      return std::nullopt;
+      return std::make_pair(std::nullopt, "");
     }
   }
 
   UrdfParser parser(&data_source, model_name_in, parent_model_name,
-                    data_source.GetRootDir(), &xml_doc, workspace);
-  return parser.Parse();
+                    merge_into_model_instance, data_source.GetRootDir(),
+                    &xml_doc, workspace);
+  return parser.Parse();;
+}
+}  // namespace
+
+std::optional<ModelInstanceIndex> AddModelFromUrdf(
+    const DataSource& data_source,
+    const std::string& model_name_in,
+    const std::optional<std::string>& parent_model_name,
+    const ParsingWorkspace& workspace) {
+  return AddOrMergeModelFromUrdf(data_source, model_name_in, parent_model_name,
+                                 workspace, std::nullopt).first;
 }
 
 UrdfParserWrapper::UrdfParserWrapper() {}
@@ -1117,6 +1187,14 @@ std::optional<ModelInstanceIndex> UrdfParserWrapper::AddModel(
     const ParsingWorkspace& workspace) {
   return AddModelFromUrdf(data_source, model_name, parent_model_name,
                           workspace);
+}
+
+std::string UrdfParserWrapper::MergeModel(
+    const DataSource& data_source, const std::string& model_name,
+    ModelInstanceIndex merge_into_model_instance,
+    const ParsingWorkspace& workspace) {
+  return AddOrMergeModelFromUrdf(data_source, model_name, std::nullopt,
+                                 workspace, merge_into_model_instance).second;
 }
 
 std::vector<ModelInstanceIndex> UrdfParserWrapper::AddAllModels(

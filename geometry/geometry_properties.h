@@ -225,7 +225,7 @@ namespace geometry {
  */
 class GeometryProperties {
  public:
-  virtual ~GeometryProperties() = default;
+  virtual ~GeometryProperties();
 
   /** The properties for a single group as a property name-value map.  */
   using Group =
@@ -233,7 +233,7 @@ class GeometryProperties {
 
   /** Reports if the given named group is part of this property set.  */
   bool HasGroup(const std::string& group_name) const {
-    return values_.count(group_name) > 0;
+    return values_.contains(group_name);
   }
 
   /** Reports the number of property groups in this set.  */
@@ -334,9 +334,8 @@ class GeometryProperties {
                              const std::string& name) const {
     const AbstractValue& abstract = GetPropertyAbstract(group_name, name);
     if constexpr (std::is_same_v<ValueType, Eigen::Vector4d>) {
-      const Rgba color =
-          GetValueOrThrow<Rgba>("GetProperty", group_name, name, abstract,
-                                typeid(Eigen::Vector4d));
+      const Rgba color = GetValueOrThrow<Rgba>(
+          "GetProperty", group_name, name, abstract, typeid(Eigen::Vector4d));
       return ToVector4d(color);
     } else {
       return GetValueOrThrow<ValueType>("GetProperty", group_name, name,
@@ -388,9 +387,9 @@ class GeometryProperties {
       return default_value;
     } else {
       if constexpr (std::is_same_v<ValueType, Eigen::Vector4d>) {
-        const Rgba color = GetValueOrThrow<Rgba>(
-            "GetPropertyOrDefault", group_name, name, *abstract,
-            typeid(Eigen::Vector4d));
+        const Rgba color =
+            GetValueOrThrow<Rgba>("GetPropertyOrDefault", group_name, name,
+                                  *abstract, typeid(Eigen::Vector4d));
         return ToVector4d(color);
       } else {
         // This incurs the cost of copying a stored value.
@@ -444,7 +443,7 @@ class GeometryProperties {
   GeometryProperties() { values_.emplace(default_group_name(), Group{}); }
 
   // Final subclasses are allowed to make copy/move/assign public.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(GeometryProperties)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(GeometryProperties);
 
  private:
   // Conditionally writes the property (group_name, name) with the given value.
@@ -486,9 +485,7 @@ class GeometryProperties {
 
   // TODO(eric.cousineau): Deprecate this, saying: "Use Rgba instead of
   // Vector4d to define diffuse color."
-  static Eigen::Vector4d ToVector4d(const Rgba& color) {
-    return color.rgba();
-  }
+  static Eigen::Vector4d ToVector4d(const Rgba& color) { return color.rgba(); }
 
   // TODO(eric.cousineau): Deprecate this, saying: "Use Rgba instead of
   // Vector4d to define diffuse color."
@@ -502,7 +499,6 @@ class GeometryProperties {
 
 }  // namespace geometry
 }  // namespace drake
-
 
 // TODO(jwnimmer-tri) Add a real formatter and deprecate the operator<<.
 namespace fmt {

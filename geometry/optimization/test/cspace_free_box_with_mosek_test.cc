@@ -316,7 +316,7 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenBoxSuccess) {
   tester.ComputeSBox(q_box_lower, q_box_upper, &s_box_lower, &s_box_upper,
                      &q_star);
   for (int num_threads : {1, kTestConcurrency}) {
-    options.num_threads = num_threads;
+    options.parallelism = num_threads;
     options.terminate_at_failure = false;
     const auto certificates_result = tester.FindSeparationCertificateGivenBox(
         ignored_collision_pairs, q_box_lower, q_box_upper, options);
@@ -384,7 +384,7 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenBoxFailure) {
   const Eigen::MatrixXd q_samples =
       CalcBoxGrid(q_box_lower, q_box_upper, {10, 10, 10});
   for (int num_threads : {1, kTestConcurrency}) {
-    options.num_threads = num_threads;
+    options.parallelism = num_threads;
     options.terminate_at_failure = false;
     std::unordered_map<SortedPair<geometry::GeometryId>,
                        CspaceFreeBox::SeparationCertificateResult>
@@ -402,7 +402,7 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenBoxFailure) {
       const SortedPair<geometry::GeometryId> geometry_pair{
           separating_plane.positive_side_geometry->id(),
           separating_plane.negative_side_geometry->id()};
-      if (ignored_collision_pairs.count(geometry_pair) == 0) {
+      if (!ignored_collision_pairs.contains(geometry_pair)) {
         auto it = certificates.find(geometry_pair);
         if (it == certificates.end()) {
           // Cannot find the separation certificate for this pair   of

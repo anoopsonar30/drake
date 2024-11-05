@@ -5,20 +5,26 @@
 
 set -eu -o pipefail
 
-cd /opt/drake-wheel-build/drake
-
-git apply < /image/pip-drake.patch
+mkdir /opt/drake-wheel-build/drake-build
+cd /opt/drake-wheel-build/drake-build
 
 # Store downloads in the build cache to speed up rebuilds.
 export BAZELISK_HOME=/var/cache/bazel/bazelisk
 
-export SNOPT_PATH=git
+# Add wheel-specific bazel options.
+cat > /opt/drake-wheel-build/drake-build/drake.bazelrc << EOF
+build --disk_cache=/var/cache/bazel/disk_cache
+build --repository_cache=/var/cache/bazel/repository_cache
+build --repo_env=DRAKE_OS=manylinux
+build --repo_env=SNOPT_PATH=${SNOPT_PATH}
+build --config=packaging
+build --define=LCM_INSTALL_JAVA=OFF
+EOF
 
-third_party/com_github_bazelbuild_bazelisk/bazelisk.py run \
-    --disk_cache=/var/cache/bazel/disk_cache \
-    --repository_cache=/var/cache/bazel/repository_cache \
-    --repo_env=DRAKE_OS=manylinux \
-    --config=omp \
-    --define=WITH_MOSEK=ON \
-    --define=WITH_SNOPT=ON \
-    //:install -- /opt/drake
+# Install Drake using our wheel-build-specific Python interpreter.
+cmake ../drake \
+    -DDRAKE_VERSION_OVERRIDE="${DRAKE_VERSION}" \
+    -DDRAKE_GIT_SHA_OVERRIDE="${DRAKE_GIT_SHA}" \
+    -DCMAKE_INSTALL_PREFIX=/opt/drake \
+    -DPython_EXECUTABLE=/usr/local/bin/python
+make install

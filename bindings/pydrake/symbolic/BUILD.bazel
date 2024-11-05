@@ -1,0 +1,90 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
+load("//tools/install:install.bzl", "install")
+load(
+    "//tools/skylark:drake_cc.bzl",
+    "drake_cc_library",
+)
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_library",
+    "drake_py_unittest",
+)
+load(
+    "//tools/skylark:pybind.bzl",
+    "EXTRA_PYBIND_COPTS",
+    "get_pybind_package_info",
+)
+
+package(default_visibility = [
+    "//bindings/pydrake:__pkg__",
+])
+
+# This determines how `PYTHONPATH` is configured, and how to install the
+# bindings.
+PACKAGE_INFO = get_pybind_package_info("//bindings")
+
+# N.B. The `pydrake.symbolic` module is part of the root module dependency
+# cycle. Refer to bindings/pydrake/common/module_cycle.md for details.
+
+drake_cc_library(
+    name = "symbolic_py",
+    srcs = [
+        "symbolic_py_unapply.h",
+        "symbolic_py_unapply.cc",
+        # TODO(jwnimmer-tri) Split the monolith into pieces.
+        "symbolic_py_monolith.cc",
+    ],
+    hdrs = [
+        "symbolic_py.h",
+    ],
+    copts = EXTRA_PYBIND_COPTS,
+    declare_installed_headers = False,
+    visibility = [
+        "//bindings/pydrake/common:__pkg__",
+    ],
+    deps = [
+        "//bindings/pydrake:documentation_pybind",
+        "//bindings/pydrake:math_operators_pybind",
+        "//bindings/pydrake:symbolic_types_pybind",
+        "//bindings/pydrake/common:eigen_pybind",
+        "@pybind11",
+    ],
+)
+
+drake_py_library(
+    name = "symbolic_extra",
+    srcs = [
+        "_symbolic_extra.py",
+        "_symbolic_sympy.py",
+    ],
+    visibility = [
+        "//bindings/pydrake/common:__pkg__",
+    ],
+)
+
+install(
+    name = "install",
+    targets = [":symbolic_extra"],
+    py_dest = PACKAGE_INFO.py_dest,
+)
+
+drake_py_unittest(
+    name = "symbolic_test",
+    deps = [
+        "//bindings/pydrake/common/test_utilities",
+        "//bindings/pydrake/common/test_utilities:algebra_test_util_py",
+    ],
+)
+
+drake_py_unittest(
+    name = "sympy_test",
+    deps = [
+        "//bindings/pydrake:module_py",
+        # We'll run the unit test against the latest (pinned) version of SymPy,
+        # even if the host system has a different version installed already.
+        "@mpmath_py_internal//:mpmath_py",
+        "@sympy_py_internal//:sympy_py",
+    ],
+)
+
+add_lint_tests_pydrake()

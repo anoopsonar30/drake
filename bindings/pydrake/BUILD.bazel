@@ -1,3 +1,5 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
+load("//bindings/pydrake:stubgen.bzl", "generate_python_stubs")
 load("//tools/install:install.bzl", "install")
 load(
     "//tools/skylark:drake_cc.bzl",
@@ -18,8 +20,6 @@ load(
     "get_drake_py_installs",
     "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
-load("//bindings/pydrake:stubgen.bzl", "generate_python_stubs")
 load("//tools/workspace:generate_file.bzl", "generate_file")
 
 package(default_visibility = [
@@ -34,26 +34,28 @@ exports_files([
 # bindings.
 PACKAGE_INFO = get_pybind_package_info(base_package = "//bindings")
 
-# This provides `pydrake.__init__`, as well as `pydrake.common.__init__` (and
-# `.deprecation`). Downstream libraries should expect that these transitive
-# dependencies will be available, and thus do not need to explicitly depend on
-# these modules.
+# This target provides the following Python modules:
+# - pydrake
+# - pydrake.autodiffutils
+# - pydrake.common (and all of its sub-modules)
+# - pydrake.math
+# - pydrake.symbolic
+# Refer to bindings/pydrake/common/module_cycle.md for details.
 drake_py_library(
     name = "module_py",
     srcs = [
         "__init__.py",
     ],
     deps = [
-        # We use `common:_init_py` to avoid dependency cycles.
-        "//bindings:bazel_workaround_4594_libdrake_py",
         "//bindings/pydrake/common:_init_py",
-        "//bindings/pydrake/common:deprecation_py",
     ],
 )
 
 generate_pybind_documentation_header(
     name = "generate_pybind_documentation_header",
     out = "documentation_pybind.h",
+    # Anonymous namespace and deduction guides both confuse pybind.
+    exclude_hdr_patterns = ["drake/common/overloaded.h"],
     root_name = "pydrake_doc",
     targets = [
         "//tools/install/libdrake:drake_headers",
@@ -90,29 +92,20 @@ drake_cc_library(
     deps = ["//:drake_shared_library"],
 )
 
-drake_pybind_library(
-    name = "autodiffutils_py",
-    cc_deps = [
-        ":autodiff_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
-        "//bindings/pydrake:math_operators_pybind",
-    ],
-    cc_srcs = ["autodiffutils_py.cc"],
-    package_info = PACKAGE_INFO,
-    py_deps = [
-        ":module_py",
-        "//bindings/pydrake/common:deprecation_py",
-    ],
-    py_srcs = [
-        "_autodiffutils_extra.py",
+drake_py_library(
+    name = "forwarddiff_py",
+    srcs = [
         "forwarddiff.py",
+    ],
+    deps = [
+        ":module_py",
     ],
 )
 
 drake_pybind_library(
     name = "lcm_py",
     cc_deps = [
-        "//bindings/pydrake:documentation_pybind",
+        ":documentation_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
         "//bindings/pydrake/common:serialize_pybind",
     ],
@@ -132,41 +125,15 @@ drake_cc_library(
 )
 
 drake_pybind_library(
-    name = "math_py",
-    cc_deps = [
-        "//bindings/pydrake:autodiff_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
-        "//bindings/pydrake:math_operators_pybind",
-        "//bindings/pydrake:symbolic_types_pybind",
-        "//bindings/pydrake/common:cpp_template_pybind",
-        "//bindings/pydrake/common:default_scalars_pybind",
-        "//bindings/pydrake/common:eigen_pybind",
-        "//bindings/pydrake/common:type_pack",
-        "//bindings/pydrake/common:value_pybind",
-    ],
-    cc_srcs = ["math_py.cc"],
-    package_info = PACKAGE_INFO,
-    py_deps = [
-        ":module_py",
-        "//bindings/pydrake:autodiffutils_py",
-        "//bindings/pydrake:symbolic_py",
-        "//bindings/pydrake/common:eigen_geometry_py",
-        "//bindings/pydrake/common:value_py",
-    ],
-    py_srcs = ["_math_extra.py"],
-)
-
-drake_pybind_library(
     name = "perception_py",
     cc_deps = [
-        "//bindings/pydrake:documentation_pybind",
+        ":documentation_pybind",
         "//bindings/pydrake/common:value_pybind",
     ],
     cc_srcs = ["perception_py.cc"],
     package_info = PACKAGE_INFO,
     py_deps = [
         ":module_py",
-        "//bindings/pydrake/common:value_py",
         "//bindings/pydrake/systems:sensors_py",
     ],
 )
@@ -182,17 +149,14 @@ drake_cc_library(
 drake_pybind_library(
     name = "polynomial_py",
     cc_deps = [
+        ":documentation_pybind",
         ":polynomial_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:default_scalars_pybind",
     ],
     cc_srcs = ["polynomial_py.cc"],
     package_info = PACKAGE_INFO,
     py_deps = [
         ":module_py",
-        "//bindings/pydrake:autodiffutils_py",
-        "//bindings/pydrake:symbolic_py",
-        "//bindings/pydrake/common:value_py",
     ],
 )
 
@@ -202,37 +166,16 @@ drake_cc_library(
     declare_installed_headers = 0,
     visibility = ["//visibility:public"],
     deps = [
+        ":documentation_pybind",
         "//:drake_shared_library",
-        "//bindings/pydrake:documentation_pybind",
     ],
-)
-
-drake_pybind_library(
-    name = "symbolic_py",
-    cc_deps = [
-        ":symbolic_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
-        "//bindings/pydrake:math_operators_pybind",
-        "//bindings/pydrake/common:eigen_pybind",
-    ],
-    cc_srcs = [
-        "symbolic_py.cc",
-        "symbolic_py_unapply.cc",
-        "symbolic_py_unapply.h",
-    ],
-    package_info = PACKAGE_INFO,
-    py_deps = [
-        ":module_py",
-        "//bindings/pydrake/common:compatibility_py",
-    ],
-    py_srcs = ["_symbolic_extra.py"],
 )
 
 drake_pybind_library(
     name = "trajectories_py",
     cc_deps = [
+        ":documentation_pybind",
         ":polynomial_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
         "//bindings/pydrake/common:default_scalars_pybind",
         "//bindings/pydrake/common:deprecation_pybind",
     ],
@@ -240,10 +183,7 @@ drake_pybind_library(
     package_info = PACKAGE_INFO,
     py_deps = [
         ":module_py",
-        "//bindings/pydrake:autodiffutils_py",
-        "//bindings/pydrake:polynomial_py",
-        "//bindings/pydrake:symbolic_py",
-        "//bindings/pydrake/common:value_py",
+        ":polynomial_py",
     ],
     py_srcs = [
         "_trajectories_extra.py",
@@ -261,12 +201,9 @@ drake_py_library(
 )
 
 PY_LIBRARIES_WITH_INSTALL = [
-    ":autodiffutils_py",
     ":lcm_py",
-    ":math_py",
     ":perception_py",
     ":polynomial_py",
-    ":symbolic_py",
     ":trajectories_py",
     "//bindings/pydrake/common",
     "//bindings/pydrake/examples",
@@ -283,6 +220,7 @@ PY_LIBRARIES_WITH_INSTALL = [
 ]
 
 PY_LIBRARIES = [
+    ":forwarddiff_py",
     ":module_py",
     ":tutorials_py",
 ]
@@ -290,10 +228,10 @@ PY_LIBRARIES = [
 # Symbol roll-up (for user ease).
 drake_py_library(
     name = "all_py",
-    srcs = ["all.py"],
-    # pycodestyle gets confused by the top `with` statement. This should be
-    # removed once no modules with deprecation warnings are imported.
-    tags = ["nolint"],
+    srcs = [
+        "_all_everything.py",
+        "all.py",
+    ],
     deps = PY_LIBRARIES_WITH_INSTALL + PY_LIBRARIES,
 )
 
@@ -329,7 +267,7 @@ drake_cc_googletest(
 # decoupled test.
 drake_pybind_cc_googletest(
     name = "pydrake_pybind_test",
-    cc_deps = ["//bindings/pydrake:test_util_pybind"],
+    cc_deps = [":test_util_pybind"],
     py_deps = [":module_py"],
     py_srcs = ["test/_pydrake_pybind_test_extra.py"],
 )
@@ -348,7 +286,6 @@ drake_py_unittest(
     data = ["//examples/pendulum:models"],
     deps = [
         ":all_py",
-        "//bindings/pydrake/common/test_utilities:deprecation_py",
     ],
 )
 
@@ -361,53 +298,14 @@ drake_py_unittest(
     ],
 )
 
-drake_py_library(
-    name = "algebra_test_util_py",
-    testonly = 1,
-    srcs = [
-        "test/__init__.py",
-        "test/algebra_test_util.py",
-    ],
-    visibility = ["//visibility:private"],
-    deps = [":math_py"],
-)
-
-# Test ODR (One Definition Rule).
-drake_pybind_library(
-    name = "autodiffutils_test_util_py",
-    testonly = 1,
-    add_install = False,
-    cc_deps = [
-        ":autodiff_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
-    ],
-    cc_so_name = "test/autodiffutils_test_util",
-    cc_srcs = ["test/autodiffutils_test_util_py.cc"],
-    package_info = PACKAGE_INFO,
-    py_srcs = ["test/__init__.py"],
-    visibility = ["//visibility:private"],
-)
-
-drake_py_unittest(
-    name = "autodiffutils_test",
-    deps = [
-        ":algebra_test_util_py",
-        ":autodiffutils_py",
-        ":autodiffutils_test_util_py",
-        ":math_py",
-        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
-        "//bindings/pydrake/common/test_utilities:pickle_compare_py",
-    ],
-)
-
 # Test ODR (One Definition Rule).
 drake_pybind_library(
     name = "odr_test_module_py",
     testonly = 1,
     add_install = False,
     cc_deps = [
+        ":documentation_pybind",
         ":symbolic_types_pybind",
-        "//bindings/pydrake:documentation_pybind",
     ],
     cc_so_name = "test/odr_test_module",
     cc_srcs = ["test/odr_test_module_py.cc"],
@@ -420,7 +318,7 @@ drake_py_unittest(
     name = "odr_test",
     deps = [
         ":odr_test_module_py",
-        ":symbolic_py",
+        "//bindings/pydrake:module_py",
     ],
 )
 
@@ -442,8 +340,7 @@ drake_py_unittest(
 drake_py_unittest(
     name = "forward_diff_test",
     deps = [
-        ":autodiffutils_py",
-        ":math_py",
+        ":forwarddiff_py",
         "//bindings/pydrake/common/test_utilities",
     ],
 )
@@ -452,34 +349,7 @@ drake_py_unittest(
     name = "lcm_test",
     deps = [
         ":lcm_py",
-        "//bindings/pydrake/common/test_utilities:deprecation_py",
         "//lcmtypes:lcmtypes_drake_py",
-    ],
-)
-
-drake_py_unittest(
-    name = "math_test",
-    deps = [
-        ":math_py",
-        "//bindings/pydrake/common/test_utilities",
-    ],
-)
-
-drake_py_unittest(
-    name = "math_overloads_test",
-    deps = [
-        ":autodiffutils_py",
-        ":math_py",
-        ":symbolic_py",
-    ],
-)
-
-drake_py_unittest(
-    name = "math_overloads_matrix_test",
-    deps = [
-        ":math_py",
-        "//bindings/pydrake/common/test_utilities:meta_py",
-        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
     ],
 )
 
@@ -499,36 +369,12 @@ drake_py_unittest(
 )
 
 drake_py_unittest(
-    name = "symbolic_test",
-    deps = [
-        ":algebra_test_util_py",
-        ":symbolic_py",
-        "//bindings/pydrake/common:containers_py",
-        "//bindings/pydrake/common/test_utilities",
-        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
-    ],
-)
-
-drake_py_unittest(
     name = "trajectories_test",
     deps = [
-        ":math_py",
         ":trajectories_py",
-        "//bindings/pydrake/common:eigen_geometry_py",
-        "//bindings/pydrake/common:yaml_py",
         "//bindings/pydrake/common/test_utilities:numpy_compare_py",
         "//bindings/pydrake/common/test_utilities:pickle_compare_py",
         "//bindings/pydrake/common/test_utilities:scipy_stub_py",
-    ],
-)
-
-drake_py_binary(
-    name = "math_example",
-    srcs = ["math_example.py"],
-    add_test_rule = 1,
-    isolate = 1,
-    deps = [
-        ":math_py",
     ],
 )
 
@@ -540,10 +386,23 @@ drake_py_unittest(
 drake_py_unittest(
     name = "dot_clang_format_test",
     data = [
+        ":.clang-format",
         "//:.clang-format",
-        "//bindings/pydrake:.clang-format",
     ],
     tags = ["lint"],
+)
+
+drake_py_unittest(
+    name = "memory_leak_test",
+    data = [
+        "@drake_models//:iiwa_description",
+        "@drake_models//:manipulation_station",
+        "@drake_models//:veggies",
+        "@drake_models//:wsg_50_description",
+    ],
+    deps = [
+        ":all_py",
+    ],
 )
 
 drake_py_binary(
@@ -552,84 +411,53 @@ drake_py_binary(
     deps = [
         ":all_py",
         "@mypy_internal//:mypy",
+        "@stable_baselines3_internal//:stable_baselines3",
     ],
 )
 
-# TODO(jwnimmer-tri): This list should be automatically generated.
+# TODO(jwnimmer-tri): It would be convenient if this could be automatically
+# generated. For now, we have stubgen.py that will fail-fast when this goes
+# out of date.
 PYI_FILES = [
-    "pydrake/__init__.pyi",
-    "pydrake/all.pyi",
     "pydrake/autodiffutils.pyi",
     "pydrake/common/__init__.pyi",
-    "pydrake/common/_module_py.pyi",
-    "pydrake/common/all.pyi",
-    "pydrake/common/compatibility.pyi",
-    "pydrake/common/containers.pyi",
-    "pydrake/common/cpp_param.pyi",
-    "pydrake/common/cpp_template.pyi",
-    "pydrake/common/deprecation.pyi",
     "pydrake/common/eigen_geometry.pyi",
-    "pydrake/common/jupyter.pyi",
-    "pydrake/common/pybind11_version.pyi",
     "pydrake/common/schema.pyi",
     "pydrake/common/value.pyi",
-    "pydrake/common/yaml.pyi",
-    "pydrake/examples/__init__.pyi",
-    "pydrake/examples/_examples_extra.pyi",
-    "pydrake/examples/gym/__init__.pyi",
-    "pydrake/examples/gym/envs/__init__.pyi",
-    "pydrake/examples/gym/envs/cart_pole.pyi",
-    "pydrake/examples/gym/named_view_helpers.pyi",
-    "pydrake/examples/gym/play_cart_pole.pyi",
-    "pydrake/examples/gym/train_cart_pole.pyi",
-    "pydrake/examples/multibody/__init__.pyi",
-    "pydrake/examples/multibody/cart_pole_passive_simulation.pyi",
-    "pydrake/examples/multibody/pendulum_lqr_monte_carlo_analysis.pyi",
-    "pydrake/examples/multibody/run_planar_scenegraph_visualizer.pyi",
-    "pydrake/forwarddiff.pyi",
+    "pydrake/examples.pyi",
     "pydrake/geometry/__init__.pyi",
-    "pydrake/gym/__init__.pyi",
+    "pydrake/geometry/all.pyi",
+    "pydrake/geometry/optimization.pyi",
     "pydrake/lcm.pyi",
-    "pydrake/manipulation/__init__.pyi",
+    "pydrake/manipulation.pyi",
     "pydrake/math.pyi",
-    "pydrake/multibody/__init__.pyi",
-    "pydrake/multibody/all.pyi",
-    "pydrake/multibody/benchmarks.pyi",
+    "pydrake/multibody/benchmarks/__init__.pyi",
+    "pydrake/multibody/benchmarks/acrobot.pyi",
+    "pydrake/multibody/benchmarks/all.pyi",
+    "pydrake/multibody/fem.pyi",
     "pydrake/multibody/inverse_kinematics.pyi",
-    "pydrake/multibody/jupyter_widgets.pyi",
     "pydrake/multibody/math.pyi",
     "pydrake/multibody/meshcat.pyi",
     "pydrake/multibody/optimization.pyi",
     "pydrake/multibody/parsing.pyi",
     "pydrake/multibody/plant.pyi",
+    "pydrake/multibody/rational.pyi",
     "pydrake/multibody/tree.pyi",
     "pydrake/perception.pyi",
     "pydrake/planning.pyi",
     "pydrake/polynomial.pyi",
-    "pydrake/solvers/__init__.pyi",
-    # "pydrake/stubgen.pyi", Don't include this; why is it even generated?
+    "pydrake/solvers.pyi",
     "pydrake/symbolic.pyi",
-    "pydrake/systems/__init__.pyi",
-    "pydrake/systems/_resample_interp1d.pyi",
-    "pydrake/systems/all.pyi",
     "pydrake/systems/analysis.pyi",
     "pydrake/systems/controllers.pyi",
-    "pydrake/systems/drawing.pyi",
+    "pydrake/systems/estimators.pyi",
     "pydrake/systems/framework.pyi",
-    "pydrake/systems/jupyter_widgets.pyi",
     "pydrake/systems/lcm.pyi",
-    "pydrake/systems/perception.pyi",
-    "pydrake/systems/planar_scenegraph_visualizer.pyi",
     "pydrake/systems/primitives.pyi",
-    "pydrake/systems/pyplot_visualizer.pyi",
     "pydrake/systems/rendering.pyi",
-    "pydrake/systems/scalar_conversion.pyi",
     "pydrake/systems/sensors.pyi",
     "pydrake/trajectories.pyi",
-    "pydrake/tutorials.pyi",
-    "pydrake/visualization/__init__.pyi",
-    "pydrake/visualization/meldis.pyi",
-    "pydrake/visualization/model_visualizer.pyi",
+    "pydrake/visualization.pyi",
 ]
 
 # TODO(mwoehlke-kitware): genrule inappropriately gives execute permission to
@@ -638,7 +466,6 @@ PYI_FILES = [
 generate_python_stubs(
     name = "pydrake_pyi",
     outs = PYI_FILES,
-    package = "pydrake",
     tool = ":stubgen",
 )
 
@@ -664,8 +491,8 @@ drake_py_unittest(
         ":pydrake_typed",
     ],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
         "@mypy_internal//:mypy",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -683,7 +510,13 @@ install(
     ],
     data_dest = "@PYTHON_SITE_PACKAGES@",
     visibility = ["//visibility:public"],
-    deps = get_drake_py_installs(PY_LIBRARIES_WITH_INSTALL),
+    deps = get_drake_py_installs(PY_LIBRARIES_WITH_INSTALL) + [
+        # These three modules are a special case.
+        # Refer to bindings/pydrake/common/module_cycle.md for details.
+        "//bindings/pydrake/autodiffutils:install",
+        "//bindings/pydrake/math:install",
+        "//bindings/pydrake/symbolic:install",
+    ],
 )
 
 add_lint_tests_pydrake(

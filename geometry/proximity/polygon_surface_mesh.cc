@@ -19,16 +19,7 @@ PolygonSurfaceMesh<T>::PolygonSurfaceMesh(vector<int> face_data,
     : face_data_(std::move(face_data)),
       vertices_M_(std::move(vertices)),
       p_MSc_(Vector3<T>::Zero()) {
-  /* Build the polygons and derived quantities from the given data. */
-  int poly_count = -1;
-  int i = 0;
-  while (i < static_cast<int>(face_data_.size())) {
-    poly_indices_.push_back(i);
-    CalcAreaNormalAndCentroid(++poly_count);
-    i += face_data_[i] + 1; /* Jump to the next polygon. */
-  }
-  DRAKE_DEMAND(poly_indices_.size() == areas_.size());
-  DRAKE_DEMAND(poly_indices_.size() == face_normals_.size());
+  ComputePositionDependentQuantities();
 }
 
 template <typename T>
@@ -43,6 +34,22 @@ void PolygonSurfaceMesh<T>::TransformVertices(const RigidTransform<T>& X_NM) {
     c = X_NM * c;
   }
   p_MSc_ = X_NM * p_MSc_;
+}
+
+template <typename T>
+void PolygonSurfaceMesh<T>::ReverseFaceWinding() {
+  for (const int f_index : poly_indices_) {
+    const int v_count = face_data_[f_index];
+    /* The indices before and after the first and last entries.  */
+    int f_0 = f_index;
+    int f_n = f_index + v_count + 1;
+    for (int i = 0; i < v_count / 2; ++i) {
+      std::swap(face_data_[++f_0], face_data_[--f_n]);
+    }
+  }
+  for (auto& n : face_normals_) {
+    n = -n;
+  }
 }
 
 template <typename T>
@@ -72,6 +79,27 @@ bool PolygonSurfaceMesh<T>::Equal(const PolygonSurfaceMesh<T>& mesh) const {
   if (this->face_data_ != mesh.face_data_) return false;
 
   return true;
+}
+
+template <class T>
+void PolygonSurfaceMesh<T>::ComputePositionDependentQuantities() {
+  /* Reset all areas, normals, and centroids because we accumulate into them. */
+  total_area_ = 0;
+  areas_.clear();
+  face_normals_.clear();
+  poly_indices_.clear();
+  p_MSc_.setZero();
+  element_centroid_M_.clear();
+  /* Build the polygons and derived quantities from the given data. */
+  int poly_count = -1;
+  int i = 0;
+  while (i < static_cast<int>(face_data_.size())) {
+    poly_indices_.push_back(i);
+    CalcAreaNormalAndCentroid(++poly_count);
+    i += face_data_[i] + 1; /* Jump to the next polygon. */
+  }
+  DRAKE_DEMAND(poly_indices_.size() == areas_.size());
+  DRAKE_DEMAND(poly_indices_.size() == face_normals_.size());
 }
 
 template <class T>
@@ -195,8 +223,25 @@ Vector3<T> PolygonSurfaceMesh<T>::CalcAveragePosition(const int poly_index) {
   return p_MVaccumulate / v_count;
 }
 
+template <class T>
+void PolygonSurfaceMesh<T>::SetAllPositions(
+    const Eigen::Ref<const VectorX<T>>& p_MVs) {
+  if (p_MVs.size() != 3 * num_vertices()) {
+    throw std::runtime_error(
+        fmt::format("SetAllPositions(): Attempting to deform a mesh with {} "
+                    "vertices with data for {} DoFs",
+                    num_vertices(), p_MVs.size()));
+  }
+  for (int v = 0, i = 0; v < num_vertices(); ++v, i += 3) {
+    vertices_M_[v] = Vector3<T>(p_MVs[i], p_MVs[i + 1], p_MVs[i + 2]);
+  }
+  // Update position dependent quantities after the vertex positions have been
+  // updated.
+  ComputePositionDependentQuantities();
+}
+
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class PolygonSurfaceMesh)
+    class PolygonSurfaceMesh);
 
 }  // namespace geometry
 }  // namespace drake

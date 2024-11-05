@@ -12,9 +12,9 @@ namespace drake {
 namespace multibody {
 namespace {
 
-using math::RigidTransformd;
 using Eigen::Translation3d;
 using Eigen::Vector3d;
+using math::RigidTransformd;
 using systems::Context;
 
 class WeldJointTest : public ::testing::Test {
@@ -24,13 +24,13 @@ class WeldJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding body. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
     // Add a body so we can add a joint to it.
-    body_ = &model->AddBody<RigidBody>("body", M_B);
+    body_ = &model->AddRigidBody("body", M_B);
 
     joint_ = &model->AddJoint<WeldJoint>("Welder", model->world_body(), X_PF_,
                                          *body_, X_CM_, X_FM_);
@@ -38,7 +38,7 @@ class WeldJointTest : public ::testing::Test {
     // We are done adding modeling elements. Transfer tree to system for
     // computation.
     system_ = std::make_unique<internal::MultibodyTreeSystem<double>>(
-        std::move(model), true/* is_discrete */);
+        std::move(model), true /* is_discrete */);
   }
 
   const internal::MultibodyTree<double>& tree() const {
@@ -92,7 +92,7 @@ TEST_F(WeldJointTest, GetJointLimits) {
 }
 
 TEST_F(WeldJointTest, Damping) {
-  EXPECT_EQ(joint_->damping_vector().size(), 0);
+  EXPECT_EQ(joint_->default_damping_vector().size(), 0);
 }
 
 TEST_F(WeldJointTest, JointLocking) {

@@ -28,7 +28,7 @@ template <typename T>
 class ExternallyAppliedSpatialForceMultiplexer final
     : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExternallyAppliedSpatialForceMultiplexer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ExternallyAppliedSpatialForceMultiplexer);
 
   /**
   Constructor.
@@ -43,13 +43,15 @@ class ExternallyAppliedSpatialForceMultiplexer final
   explicit ExternallyAppliedSpatialForceMultiplexer(
       const ExternallyAppliedSpatialForceMultiplexer<U>& other);
 
+  ~ExternallyAppliedSpatialForceMultiplexer() final;
+
  private:
   using ValueType = ExternallyAppliedSpatialForce<T>;
   using ListType = std::vector<ValueType>;
 
   // This is the calculator for the output port.
-  void CombineInputsToOutput(
-      const systems::Context<T>& context, ListType* output) const;
+  void CombineInputsToOutput(const systems::Context<T>& context,
+                             ListType* output) const;
 };
 
 }  // namespace multibody

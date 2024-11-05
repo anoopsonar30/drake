@@ -1,35 +1,67 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
-package(
-    default_visibility = ["//visibility:public"],
+package(default_visibility = ["//visibility:private"])
+
+drake_cc_package_library(
+    name = "topology",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":impl",
+    ],
 )
 
 drake_cc_library(
-    name = "multibody_graph",
+    name = "impl",
     srcs = [
-        "multibody_graph.cc",
+        "link_joint_graph.cc",
+        "link_joint_graph_debug.cc",
+        "spanning_forest.cc",
+        "spanning_forest_debug.cc",
+        "spanning_forest_mobod.cc",
     ],
     hdrs = [
-        "multibody_graph.h",
+        "forest.h",
+        "graph.h",
+        "link_joint_graph.h",
+        "link_joint_graph_defs.h",
+        "link_joint_graph_inlines.h",
+        "link_joint_graph_joint.h",
+        "link_joint_graph_link.h",
+        "link_joint_graph_loop_constraint.h",
+        "spanning_forest.h",
+        "spanning_forest_inlines.h",
+        "spanning_forest_loop_constraint.h",
+        "spanning_forest_mobod.h",
+        "spanning_forest_tree.h",
     ],
     deps = [
-        "//common:sorted_pair",
+        "//common:copyable_unique_ptr",
+        "//common:string_container",
         "//multibody/tree:multibody_tree_indexes",
     ],
 )
 
 drake_cc_googletest(
-    name = "multibody_graph_test",
+    name = "link_joint_graph_test",
     deps = [
-        ":multibody_graph",
+        ":impl",
         "//common/test_utilities:expect_throws_message",
     ],
 )
 
-add_lint_tests(enable_clang_format_lint = False)
+drake_cc_googletest(
+    name = "spanning_forest_test",
+    deps = [
+        ":impl",
+        "//common:temp_directory",
+        "//common/test_utilities:expect_throws_message",
+    ],
+)
+
+add_lint_tests()

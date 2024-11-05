@@ -14,6 +14,7 @@ def drake_cc_googlebench_binary(
         test_size = "small",
         test_timeout = None,
         test_args = None,
+        test_display = False,
         test_tags = None):
     """Declares a testonly binary that uses google benchmark.  Automatically
     adds appropriate deps and ensures it either has an automated smoke test
@@ -49,13 +50,14 @@ def drake_cc_googlebench_binary(
             deps = new_deps,
             size = test_size,
             timeout = test_timeout,
+            display = test_display,
             args = [
                 # When running as a unit test, run each function only once to
                 # save time. (Once should be sufficient to prove the lack of
                 # runtime errors.)
                 "--benchmark_min_time=0s",
             ] + (test_args or []),
-            tags = (test_tags or []) + ["nolint"],
+            tags = (test_tags or []) + ["nolint", "no_kcov"],
         )
 
 def drake_py_experiment_binary(name, *, googlebench_binary, **kwargs):
@@ -67,7 +69,7 @@ def drake_py_experiment_binary(name, *, googlebench_binary, **kwargs):
     dut = "drake/{}/{}".format(native.package_name(), googlebench_binary[1:])
     template = """
     import os, sys
-    from bazel_tools.tools.python.runfiles.runfiles import Create
+    from python.runfiles import Create
     runfiles = Create()
     tool = runfiles.Rlocation("drake/tools/performance/benchmark_tool")
     dut = runfiles.Rlocation({dut})
@@ -90,6 +92,6 @@ def drake_py_experiment_binary(name, *, googlebench_binary, **kwargs):
             "//tools/performance:benchmark_tool",
         ],
         deps = [
-            "@bazel_tools//tools/python/runfiles",
+            "@rules_python//python/runfiles",
         ],
     )

@@ -1,3 +1,4 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
@@ -10,7 +11,6 @@ load(
     "drake_py_binary",
     "drake_py_unittest",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
 package(default_visibility = ["//visibility:private"])
@@ -29,11 +29,11 @@ drake_cc_library(
     srcs = ["factory.cc"],
     hdrs = ["factory.h"],
     visibility = ["//visibility:public"],
-    interface_deps = [
+    deps = [
         ":render_engine_gltf_client_params",
         "//geometry/render:render_engine",
     ],
-    deps = [
+    implementation_deps = [
         ":internal_render_engine_gltf_client",
         "//common:network_policy",
     ],
@@ -56,10 +56,10 @@ drake_cc_library(
     hdrs = ["internal_http_service.h"],
     internal = True,
     visibility = ["//visibility:private"],
-    interface_deps = [
+    deps = [
         "//common:essential",
     ],
-    deps = [
+    implementation_deps = [
         "@fmt",
     ],
 )
@@ -70,10 +70,10 @@ drake_cc_library(
     hdrs = ["internal_http_service_curl.h"],
     internal = True,
     visibility = ["//visibility:private"],
-    interface_deps = [
+    deps = [
         ":internal_http_service",
     ],
-    deps = [
+    implementation_deps = [
         "//common:unused",
         "@curl_internal//:libcurl",
         "@fmt",
@@ -94,15 +94,12 @@ drake_cc_library(
         ":internal_http_service",
         ":internal_http_service_curl",
         ":render_engine_gltf_client_params",
+        "//common:sha256",
         "//common:temp_directory",
         "//geometry/render:render_camera",
         "//geometry/render:render_engine",
         "//systems/sensors:image",
-        "//systems/sensors:vtk_image_reader_writer",
-        "@picosha2_internal//:picosha2",
-        "@vtk_internal//:vtkCommonCore",
-        "@vtk_internal//:vtkCommonDataModel",
-        "@vtk_internal//:vtkIOImage",
+        "//systems/sensors:image_io",
     ],
 )
 
@@ -120,9 +117,11 @@ drake_cc_library(
         ":internal_merge_gltf",
         ":internal_render_client",
         "//common:essential",
+        "//common:find_resource",
         "//geometry/render:render_camera",
         "//geometry/render_vtk:internal_render_engine_vtk",
         "//systems/sensors:image",
+        "@common_robotics_utilities",
         "@nlohmann_internal//:nlohmann",
         "@vtk_internal//:vtkCommonCore",
         "@vtk_internal//:vtkCommonMath",
@@ -140,6 +139,8 @@ drake_cc_library(
     deps = [
         "//common:drake_export",
         "//common:essential",
+        "//common:find_resource",
+        "//geometry:mesh_source",
         "@nlohmann_internal//:nlohmann",
     ],
 )
@@ -237,6 +238,7 @@ drake_cc_googletest(
     name = "internal_render_engine_gltf_client_test",
     data = [
         ":test_resources",
+        "//geometry/render:test_models",
     ],
     tags = vtk_test_tags(),
     deps = [
@@ -258,7 +260,7 @@ drake_py_binary(
     srcs = ["test/server_demo.py"],
     data = [":server_vtk_backend"],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -271,7 +273,6 @@ drake_cc_binary(
         "//geometry/render_vtk:factory",
         "//geometry/render_vtk:internal_render_engine_vtk",
         "//math:geometric_transform",
-        "//systems/sensors:color_palette",
         "//systems/sensors:image",
         "@gflags",
         "@vtk_internal//:vtkCommonCore",
@@ -283,14 +284,33 @@ drake_cc_binary(
     ],
 )
 
+filegroup(
+    name = "gltf_client_test_models",
+    testonly = True,
+    data = [
+        ":test/006_mustard_bottle.sdf",
+        ":test/4_color_texture.png",
+        ":test/example_scene.sdf",
+    ],
+    visibility = ["//:__pkg__"],
+)
+
+# The integration test was written using OBJ-based model files, so even though
+# our nominal mesh format is glTF now, we'll still use OBJ for our testing.
+genrule(
+    name = "gen_mustard_bottle",
+    srcs = ["@drake_models//:ycb/006_mustard_bottle.sdf"],
+    outs = ["test/006_mustard_bottle.sdf"],
+    cmd = "sed -e 's#\\.gltf#.obj#g;' $< > $@",
+)
+
 drake_cc_binary(
     name = "client_demo",
     testonly = True,
     srcs = ["test/client_demo.cc"],
     data = [
-        ":test/4_color_texture.png",
-        ":test/example_scene.sdf",
-        "//manipulation/models/ycb:models",
+        ":gltf_client_test_models",
+        "@drake_models//:ycb",
     ],
     deps = [
         ":factory",
@@ -314,13 +334,14 @@ drake_cc_binary(
 
 drake_py_unittest(
     name = "acceptance_test",
+    allow_network = ["render_gltf_client"],
     data = [
         ":client_demo",
         ":server_demo",
         ":server_vtk_backend",
     ],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -342,7 +363,7 @@ drake_py_unittest(
         "cpu:2",
     ],
     deps = [
-        "@bazel_tools//tools/python/runfiles",
+        "@rules_python//python/runfiles",
     ],
 )
 
@@ -352,12 +373,14 @@ filegroup(
         "test/red_box.gltf",
         "test/textured_green_box.gltf",
     ],
+    visibility = ["//:__pkg__"],
 )
 
 drake_cc_googletest(
     name = "internal_merge_gltf_test",
     data = [
         ":merge_resources",
+        "//geometry/render:test_models",
     ],
     deps = [
         ":internal_merge_gltf",
@@ -365,6 +388,26 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "@nlohmann_internal//:nlohmann",
+    ],
+)
+
+filegroup(
+    name = "all_gltfs_and_images",
+    testonly = True,
+    srcs = glob([
+        "test/*.gltf",
+        "test/*.png",
+        "test/*.tiff",
+    ]),
+)
+
+drake_py_unittest(
+    name = "file_size_test",
+    data = [
+        ":all_gltfs_and_images",
+    ],
+    deps = [
+        "@rules_python//python/runfiles",
     ],
 )
 

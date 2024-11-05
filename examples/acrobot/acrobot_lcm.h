@@ -1,12 +1,12 @@
 #pragma once
 
-/// @file This file contains classes dealing with sending/receiving
-/// LCM messages related to acrobot. The classes in this file are based on
-/// iiwa_lcm.h
+/// @file
+/// This file contains classes dealing with sending/receiving LCM messages
+/// related to acrobot. The classes in this file are based on iiwa_lcm.h
 
 #include <memory>
 
-#include "drake/examples/acrobot/gen/acrobot_state.h"
+#include "drake/examples/acrobot/acrobot_state.h"
 #include "drake/lcmt_acrobot_u.hpp"
 #include "drake/lcmt_acrobot_x.hpp"
 #include "drake/systems/framework/basic_vector.h"

@@ -6,6 +6,9 @@ namespace drake {
 namespace trajectories {
 
 template <typename T>
+Trajectory<T>::~Trajectory() = default;
+
+template <typename T>
 MatrixX<T> Trajectory<T>::vector_values(const std::vector<T>& t) const {
   return vector_values(Eigen::Map<const VectorX<T>>(t.data(), t.size()));
 }
@@ -44,6 +47,7 @@ bool Trajectory<T>::do_has_derivative() const {
 template <typename T>
 MatrixX<T> Trajectory<T>::EvalDerivative(const T& t,
                                          int derivative_order) const {
+  DRAKE_THROW_UNLESS(derivative_order >= 0);
   return DoEvalDerivative(t, derivative_order);
 }
 
@@ -66,6 +70,7 @@ MatrixX<T> Trajectory<T>::DoEvalDerivative(const T& t,
 template <typename T>
 std::unique_ptr<Trajectory<T>> Trajectory<T>::MakeDerivative(
     int derivative_order) const {
+  DRAKE_THROW_UNLESS(derivative_order >= 0);
   return DoMakeDerivative(derivative_order);
 }
 
@@ -88,4 +93,4 @@ std::unique_ptr<Trajectory<T>> Trajectory<T>::DoMakeDerivative(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::Trajectory)
+    class drake::trajectories::Trajectory);

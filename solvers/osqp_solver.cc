@@ -8,55 +8,61 @@
 
 #include "drake/common/text_logging.h"
 #include "drake/math/eigen_sparse_triplet.h"
+#include "drake/solvers/aggregate_costs_constraints.h"
 #include "drake/solvers/mathematical_program.h"
+#include "drake/solvers/specific_options.h"
+
+// This function must appear in the global namespace -- the Serialize pattern
+// uses ADL (argument-dependent lookup) and the namespace for the OSQPSettings
+// struct is the global namespace. (We can't even use an anonymous namespace!)
+static void Serialize(
+    drake::solvers::internal::SpecificOptions* archive,
+    // NOLINTNEXTLINE(runtime/references) to match Serialize concept.
+    OSQPSettings& settings) {
+  using drake::MakeNameValue;
+  archive->Visit(MakeNameValue("rho", &settings.rho));
+  archive->Visit(MakeNameValue("sigma", &settings.sigma));
+  archive->Visit(MakeNameValue("max_iter", &settings.max_iter));
+  archive->Visit(MakeNameValue("eps_abs", &settings.eps_abs));
+  archive->Visit(MakeNameValue("eps_rel", &settings.eps_rel));
+  archive->Visit(MakeNameValue("eps_prim_inf", &settings.eps_prim_inf));
+  archive->Visit(MakeNameValue("eps_dual_inf", &settings.eps_dual_inf));
+  archive->Visit(MakeNameValue("alpha", &settings.alpha));
+  archive->Visit(MakeNameValue("delta", &settings.delta));
+  archive->Visit(MakeNameValue("polish", &settings.polish));
+  archive->Visit(MakeNameValue("polish_refine_iter",  // BR
+                               &settings.polish_refine_iter));
+  archive->Visit(MakeNameValue("verbose", &settings.verbose));
+  archive->Visit(MakeNameValue("scaled_termination",  // BR
+                               &settings.scaled_termination));
+  archive->Visit(MakeNameValue("check_termination",  // BR
+                               &settings.check_termination));
+  archive->Visit(MakeNameValue("warm_start", &settings.warm_start));
+  archive->Visit(MakeNameValue("scaling", &settings.scaling));
+  archive->Visit(MakeNameValue("adaptive_rho", &settings.adaptive_rho));
+  archive->Visit(MakeNameValue("adaptive_rho_interval",  // BR
+                               &settings.adaptive_rho_interval));
+  archive->Visit(MakeNameValue("adaptive_rho_tolerance",  // BR
+                               &settings.adaptive_rho_tolerance));
+  archive->Visit(MakeNameValue("adaptive_rho_fraction",  // BR
+                               &settings.adaptive_rho_fraction));
+  archive->Visit(MakeNameValue("time_limit", &settings.time_limit));
+}
 
 namespace drake {
 namespace solvers {
 namespace {
 void ParseQuadraticCosts(const MathematicalProgram& prog,
-                         Eigen::SparseMatrix<c_float>* P,
+                         Eigen::SparseMatrix<c_float>* P_upper,
                          std::vector<c_float>* q, double* constant_cost_term) {
   DRAKE_ASSERT(static_cast<int>(q->size()) == prog.num_vars());
-
-  // Loop through each quadratic costs in prog, and compute the Hessian matrix
-  // P, the linear cost q, and the constant cost term.
-  std::vector<Eigen::Triplet<c_float>> P_triplets;
-  for (const auto& quadratic_cost : prog.quadratic_costs()) {
-    const VectorXDecisionVariable& x = quadratic_cost.variables();
-    // x_indices are the indices of the variables x (the variables bound with
-    // this quadratic cost) in the program decision variables.
-    const std::vector<int> x_indices = prog.FindDecisionVariableIndices(x);
-
-    // Add quadratic_cost.Q to the Hessian P.
-    // Since OSQP 0.6.0 the P matrix is required to be upper triangular, so
-    // we only add upper triangular entries to P_triplets.
-    const Eigen::MatrixXd& Q = quadratic_cost.evaluator()->Q();
-    for (int col = 0; col < Q.cols(); ++col) {
-      for (int row = 0; (row <= col) && (row < Q.rows()); ++row) {
-        const double value = Q(row, col);
-        if (value == 0.0) {
-          continue;
-        }
-        const int x_row = x_indices[row];
-        const int x_col = x_indices[col];
-        P_triplets.emplace_back(x_row, x_col, static_cast<c_float>(value));
-      }
-    }
-
-    // Add quadratic_cost.b to the linear cost term q.
-    for (int i = 0; i < x.rows(); ++i) {
-      q->at(x_indices[i]) += quadratic_cost.evaluator()->b()(i);
-    }
-
-    // Add quadratic_cost.c to constant term
-    *constant_cost_term += quadratic_cost.evaluator()->c();
-  }
-
+  std::vector<Eigen::Triplet<c_float>> P_upper_triplets;
+  internal::ParseQuadraticCosts(prog, &P_upper_triplets, q, constant_cost_term);
   // Scale the matrix P in the cost.
   // Note that the linear term is scaled in ParseLinearCosts().
   const auto& scale_map = prog.GetVariableScaling();
   if (!scale_map.empty()) {
-    for (auto& triplet : P_triplets) {
+    for (auto& triplet : P_upper_triplets) {
       // Column
       const auto column = scale_map.find(triplet.col());
       if (column != scale_map.end()) {
@@ -72,28 +78,15 @@ void ParseQuadraticCosts(const MathematicalProgram& prog,
     }
   }
 
-  P->resize(prog.num_vars(), prog.num_vars());
-  P->setFromTriplets(P_triplets.begin(), P_triplets.end());
+  P_upper->resize(prog.num_vars(), prog.num_vars());
+  P_upper->setFromTriplets(P_upper_triplets.begin(), P_upper_triplets.end());
 }
 
 void ParseLinearCosts(const MathematicalProgram& prog, std::vector<c_float>* q,
                       double* constant_cost_term) {
   // Add the linear costs to the osqp cost.
   DRAKE_ASSERT(static_cast<int>(q->size()) == prog.num_vars());
-
-  // Loop over the linear costs stored inside prog.
-  for (const auto& linear_cost : prog.linear_costs()) {
-    for (int i = 0; i < static_cast<int>(linear_cost.GetNumElements()); ++i) {
-      // Append the linear cost term to q.
-      if (linear_cost.evaluator()->a()(i) != 0) {
-        const int x_index =
-            prog.FindDecisionVariableIndex(linear_cost.variables()(i));
-        q->at(x_index) += linear_cost.evaluator()->a()(i);
-      }
-    }
-    // Add the constant cost term to constant_cost_term.
-    *constant_cost_term += linear_cost.evaluator()->b();
-  }
+  internal::ParseLinearCosts(prog, q, constant_cost_term);
 
   // Scale the vector q in the cost.
   const auto& scale_map = prog.GetVariableScaling();
@@ -236,71 +229,6 @@ csc* EigenSparseToCSC(const Eigen::SparseMatrix<c_float>& mat) {
                     inner_indices, outer_indices);
 }
 
-template <typename T1, typename T2>
-void SetOsqpSolverSetting(const std::unordered_map<std::string, T1>& options,
-                          const std::string& option_name,
-                          T2* osqp_setting_field) {
-  const auto it = options.find(option_name);
-  if (it != options.end()) {
-    *osqp_setting_field = it->second;
-  }
-}
-
-template <typename T1, typename T2>
-void SetOsqpSolverSettingWithDefaultValue(
-    const std::unordered_map<std::string, T1>& options,
-    const std::string& option_name, T2* osqp_setting_field,
-    const T1& default_field_value) {
-  const auto it = options.find(option_name);
-  if (it != options.end()) {
-    *osqp_setting_field = it->second;
-  } else {
-    *osqp_setting_field = default_field_value;
-  }
-}
-
-void SetOsqpSolverSettings(const SolverOptions& solver_options,
-                           OSQPSettings* settings) {
-  const std::unordered_map<std::string, double>& options_double =
-      solver_options.GetOptionsDouble(OsqpSolver::id());
-  const std::unordered_map<std::string, int>& options_int =
-      solver_options.GetOptionsInt(OsqpSolver::id());
-  SetOsqpSolverSetting(options_double, "rho", &(settings->rho));
-  SetOsqpSolverSetting(options_double, "sigma", &(settings->sigma));
-  SetOsqpSolverSetting(options_int, "max_iter", &(settings->max_iter));
-  SetOsqpSolverSetting(options_double, "eps_abs", &(settings->eps_abs));
-  SetOsqpSolverSetting(options_double, "eps_rel", &(settings->eps_rel));
-  SetOsqpSolverSetting(options_double, "eps_prim_inf",
-                       &(settings->eps_prim_inf));
-  SetOsqpSolverSetting(options_double, "eps_dual_inf",
-                       &(settings->eps_dual_inf));
-  SetOsqpSolverSetting(options_double, "alpha", &(settings->alpha));
-  SetOsqpSolverSetting(options_double, "delta", &(settings->delta));
-  // Default polish to true, to get an accurate solution.
-  SetOsqpSolverSettingWithDefaultValue(options_int, "polish",
-                                       &(settings->polish), 1);
-  SetOsqpSolverSetting(options_int, "polish_refine_iter",
-                       &(settings->polish_refine_iter));
-  // The fallback value for console verbosity is the value set by drake options.
-  int verbose_console = solver_options.get_print_to_console() != 0;
-  SetOsqpSolverSettingWithDefaultValue(options_int, "verbose",
-                                       &(settings->verbose), verbose_console);
-  SetOsqpSolverSetting(options_int, "scaled_termination",
-                       &(settings->scaled_termination));
-  SetOsqpSolverSetting(options_int, "check_termination",
-                       &(settings->check_termination));
-  SetOsqpSolverSetting(options_int, "warm_start", &(settings->warm_start));
-  SetOsqpSolverSetting(options_int, "scaling", &(settings->scaling));
-  SetOsqpSolverSetting(options_int, "adaptive_rho", &(settings->adaptive_rho));
-  SetOsqpSolverSetting(options_double, "adaptive_rho_interval",
-                       &(settings->adaptive_rho_interval));
-  SetOsqpSolverSetting(options_double, "adaptive_rho_tolerance",
-                       &(settings->adaptive_rho_tolerance));
-  SetOsqpSolverSetting(options_double, "adaptive_rho_fraction",
-                       &(settings->adaptive_rho_fraction));
-  SetOsqpSolverSetting(options_double, "time_limit", &(settings->time_limit));
-}
-
 template <typename C>
 void SetDualSolution(
     const std::vector<Binding<C>>& constraints,
@@ -325,10 +253,10 @@ bool OsqpSolver::is_available() {
   return true;
 }
 
-void OsqpSolver::DoSolve(const MathematicalProgram& prog,
-                         const Eigen::VectorXd& initial_guess,
-                         const SolverOptions& merged_options,
-                         MathematicalProgramResult* result) const {
+void OsqpSolver::DoSolve2(const MathematicalProgram& prog,
+                          const Eigen::VectorXd& initial_guess,
+                          internal::SpecificOptions* options,
+                          MathematicalProgramResult* result) const {
   OsqpSolverDetails& solver_details =
       result->SetSolverDetailsType<OsqpSolverDetails>();
 
@@ -338,11 +266,12 @@ void OsqpSolver::DoSolve(const MathematicalProgram& prog,
   // OSQP is written in C, so this function will be in C style.
 
   // Get the cost for the QP.
-  Eigen::SparseMatrix<c_float> P_sparse;
+  // Since OSQP 0.6.0 the P matrix is required to be upper triangular.
+  Eigen::SparseMatrix<c_float> P_upper_sparse;
   std::vector<c_float> q(prog.num_vars(), 0);
   double constant_cost_term{0};
 
-  ParseQuadraticCosts(prog, &P_sparse, &q, &constant_cost_term);
+  ParseQuadraticCosts(prog, &P_upper_sparse, &q, &constant_cost_term);
   ParseLinearCosts(prog, &q, &constant_cost_term);
 
   // linear_constraint_start_row[binding] stores the starting row index in A
@@ -362,19 +291,28 @@ void OsqpSolver::DoSolve(const MathematicalProgram& prog,
 
   data->n = prog.num_vars();
   data->m = A_sparse.rows();
-  data->P = EigenSparseToCSC(P_sparse);
+  data->P = EigenSparseToCSC(P_upper_sparse);
   data->q = q.data();
   data->A = EigenSparseToCSC(A_sparse);
   data->l = l.data();
   data->u = u.data();
 
-  // Define Solver settings as default.
-  // Problem settings
+  // Create the settings, initialized to the upstream defaults.
   OSQPSettings* settings =
       static_cast<OSQPSettings*>(c_malloc(sizeof(OSQPSettings)));
   osqp_set_default_settings(settings);
-
-  SetOsqpSolverSettings(merged_options, settings);
+  // Customize the defaults for Drake.
+  // - Default polish to true, to get an accurate solution.
+  // - Disable adaptive rho, for determinism.
+  settings->polish = 1;
+  settings->adaptive_rho_interval = ADAPTIVE_RHO_FIXED;
+  // Apply the user's additional options (if any).
+  options->Respell([](const auto& common, auto* respelled) {
+    respelled->emplace("verbose", common.print_to_console ? 1 : 0);
+    // OSQP does not support setting the number of threads so we ignore the
+    // kMaxThreads option.
+  });
+  options->CopyToSerializableStruct(settings);
 
   // If any step fails, it will set the solution_result and skip other steps.
   std::optional<SolutionResult> solution_result;
@@ -389,8 +327,7 @@ void OsqpSolver::DoSolve(const MathematicalProgram& prog,
   }
 
   if (!solution_result && initial_guess.array().isFinite().all()) {
-    const c_int osqp_warm_err = osqp_warm_start_x(
-        work, initial_guess.data());
+    const c_int osqp_warm_err = osqp_warm_start_x(work, initial_guess.data());
     if (osqp_warm_err != 0) {
       solution_result = SolutionResult::kInvalidInput;
     }
@@ -417,6 +354,7 @@ void OsqpSolver::DoSolve(const MathematicalProgram& prog,
     solver_details.solve_time = work->info->solve_time;
     solver_details.polish_time = work->info->polish_time;
     solver_details.run_time = work->info->run_time;
+    solver_details.rho_updates = work->info->rho_updates;
 
     switch (work->info->status_val) {
       case OSQP_SOLVED:

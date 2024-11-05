@@ -9,9 +9,8 @@ listens for command messages.
 It is intended to operate in the "no ground truth" regime, i.e, the only LCM
 messages it knows about are the ones used by the actual hardware. The one
 messaging difference from real life is that we emit visualization messages (for
-Meldis, or the legacy `drake_visualizer` application of days past) so that you
-can watch a simulation on your screen while some (separate) controller operates
-the robot, without extra hassle.
+Meldis) so that you can watch a simulation on your screen while some (separate)
+controller operates the robot, without extra hassle.
 
 Drake maintainers should keep this file in sync with hardware_sim.py. */
 
@@ -93,8 +92,8 @@ void Simulation::Setup() {
   DiagramBuilder<double> builder;
 
   // Create the multibody plant and scene graph.
-  auto [sim_plant, scene_graph] =
-      AddMultibodyPlant(scenario_.plant_config, &builder);
+  auto [sim_plant, scene_graph] = AddMultibodyPlant(
+      scenario_.plant_config, scenario_.scene_graph_config, &builder);
 
   // Add model directives.
   std::vector<ModelInstanceInfo> added_models;

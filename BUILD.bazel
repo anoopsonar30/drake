@@ -1,9 +1,9 @@
 # This file is named BUILD.bazel instead of the more typical BUILD, so that on
 # OSX it won't conflict with a build artifacts directory named "build".
 
-load("//tools/skylark:py.bzl", "py_library")
 load("//tools/install:install.bzl", "install", "install_test")
 load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:py.bzl", "py_library")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -40,33 +40,22 @@ filegroup(
     data = [
         "//bindings/pydrake/multibody:models",
         "//examples/acrobot:models",
-        "//examples/atlas:models",
         "//examples/hardware_sim:demo_data",
-        "//examples/hydroelastic/ball_plate:floor_files",
-        "//examples/hydroelastic/ball_plate:plate_files",
-        "//examples/hydroelastic/python_ball_paddle:ball_paddle_files",
+        "//examples/hydroelastic/ball_plate:models",
+        "//examples/hydroelastic/python_ball_paddle:models",
         "//examples/hydroelastic/python_nonconvex_mesh:models",
         "//examples/hydroelastic/spatula_slip_control:models",
         "//examples/kuka_iiwa_arm/models",
-        "//examples/manipulation_station:models",
         "//examples/multibody/cart_pole:models",
+        "//examples/multibody/deformable:models",
         "//examples/multibody/four_bar:models",
         "//examples/pendulum:models",
         "//examples/planar_gripper:models",
-        "//examples/pr2:models",
         "//examples/quadrotor:models",
         "//examples/scene_graph:models",
-        "//examples/simple_gripper:simple_gripper_models",
-        "//manipulation/models/allegro_hand_description:models",
-        "//manipulation/models/franka_description:models",
-        "//manipulation/models/iiwa_description:models",
-        "//manipulation/models/jaco_description:models",
-        "//manipulation/models/realsense2_description:models",
-        "//manipulation/models/tri_homecart:models",
-        "//manipulation/models/ur3e:models",
-        "//manipulation/models/wsg_50_description:models",
-        "//manipulation/models/ycb:models",
+        "//examples/simple_gripper:models",
         "//multibody/benchmarks/acrobot:models",
+        "@drake_models",
     ],
     visibility = ["//:__subpackages__"],
 )
@@ -85,32 +74,11 @@ filegroup(
         "//geometry:test_obj_files",
         "//geometry:test_stl_files",
         "//geometry:test_vtk_files",
+        "//geometry:environment_maps",
+        "//geometry/render_gltf_client:merge_resources",
+        "//geometry/render_gltf_client:gltf_client_test_models",
     ],
     visibility = ["//tools:__pkg__"],
-)
-
-# To create a manifest of all installed files for use by drake_bazel_installed,
-# we declare an install target that contains almost everything -- but it can't
-# contain the bazel logic that is generated based on the manifest, so we'll add
-# that in below in the final :install target.
-install(
-    name = "all_install_targets_except_bazel",
-    data = ["package.xml"],
-    docs = ["LICENSE.TXT"],
-    visibility = ["//tools/install/bazel:__pkg__"],
-    deps = [
-        "//bindings/pydrake:install",
-        "//common:install",
-        "//examples:install",
-        "//geometry:install",
-        "//lcmtypes:install",
-        "//manipulation/models:install_data",
-        "//multibody/parsing:install",
-        "//setup:install",
-        "//tools/install/libdrake:install",
-        "//tools/workspace:install_external_packages",
-        "//tutorials:install",
-    ],
 )
 
 _INSTALL_TEST_COMMANDS = "install_test_commands"
@@ -118,9 +86,19 @@ _INSTALL_TEST_COMMANDS = "install_test_commands"
 install(
     name = "install",
     install_tests_script = _INSTALL_TEST_COMMANDS,
+    data = ["package.xml"],
+    docs = ["LICENSE.TXT"],
     deps = [
-        ":all_install_targets_except_bazel",
-        "//tools/install/bazel:install",
+        "//bindings/pydrake:install",
+        "//common:install",
+        "//examples:install",
+        "//geometry:install",
+        "//lcmtypes:install",
+        "//multibody/parsing:install",
+        "//setup:install",
+        "//tools/install/libdrake:install",
+        "//tools/workspace:install_external_packages",
+        "//tutorials:install",
     ],
 )
 
@@ -134,8 +112,8 @@ install_test(
         _INSTALL_TEST_COMMANDS,
     ],
     tags = [
-        # Running acceptance tests under coverage (kcov) can fail for presently
-        # unknown reasons when it comes to drake_visualizer, so skip them.
+        # Running acceptance tests under coverage (kcov) probably burns more CI
+        # time and flakiness compared to any upside.
         "no_kcov",
         # Running acceptance tests under Valgrind tools is extremely slow and
         # of limited value, so skip them.

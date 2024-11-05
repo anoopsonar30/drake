@@ -37,11 +37,13 @@ namespace multibody {
 template <typename T>
 class ForceElement : public MultibodyElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ForceElement)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ForceElement);
 
   /// Default constructor for a generic force element.
   explicit ForceElement(ModelInstanceIndex model_instance)
       : MultibodyElement<T>(model_instance) {}
+
+  ~ForceElement() override;
 
   /// Returns this element's unique index.
   ForceElementIndex index() const {
@@ -159,7 +161,7 @@ class ForceElement : public MultibodyElement<T> {
   // MultibodyTree::CloneToScalar().
   template <typename ToScalar>
   std::unique_ptr<ForceElement<ToScalar>> CloneToScalar(
-  const internal::MultibodyTree<ToScalar>& cloned_tree) const {
+      const internal::MultibodyTree<ToScalar>& cloned_tree) const {
     return DoCloneToScalar(cloned_tree);
   }
   /// @endcond
@@ -183,6 +185,16 @@ class ForceElement : public MultibodyElement<T> {
       const internal::VelocityKinematicsCache<T>& vc,
       MultibodyForces<T>* forces) const = 0;
 
+  /// Called by DoDeclareParameters(). Derived classes may choose to override
+  /// to declare their sub-class specific parameters.
+  virtual void DoDeclareForceElementParameters(
+      internal::MultibodyTreeSystem<T>*) {}
+
+  /// Called by DoSetDefaultParameters(). Derived classes may choose to override
+  /// to set their sub-class specific parameters.
+  virtual void DoSetDefaultForceElementParameters(
+      systems::Parameters<T>*) const {}
+
   /// @name Methods to make a clone templated on different scalar types.
   ///
   /// Specific force element subclasses must implement these to support scalar
@@ -205,20 +217,21 @@ class ForceElement : public MultibodyElement<T> {
   ///    public:
   ///     // Class's constructor.
   ///     SpringElement(
-  ///       const Body<T>& body1, const Body<T>& body2, double stiffness);
+  ///       const RigidBody<T>& body1, const RigidBody<T>& body2,
+  ///       double stiffness);
   ///     // Get the first body to which this spring is connected.
-  ///     const Body<T>& get_body1() const;
+  ///     const RigidBody<T>& get_body1() const;
   ///     // Get the second body to which this spring is connected.
-  ///     const Body<T>& get_body2() const;
+  ///     const RigidBody<T>& get_body2() const;
   ///     // Get the spring stiffness constant.
   ///     double get_stiffness() const;
   ///    protected:
   ///     // Implementation of the scalar conversion from T to double.
   ///     std::unique_ptr<ForceElement<double>> DoCloneToScalar(
   ///       const MultibodyTree<double>& tree_clone) const) {
-  ///         const Body<ToScalar>& body1_clone =
+  ///         const RigidBody<ToScalar>& body1_clone =
   ///           tree_clone.get_variant(get_body1());
-  ///         const Body<ToScalar>& body2_clone =
+  ///         const RigidBody<ToScalar>& body2_clone =
   ///           tree_clone.get_variant(get_body2());
   ///         return std::make_unique<SpringElement<double>>(
   ///           body1_clone, body2_clone, get_stiffness());
@@ -252,6 +265,17 @@ class ForceElement : public MultibodyElement<T> {
   // At MultibodyTree::Finalize() time, each force element retrieves its
   // topology from the parent MultibodyTree.
   void DoSetTopology(const internal::MultibodyTreeTopology&) final {}
+
+  // Implementation for MultibodyElement::DoDeclareParameters().
+  void DoDeclareParameters(
+      internal::MultibodyTreeSystem<T>* tree_system) final {
+    DoDeclareForceElementParameters(tree_system);
+  }
+
+  // Implementation for MultibodyElement::DoSetDefaultParameters().
+  void DoSetDefaultParameters(systems::Parameters<T>* parameters) const final {
+    DoSetDefaultForceElementParameters(parameters);
+  }
 };
 
 }  // namespace multibody

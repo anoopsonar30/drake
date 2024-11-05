@@ -14,8 +14,11 @@
 namespace drake {
 namespace multibody {
 
-template <typename T> class Body;
+template <typename T>
+class RigidBody;
 
+// Don't let clang-format wrap long @image lines.
+// clang-format off
 /// This ForceElement models a massless flexible bushing that connects a frame A
 /// of a link (body) L0 to a frame C of a link (body) L1.  The bushing can apply
 /// a torque and force due to stiffness (spring) and dissipation (damper)
@@ -316,13 +319,14 @@ template <typename T> class Body;
 /// @note Per issue #12982, do not directly or indirectly call the following
 /// methods as they have not yet been implemented and throw an exception:
 /// CalcPotentialEnergy(), CalcConservativePower(), CalcNonConservativePower().
+// clang-format on
 template <typename T>
 class LinearBushingRollPitchYaw final : public ForceElement<T> {
   // TODO(Mitiguy) Add gimbal picture at "Relationship of 𝐭 to τ".
   // TODO(Mitiguy) Per issue #12982, implement CalcPotentialEnergy(),
   //  CalcConservativePower(), CalcNonConservativePower().
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearBushingRollPitchYaw)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LinearBushingRollPitchYaw);
 
   /// Construct a LinearBushingRollPitchYaw B that connects frames A and C,
   /// where frame A is welded to a link L0 and frame C is welded to a link L1.
@@ -355,11 +359,13 @@ class LinearBushingRollPitchYaw final : public ForceElement<T> {
                             const Vector3<double>& force_stiffness_constants,
                             const Vector3<double>& force_damping_constants);
 
+  ~LinearBushingRollPitchYaw() override;
+
   /// Returns link (body) L0 (frame A is welded to link L0).
-  const Body<T>& link0() const { return frameA().body(); }
+  const RigidBody<T>& link0() const { return frameA().body(); }
 
   /// Returns link (body) L1 (frame C is welded to link L1).
-  const Body<T>& link1() const { return frameC().body(); }
+  const RigidBody<T>& link1() const { return frameC().body(); }
 
   /// Returns frame A, which is the frame that is welded to link (body) L0 and
   /// attached to the bushing.
@@ -503,31 +509,49 @@ class LinearBushingRollPitchYaw final : public ForceElement<T> {
   SpatialForce<T> CalcBushingSpatialForceOnFrameC(
       const systems::Context<T>& context) const;
 
- protected:
-  // Implementation for MultibodyElement::DoDeclareParameters().
-  void DoDeclareParameters(
-      internal::MultibodyTreeSystem<T>* tree_system) override {
-    // Declare parent classes' parameters
-    ForceElement<T>::DoDeclareParameters(tree_system);
-
-    torque_stiffness_parameter_index_ = this->DeclareNumericParameter(
-        tree_system, systems::BasicVector<T>(
-                         torque_stiffness_constants_.template cast<T>()));
-
-    torque_damping_parameter_index_ = this->DeclareNumericParameter(
-        tree_system,
-        systems::BasicVector<T>(torque_damping_constants_.template cast<T>()));
-
-    force_stiffness_parameter_index_ = this->DeclareNumericParameter(
-        tree_system,
-        systems::BasicVector<T>(force_stiffness_constants_.template cast<T>()));
-
-    force_damping_parameter_index_ = this->DeclareNumericParameter(
-        tree_system,
-        systems::BasicVector<T>(force_damping_constants_.template cast<T>()));
+ private:
+  // Implementation for ForceElement::DoDeclareForceElementParameters().
+  void DoDeclareForceElementParameters(
+      internal::MultibodyTreeSystem<T>* tree_system) final {
+    // Sets model values to dummy values to indicate that the model values are
+    // not used. This class stores the the default values of the parameters.
+    torque_stiffness_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(3));
+    torque_damping_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(3));
+    force_stiffness_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(3));
+    force_damping_parameter_index_ =
+        this->DeclareNumericParameter(tree_system, systems::BasicVector<T>(3));
   }
 
- private:
+  // Implementation for ForceElement::DoSetDefaultForceElementParameters().
+  void DoSetDefaultForceElementParameters(
+      systems::Parameters<T>* parameters) const final {
+    // Set the default stiffness and damping parameters.
+    systems::BasicVector<T>& torque_stiffness_parameter =
+        parameters->get_mutable_numeric_parameter(
+            torque_stiffness_parameter_index_);
+    systems::BasicVector<T>& torque_damping_parameter_ =
+        parameters->get_mutable_numeric_parameter(
+            torque_damping_parameter_index_);
+    systems::BasicVector<T>& force_stiffness_parameter_ =
+        parameters->get_mutable_numeric_parameter(
+            force_stiffness_parameter_index_);
+    systems::BasicVector<T>& force_damping_parameter_ =
+        parameters->get_mutable_numeric_parameter(
+            force_damping_parameter_index_);
+
+    torque_stiffness_parameter.set_value(
+        torque_stiffness_constants_.template cast<T>());
+    torque_damping_parameter_.set_value(
+        torque_damping_constants_.template cast<T>());
+    force_stiffness_parameter_.set_value(
+        force_stiffness_constants_.template cast<T>());
+    force_damping_parameter_.set_value(
+        force_damping_constants_.template cast<T>());
+  }
+
   // Friend class for accessing protected/private internals of this class.
   friend class BushingTester;
 
@@ -606,7 +630,7 @@ class LinearBushingRollPitchYaw final : public ForceElement<T> {
   // @throws std::exception if pitch angle is near gimbal-lock.  For more info,
   // @see RollPitchYaw::DoesCosPitchAngleViolateGimbalLockTolerance().
   static void ThrowPitchAngleViolatesGimbalLockTolerance(
-    const T& pitch_angle, const char* function_name);
+      const T& pitch_angle, const char* function_name);
 
   // The efficient algorithm CalcR_AB() above is verified in debug builds by
   // calculating the `θ λ` AngleAxis from R_AC and then forming R_AB_expected
@@ -685,7 +709,8 @@ class LinearBushingRollPitchYaw final : public ForceElement<T> {
   // @note `w_AC_A ≠ [q̇₀ q̇₁ q̇₂]`
   // @see CalcBushingRollPitchYawAngleRates() for `[q̇₀ q̇₁ q̇₂]`.
   Vector3<T> Calcw_AC_A(const systems::Context<T>& context) const {
-    return frameC().CalcSpatialVelocity(context, frameA(), frameA())
+    return frameC()
+        .CalcSpatialVelocity(context, frameA(), frameA())
         .rotational();
   }
 
@@ -780,9 +805,8 @@ class LinearBushingRollPitchYaw final : public ForceElement<T> {
   systems::NumericParameterIndex force_damping_parameter_index_;
 };
 
-
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::LinearBushingRollPitchYaw)
+    class ::drake::multibody::LinearBushingRollPitchYaw);

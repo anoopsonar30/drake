@@ -1,12 +1,13 @@
 import pydrake.geometry as mut
 
 import copy
+import logging
 import unittest
 
 import numpy as np
 
+from pydrake.common import FindResourceOrThrow
 from pydrake.common.test_utilities import numpy_compare
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.value import Value
 from pydrake.math import RigidTransform
 from pydrake.systems.framework import (
@@ -49,30 +50,100 @@ class TestGeometryRender(unittest.TestCase):
         self.assertIn("spot", repr(light))
         copy.copy(light)
 
+    def test_equirectangular_map(self):
+        # A default constructor exists.
+        mut.EquirectangularMap()
+
+        # The kwarg constructor also works.
+        map = mut.EquirectangularMap(path="test.hdr")
+        self.assertEqual(map.path, "test.hdr")
+
+        self.assertIn("path", repr(map))
+        copy.copy(map)
+
+    def test_environment_map(self):
+        # A default constructor exists.
+        mut.EnvironmentMap()
+
+        # The kwarg constructor also works.
+        params = mut.EnvironmentMap(skybox=False)
+        self.assertFalse(params.skybox)
+        self.assertIsInstance(params.texture, mut.NullTexture)
+
+        params = mut.EnvironmentMap(
+            texture=mut.EquirectangularMap(path="test.hdr"))
+        self.assertIn("EquirectangularMap", repr(params))
+        copy.copy(params)
+
+    def test_gltf_extension(self):
+        # A default constructor exists.
+        mut.GltfExtension()
+
+        # The kwarg constructor also works.
+        params = mut.GltfExtension(warn_unimplemented=False)
+        self.assertFalse(params.warn_unimplemented)
+
+        # The repr and copy both work.
+        self.assertIn("warn_unimplemented=", repr(params))
+        copy.copy(params)
+
     def test_render_engine_vtk_params(self):
         # Confirm default construction of params.
         params = mut.RenderEngineVtkParams()
         self.assertEqual(params.default_diffuse, None)
 
         diffuse = np.array((1.0, 0.0, 0.0, 0.0))
-        params = mut.RenderEngineVtkParams(default_diffuse=diffuse)
+        params = mut.RenderEngineVtkParams(
+            default_diffuse=diffuse,
+            environment_map=mut.EnvironmentMap(
+                skybox=False,
+                texture=mut.EquirectangularMap(path="local.hdr")))
         self.assertTrue((params.default_diffuse == diffuse).all())
 
         self.assertIn("default_diffuse", repr(params))
         copy.copy(params)
 
-    def test_render_engine_vtk_params_deprecated(self):
-        """The default_label attribute is deprecated; make sure it still works,
-        for now.
+    def test_render_vtk_gltf_warnings(self):
+        """The fully_textured_pyramid.gltf offers the basisu extension but our
+        RenderEngineVtk doesn't implement that. The "not implemented" warning
+        is suppressed by default, but if we reset the suppressions it should
+        show up.
         """
+        for should_warn in [False, True]:
+            with self.subTest(should_warn=should_warn):
+                self._do_test_render_vtk_gltf_warnings(
+                    should_warn=should_warn)
+
+    def _do_test_render_vtk_gltf_warnings(self, *, should_warn):
+        # Create the render engine.
+        expected_level = logging.WARNING if should_warn else logging.DEBUG
         params = mut.RenderEngineVtkParams()
-        with catch_drake_warnings(expected_count=1):
-            self.assertEqual(params.default_label, None)
-        label = mut.RenderLabel(10)
-        with catch_drake_warnings(expected_count=1):
-            params = mut.RenderEngineVtkParams(default_label=label)
-        with catch_drake_warnings(expected_count=1):
-            self.assertEqual(params.default_label, label)
+        if should_warn:
+            # All unimplemented extensions will warn.
+            params.gltf_extensions = dict()
+        renderer = mut.MakeRenderEngineVtk(params=params)
+
+        # Prepare the mesh to be loaded.
+        material = mut.PerceptionProperties()
+        material.AddProperty("label", "id", mut.RenderLabel(1))
+        geom_id = mut.GeometryId.get_new_id()
+        filename = FindResourceOrThrow(
+            "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf")
+
+        # Load the mesh, which should emit exactly one log message.
+        with self.assertLogs("drake", logging.DEBUG) as cm:
+            renderer.RegisterVisual(
+                id=geom_id,
+                shape=mut.Mesh(filename),
+                properties=material,
+                X_WG=RigidTransform.Identity(),
+                needs_updates=False)
+        self.assertEqual(len(cm.records), 1, cm)
+        record = cm.records[0]
+
+        # The message mentioned basisu using the proper severity level.
+        self.assertIn("KHR_texture_basisu", record.msg)
+        self.assertEqual(record.levelno, expected_level)
 
     def test_render_engine_gl_params(self):
         # A default constructor exists.
@@ -90,16 +161,6 @@ class TestGeometryRender(unittest.TestCase):
         self.assertIn("default_clear_color", repr(params))
         copy.copy(params)
 
-    def test_render_engine_gl_params_deprecated(self):
-        """The default_label attribute is deprecated; make sure it still works,
-        for now.
-        """
-        label = mut.RenderLabel(10)
-        with catch_drake_warnings(expected_count=1):
-            params = mut.RenderEngineGlParams(default_label=label)
-        with catch_drake_warnings(expected_count=1):
-            self.assertEqual(params.default_label, label)
-
     def test_render_engine_gltf_client_params(self):
         # A default constructor exists.
         mut.RenderEngineGltfClientParams()
@@ -116,16 +177,6 @@ class TestGeometryRender(unittest.TestCase):
 
         self.assertIn("render_endpoint", repr(params))
         copy.copy(params)
-
-    def test_render_engine_gltf_client_params_deprecated(self):
-        """The render_label attribute is deprecated; make sure it still works,
-        for now.
-        """
-        label = mut.RenderLabel(10)
-        with catch_drake_warnings(expected_count=1):
-            dut = mut.RenderEngineGltfClientParams(default_label=label)
-        with catch_drake_warnings(expected_count=1):
-            self.assertEqual(dut.default_label, label)
 
     def test_render_label(self):
         RenderLabel = mut.RenderLabel

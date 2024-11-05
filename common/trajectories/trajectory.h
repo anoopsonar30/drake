@@ -21,7 +21,7 @@ namespace trajectories {
 template <typename T>
 class Trajectory {
  public:
-  virtual ~Trajectory() = default;
+  virtual ~Trajectory();
 
   /**
    * @return A deep copy of this Trajectory.
@@ -67,7 +67,7 @@ class Trajectory {
    * Evaluates the derivative of `this` at the given time @p t.
    * Returns the nth derivative, where `n` is the value of @p derivative_order.
    *
-   * @pre derivative_order must be non-negative.
+   * @throws std::exception if derivative_order is negative.
    */
   MatrixX<T> EvalDerivative(const T& t, int derivative_order = 1) const;
 
@@ -76,6 +76,7 @@ class Trajectory {
    * @param derivative_order The number of times to take the derivative before
    * returning.
    * @return The nth derivative of this object.
+   * @throws std::exception if derivative_order is negative.
    */
   std::unique_ptr<Trajectory<T>> MakeDerivative(int derivative_order = 1) const;
 
@@ -95,7 +96,7 @@ class Trajectory {
 
  protected:
   // Final subclasses are allowed to make copy/move/assign public.
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Trajectory)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Trajectory);
   Trajectory() = default;
 
   virtual bool do_has_derivative() const;
@@ -110,4 +111,4 @@ class Trajectory {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::Trajectory)
+    class drake::trajectories::Trajectory);

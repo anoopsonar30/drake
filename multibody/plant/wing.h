@@ -6,7 +6,7 @@
 #include "drake/common/eigen_types.h"
 #include "drake/multibody/plant/externally_applied_spatial_force.h"
 #include "drake/multibody/plant/multibody_plant.h"
-#include "drake/multibody/tree/body.h"
+#include "drake/multibody/tree/rigid_body.h"
 #include "drake/systems/framework/diagram_builder.h"
 #include "drake/systems/framework/leaf_system.h"
 
@@ -98,6 +98,8 @@ class Wing final : public systems::LeafSystem<T> {
   explicit Wing(const Wing<U>& other)
       : Wing<T>(other.body_index_, other.surface_area_, other.X_BodyWing_,
                 other.default_fluid_density_) {}
+
+  ~Wing() final;
 
   /** Returns a reference to the body_poses input port.  It is anticipated
   that this port will be connected the body_poses output port of a
@@ -198,4 +200,4 @@ class Wing final : public systems::LeafSystem<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::Wing)
+    class drake::multibody::Wing);

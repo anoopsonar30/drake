@@ -1,6 +1,7 @@
 #pragma once
 
-/* @file A collection of utilities to facilitate proximity query testing. The
+/* @file
+ A collection of utilities to facilitate proximity query testing. The
  functionality specifically targets proximity queries that are signed distance
  (or equivalent to signed distance). It allows for compact representation of
  test scenarios with outcome expectations and provides the common code to
@@ -447,6 +448,6 @@ struct formatter<drake::geometry::internal::GeometryType>
 }  // namespace fmt
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::CharacterizeResultTest)
+    class ::drake::geometry::internal::CharacterizeResultTest);
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::ShapeConfigurations)
+    class ::drake::geometry::internal::ShapeConfigurations);

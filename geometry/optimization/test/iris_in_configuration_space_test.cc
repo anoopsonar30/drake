@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/common/test_utilities/maybe_pause_for_user.h"
 #include "drake/geometry/meshcat.h"
@@ -10,6 +11,12 @@
 #include "drake/geometry/test_utilities/meshcat_environment.h"
 #include "drake/multibody/inverse_kinematics/inverse_kinematics.h"
 #include "drake/multibody/parsing/parser.h"
+#include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/tree/quaternion_floating_joint.h"
+#include "drake/multibody/tree/rigid_body.h"
+#include "drake/multibody/tree/rpy_floating_joint.h"
+#include "drake/solvers/ipopt_solver.h"
+#include "drake/solvers/snopt_solver.h"
 #include "drake/systems/framework/diagram_builder.h"
 
 namespace drake {
@@ -75,6 +82,245 @@ GTEST_TEST(IrisInConfigurationSpaceTest, JointLimits) {
   EXPECT_FALSE(region.PointInSet(Vector1d{qmax + kTol}));
 }
 
+// Two revolute joints, the first of which has limits [-1.0, 1.0], and the
+// second of which is without limits. Iris should return the box
+// [-1.0, 1.0] x [θ - π/2 + c, θ + π/2 - c], where c is the convexity radius
+// stepback.
+GTEST_TEST(IrisInConfigurationSpaceTest, ContinuousRevoluteJoint) {
+  const std::string continuous_urdf = R"(
+<robot name="limits">
+  <link name="movable1">
+    <collision>
+      <geometry><box size="1 1 1"/></geometry>
+    </collision>
+  </link>
+  <link name="movable2">
+    <collision>
+      <geometry><box size="1 1 1"/></geometry>
+    </collision>
+  </link>
+  <joint name="joint1" type="revolute">
+    <axis xyz="1 0 0"/>
+    <parent link="world"/>
+    <child link="movable1"/>
+    <limit lower="-1" upper="1"/>
+  </joint>
+  <joint name="joint2" type="continuous">
+    <axis xyz="1 0 0"/>
+    <parent link="movable1"/>
+    <child link="movable2"/>
+  </joint>
+</robot>
+)";
+
+  const Vector2d sample = Vector2d::Zero();
+  IrisOptions options;
+  HPolyhedron region = IrisFromUrdf(continuous_urdf, sample, options);
+
+  EXPECT_EQ(region.ambient_dimension(), 2);
+  EXPECT_EQ(region.A().rows(), 4);
+
+  const double kTol = 1e-5;
+  double q1min = -1.0;
+  double q1max = 1.0;
+  EXPECT_TRUE(region.PointInSet(Vector2d{q1min + kTol, 0.0}));
+  EXPECT_TRUE(region.PointInSet(Vector2d{q1max - kTol, 0.0}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{q1min - kTol, 0.0}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{q1max + kTol, 0.0}));
+
+  double q2min = -M_PI_2 + options.convexity_radius_stepback;
+  double q2max = M_PI_2 - options.convexity_radius_stepback;
+  EXPECT_TRUE(region.PointInSet(Vector2d{0.0, q2min + kTol}));
+  EXPECT_TRUE(region.PointInSet(Vector2d{0.0, q2max - kTol}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{0.0, q2min - kTol}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{0.0, q2max + kTol}));
+
+  // Negative convexity radius stepback is allowed.
+  options.convexity_radius_stepback = -0.25;
+  region = IrisFromUrdf(continuous_urdf, sample, options);
+
+  EXPECT_EQ(region.ambient_dimension(), 2);
+  EXPECT_EQ(region.A().rows(), 4);
+
+  q2min = -M_PI_2 + options.convexity_radius_stepback;
+  q2max = M_PI_2 - options.convexity_radius_stepback;
+  EXPECT_TRUE(region.PointInSet(Vector2d{0.0, q2min + kTol}));
+  EXPECT_TRUE(region.PointInSet(Vector2d{0.0, q2max - kTol}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{0.0, q2min - kTol}));
+  EXPECT_FALSE(region.PointInSet(Vector2d{0.0, q2max + kTol}));
+
+  // Convexity radius must be strictly less than π/2
+  options.convexity_radius_stepback = M_PI_2;
+  EXPECT_THROW(IrisFromUrdf(continuous_urdf, sample, options), std::exception);
+}
+
+// Check that IRIS correctly handles the continuous revolute component of a
+// planar joint.
+GTEST_TEST(IrisInConfigurationSpaceTest, PlanarJoint) {
+  const std::string planar_urdf = R"(
+<robot name="limits">
+  <link name="movable">
+    <collision>
+      <geometry><box size="1 1 1"/></geometry>
+    </collision>
+  </link>
+  <joint name="movable" type="planar">
+    <axis xyz="0 0 1"/>
+    <parent link="world"/>
+    <child link="movable"/>
+  </joint>
+</robot>
+)";
+
+  systems::DiagramBuilder<double> builder;
+  multibody::MultibodyPlant<double>& plant =
+      multibody::AddMultibodyPlantSceneGraph(&builder, 0.0);
+  multibody::Parser parser(&plant);
+  parser.package_map().AddPackageXml(FindResourceOrThrow(
+      "drake/multibody/parsing/test/box_package/package.xml"));
+  parser.AddModelsFromString(planar_urdf, "urdf");
+
+  plant.get_mutable_joint(multibody::JointIndex(0))
+      .set_position_limits(Eigen::Vector3d{-1.0, -1.0, -kInf},
+                           Eigen::Vector3d{1.0, 1.0, kInf});
+
+  plant.Finalize();
+  auto diagram = builder.Build();
+
+  const Eigen::Vector3d sample = Eigen::Vector3d::Zero();
+  auto context = diagram->CreateDefaultContext();
+  plant.SetPositions(&plant.GetMyMutableContextFromRoot(context.get()), sample);
+  IrisOptions options;
+  HPolyhedron region = IrisInConfigurationSpace(
+      plant, plant.GetMyContextFromRoot(*context), options);
+
+  EXPECT_EQ(region.ambient_dimension(), 3);
+  EXPECT_EQ(region.A().rows(), 6);
+
+  const double kTol = 1e-5;
+  double qmin = -M_PI_2 + options.convexity_radius_stepback;
+  double qmax = M_PI_2 - options.convexity_radius_stepback;
+  EXPECT_TRUE(region.PointInSet(Eigen::Vector3d{0.0, 0.0, qmin + kTol}));
+  EXPECT_TRUE(region.PointInSet(Eigen::Vector3d{0.0, 0.0, qmax - kTol}));
+  EXPECT_FALSE(region.PointInSet(Eigen::Vector3d{0.0, 0.0, qmin - kTol}));
+  EXPECT_FALSE(region.PointInSet(Eigen::Vector3d{0.0, 0.0, qmax + kTol}));
+
+  // If we don't set the position limits, then it should throw, since
+  // the prismatic components of the planar joint are unbounded.
+  DRAKE_EXPECT_THROWS_MESSAGE(IrisFromUrdf(planar_urdf, sample, options),
+                              ".*position limits.*");
+
+  // If we add an initial bounding region that bounds the planar degrees of
+  // freedom, it shouldn't error.
+  Eigen::MatrixXd A(4, 3);
+  Eigen::VectorXd b(4);
+  // clang-format off
+  A <<  1,  0, 0,
+       -1,  0, 0,
+        0,  1, 0,
+        0, -1, 0;
+  // clang-format on
+  b << 1, 1, 1, 1;
+  options.bounding_region = HPolyhedron{A, b};
+  EXPECT_NO_THROW(IrisFromUrdf(planar_urdf, sample, options));
+
+  // It still shouldn't error if we disable the boundedness check.
+  options.verify_domain_boundedness = false;
+  EXPECT_NO_THROW(IrisFromUrdf(planar_urdf, sample, options));
+
+  // If the initial bounding region doesn't actually bound the planar degrees of
+  // freedom, it should error.
+  Eigen::MatrixXd A2(1, 3);
+  Eigen::VectorXd b2(1);
+  A2 << 1, 0, 0;
+  b2 << 1;
+  options.bounding_region = HPolyhedron{A2, b2};
+  options.verify_domain_boundedness = true;
+  DRAKE_EXPECT_THROWS_MESSAGE(IrisFromUrdf(planar_urdf, sample, options),
+                              ".*position limits.*");
+}
+
+// Check that IRIS correctly handles the continuous revolute component(s) of a
+// roll-pitch-yaw floating joint.
+GTEST_TEST(IrisInConfigurationSpaceTest, RpyFloatingJoint) {
+  systems::DiagramBuilder<double> builder;
+  multibody::MultibodyPlant<double>& plant =
+      multibody::AddMultibodyPlantSceneGraph(&builder, 0.0);
+  const multibody::RigidBody<double>& body = plant.AddRigidBody("body");
+  plant.AddJoint<multibody::RpyFloatingJoint>("joint", plant.world_body(), {},
+                                              body, {});
+
+  plant.get_mutable_joint(multibody::JointIndex(0))
+      .set_position_limits(Vector6d(-kInf, -kInf, -kInf, -1.0, -1.0, -1.0),
+                           Vector6d(kInf, kInf, kInf, 1.0, 1.0, 1.0));
+
+  plant.Finalize();
+  auto diagram = builder.Build();
+
+  const Vector6d sample = Vector6d::Zero();
+  auto context = diagram->CreateDefaultContext();
+  plant.SetPositions(&plant.GetMyMutableContextFromRoot(context.get()), sample);
+  IrisOptions options;
+  HPolyhedron region = IrisInConfigurationSpace(
+      plant, plant.GetMyContextFromRoot(*context), options);
+
+  EXPECT_EQ(region.ambient_dimension(), 6);
+  EXPECT_EQ(region.A().rows(), 12);
+
+  const double kTol = 1e-5;
+  double qmax = M_PI_2 - options.convexity_radius_stepback;
+  for (const int i : std::vector<int>{-1, 1}) {
+    for (const int j : std::vector<int>{-1, 1}) {
+      for (const int k : std::vector<int>{-1, 1}) {
+        Vector6d point_out(i * (qmax + kTol), j * (qmax + kTol),
+                           k * (qmax + kTol), 0.0, 0.0, 0.0);
+        Vector6d point_in(i * (qmax - kTol), j * (qmax - kTol),
+                          k * (qmax - kTol), 0.0, 0.0, 0.0);
+        EXPECT_TRUE(region.PointInSet(point_in));
+        EXPECT_FALSE(region.PointInSet(point_out));
+      }
+    }
+  }
+
+  systems::DiagramBuilder<double> builder2;
+  multibody::MultibodyPlant<double>& plant2 =
+      multibody::AddMultibodyPlantSceneGraph(&builder2, 0.0);
+  const multibody::RigidBody<double>& body2 = plant2.AddRigidBody("body");
+  plant2.AddJoint<multibody::RpyFloatingJoint>("joint", plant2.world_body(), {},
+                                               body2, {});
+
+  plant2.Finalize();
+  auto diagram2 = builder2.Build();
+
+  // If we don't set the position limits, then it should throw, since
+  // the prismatic components of the planar joint are unbounded.
+  auto context2 = diagram2->CreateDefaultContext();
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      IrisInConfigurationSpace(plant2, plant2.GetMyContextFromRoot(*context2),
+                               options),
+      ".*position limits.*");
+}
+
+// Check that IRIS throws an intuitive error message if the user supplies a
+// plant with a QuaternionFloatingJoint.
+GTEST_TEST(IrisInConfigurationSpaceTest, QuaternionFloatingJoint) {
+  systems::DiagramBuilder<double> builder;
+  multibody::MultibodyPlant<double>& plant =
+      multibody::AddMultibodyPlantSceneGraph(&builder, 0.0);
+  const multibody::RigidBody<double>& body = plant.AddRigidBody("body");
+  plant.AddJoint<multibody::QuaternionFloatingJoint>(
+      "joint", plant.world_body(), {}, body, {});
+
+  plant.Finalize();
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  IrisOptions options;
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      IrisInConfigurationSpace(plant, plant.GetMyContextFromRoot(*context),
+                               options),
+      ".*not support QuaternionFloatingJoint.*");
+}
+
 const char boxes_urdf[] = R"""(
 <robot name="boxes">
   <link name="fixed">
@@ -138,7 +384,7 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConfigurationSpaceMargin) {
 }
 
 const char boxes_with_mesh_urdf[] = R"""(
-<robot name="boxes">
+<robot xmlns:drake="http://drake.mit.edu" name="boxes">
   <link name="fixed">
     <collision name="right">
       <origin rpy="0 0 0" xyz="2.5 0 0"/>
@@ -234,6 +480,19 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConfigurationObstacles) {
     EXPECT_TRUE(region.PointInSet(Vector1d{qmax - kTol}));
     EXPECT_FALSE(region.PointInSet(Vector1d{qmin - kTol}));
     EXPECT_FALSE(region.PointInSet(Vector1d{qmax + kTol}));
+
+    // Test solver options
+    // First change the counterexample solver options. We should get a different
+    // IRIS region.
+    options.solver_options.emplace(solvers::SolverOptions());
+    options.solver_options->SetOption(solvers::IpoptSolver::id(), "max_iter",
+                                      0);
+    options.solver_options->SetOption(solvers::SnoptSolver::id(),
+                                      "Major Iterations Limit", 0);
+    const HPolyhedron region_no_counterexample =
+        IrisFromUrdf(boxes_urdf, sample, options);
+    EXPECT_FALSE(CompareMatrices(region.A(), region_no_counterexample.A()));
+    options.solver_options = std::nullopt;
   }
 
   // Configuration space obstacles align with task space obstacle.
@@ -326,6 +585,113 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConfigurationObstaclesMultipleBoxes) {
   EXPECT_FALSE(region.PointInSet(Vector2d(0.0, -.9)));
 }
 
+/* Test if the starting ellipse is far away from the seed point, and the seed
+point exits the polytope before the computations are over, then an error will be
+thrown. */
+GTEST_TEST(IrisInConfigurationSpaceTest, BadEllipseAndSample) {
+  IrisOptions options;
+  ConvexSets obstacles;
+  obstacles.emplace_back(VPolytope::MakeBox(Vector2d(0, 0), Vector2d(1, 1)));
+  options.configuration_obstacles = obstacles;
+  const Vector2d sample{-0.5, 0.5};
+  const Vector2d ellipse_center{0.8, -0.2};  // ellipse includes collision
+  Hyperellipsoid starting_ellipse =
+      Hyperellipsoid::MakeHypersphere(0.1, ellipse_center);
+  options.starting_ellipse = starting_ellipse;
+  options.require_sample_point_is_contained = true;
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      IrisFromUrdf(boxes_in_2d_urdf, sample, options),
+      ".*starting_ellipse not contain the seed point.*");
+}
+
+/* Same as boxes_in_2d_urdf, but without the first two collision geos.
+The point is to have faster iris computations in the following test.
+*/
+const char boxes_in_2d_urdf_no_collisions[] = R"""(
+<robot name="boxes">
+  <link name="movable">
+    <collision name="center">
+      <geometry><box size="1 1 1"/></geometry>
+    </collision>
+  </link>
+  <link name="for_joint"/>
+  <joint name="x" type="prismatic">
+    <axis xyz="1 0 0"/>
+    <limit lower="-2" upper="2"/>
+    <parent link="world"/>
+    <child link="for_joint"/>
+  </joint>
+  <joint name="y" type="prismatic">
+    <axis xyz="0 1 0"/>
+    <limit lower="-1" upper="1"/>
+    <parent link="for_joint"/>
+    <child link="movable"/>
+  </joint>
+</robot>
+)""";
+/* Make termination function such that the region will contain q1, q2.
+This is meant to generate Iris regions from edges.
+*/
+GTEST_TEST(IrisInConfigurationSpaceTest, TerminationFunc) {
+  ConvexSets obstacles;
+  obstacles.emplace_back(VPolytope::MakeBox(Vector2d(.1, .5), Vector2d(1, 1)));
+  obstacles.emplace_back(
+      VPolytope::MakeBox(Vector2d(-1, -1), Vector2d(-.1, -.5)));
+  obstacles.emplace_back(
+      HPolyhedron::MakeBox(Vector2d(.1, -1), Vector2d(1, -.5)));
+  obstacles.emplace_back(
+      HPolyhedron::MakeBox(Vector2d(-1, .5), Vector2d(-.1, 1)));
+  const Vector2d sample{0, 0};  // center of the bounding box.
+  std::function<bool(const HPolyhedron&)> always_false =
+      [&](const HPolyhedron&) {
+        return false;
+      };
+  IrisOptions options;
+  options.iteration_limit = 100;
+  options.termination_threshold = -1;
+  options.configuration_obstacles = obstacles;
+  options.random_seed = 0;
+  HPolyhedron without_termination =
+      IrisFromUrdf(boxes_in_2d_urdf_no_collisions, sample, options);
+  options.termination_func = always_false;
+  HPolyhedron with_always_false =
+      IrisFromUrdf(boxes_in_2d_urdf_no_collisions, sample, options);
+  // Region with always false termination function should be the same as region
+  // without the termination function
+  EXPECT_TRUE(with_always_false.ContainedIn(without_termination, 1e-6));
+  EXPECT_TRUE(without_termination.ContainedIn(with_always_false, 1e-6));
+  // now we add a termination function that will make the region contain q1, q2
+  const Vector2d q1{0.15, -0.45};
+  const Vector2d q2{-0.05, 0.75};
+  for (const auto& obstacle : obstacles) {
+    EXPECT_FALSE(obstacle->PointInSet(q1));
+    EXPECT_FALSE(obstacle->PointInSet(q2));
+  }
+  SetEdgeContainmentTerminationCondition(&options, q1, q2, 1e-3);
+  // Test that the termination function works with constraints as well
+  solvers::MathematicalProgram prog;
+  auto q = prog.NewContinuousVariables(2, "q");
+  prog.AddConstraint(q[0], -1, 0.16);
+  options.prog_with_additional_constraints = &prog;
+  HPolyhedron region_with_termination =
+      IrisFromUrdf(boxes_in_2d_urdf_no_collisions, sample, options);
+  EXPECT_TRUE(region_with_termination.PointInSet(q1));
+  EXPECT_TRUE(region_with_termination.PointInSet(q2));
+  // failure case when the provided edge is in collision
+  const Vector2d q3{-0.85, 0.75};
+  SetEdgeContainmentTerminationCondition(&options, q1, q3, 1e-3);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      IrisFromUrdf(boxes_in_2d_urdf_no_collisions, sample, options),
+      ".*the termination function returned false on the computation of the "
+      "initial region.*");
+  // failure case when the provided edge is out of the domain
+  const Vector2d q4{-0.85, 1.75};
+  SetEdgeContainmentTerminationCondition(&options, q1, q4, 1e-3);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      IrisFromUrdf(boxes_in_2d_urdf_no_collisions, sample, options),
+      ".*Please check the implementation of your termination_func.");
+}
+
 /* Box obstacles in one corner.
 ┌───────┬─────┐
 │       │     │
@@ -364,6 +730,41 @@ GTEST_TEST(IrisInConfigurationSpaceTest, StartingEllipse) {
   // last row of A is a scaling of [100, 1].
   EXPECT_NEAR(region_w_ellipse.A()(4, 0), 100 * region_w_ellipse.A()(4, 1),
               1e-6);
+}
+
+GTEST_TEST(IrisInConfigurationSpaceTest, BoundingRegion) {
+  const Vector2d sample{0.0, 0.0};
+  IrisOptions options;
+  options.iteration_limit = 1;
+  options.num_collision_infeasible_samples = 0;
+  ConvexSets obstacles;
+  obstacles.emplace_back(
+      VPolytope::MakeBox(Vector2d(0.2, 0.2), Vector2d(1, 1)));
+  options.configuration_obstacles = obstacles;
+  HPolyhedron region = IrisFromUrdf(boxes_in_2d_urdf, sample, options);
+
+  // Add a bounding region that halves the plant's joint limits.
+  options.bounding_region =
+      HPolyhedron::MakeBox(Vector2d(-1, -0.5), Vector2d(1, 0.5));
+  HPolyhedron region_w_bounding =
+      IrisFromUrdf(boxes_in_2d_urdf, sample, options);
+
+  // `region` should have only one additional half space beyond the initial
+  // polytope. `region_w_bounding` should have a further four half spaces since
+  // its initial polytope will have been intersected with
+  // `options.bounding_region`.
+  EXPECT_EQ(region.b().size(), 5);
+  EXPECT_EQ(region_w_bounding.b().size(), 9);
+
+  // The point (-1.5, -0.5) is within the plant's joint limits but outside the
+  // bounding region. It should be contained in region but not in
+  // region_w_bounding.
+  EXPECT_TRUE(region.PointInSet(Vector2d(-1.5, -0.5)));
+  EXPECT_FALSE(region_w_bounding.PointInSet(Vector2d(-1.5, -0.5)));
+
+  // A point closer to the origin should be in both regions.
+  EXPECT_TRUE(region.PointInSet(Vector2d(-0.5, -0.25)));
+  EXPECT_TRUE(region_w_bounding.PointInSet(Vector2d(-0.5, -0.25)));
 }
 
 // Three spheres.  Two on the outside are fixed.  One in the middle on a
@@ -772,6 +1173,15 @@ GTEST_TEST(IrisInConfigurationSpaceTest, ConvexConfigurationSpace) {
 
     MaybePauseForUser();
   }
+
+  // Confirm that mixing_steps has a tangible effect (this example is
+  // particularly sensitive to the sampling), and obtains a smaller volume due
+  // to non-uniform sampling with less mixing_steps.
+  options.mixing_steps = 1;  // Smaller than the default.
+  HPolyhedron region2 = IrisFromUrdf(convex_urdf, sample, options);
+  constexpr double kTol = 1e-4;
+  EXPECT_GE(region.MaximumVolumeInscribedEllipsoid().Volume() + kTol,
+            region2.MaximumVolumeInscribedEllipsoid().Volume());
 }
 
 // Three boxes.  Two on the outside are fixed.  One in the middle on a prismatic
@@ -803,6 +1213,16 @@ GTEST_TEST(IrisInConfigurationSpaceTest, BoxesPrismaticPlusConstraints) {
   EXPECT_TRUE(region.PointInSet(Vector1d{qmax - kTol}));
   EXPECT_FALSE(region.PointInSet(Vector1d{qmin - kTol}));
   EXPECT_FALSE(region.PointInSet(Vector1d{qmax + kTol}));
+
+  // Add an upper bound constraint on q
+  const double q_ub = M_PI / 8;
+  DRAKE_ASSERT(q_ub < qmax);  // otherwise test will be pointless
+  prog.AddConstraint(sin(q[0]), -1.0 / sqrt(2.0), sin(q_ub));
+  // Calc the upper bounded region
+  HPolyhedron region_ub = IrisFromUrdf(boxes_urdf, sample, options);
+  const double kMargin = options.configuration_space_margin;
+  EXPECT_TRUE(region_ub.PointInSet(Vector1d{q_ub - kTol - kMargin}));
+  EXPECT_FALSE(region_ub.PointInSet(Vector1d{q_ub + kTol - kMargin}));
 }
 
 // This double pendulum doesn't have any collision geometry, but we'll add

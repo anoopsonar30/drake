@@ -19,6 +19,7 @@
 #include "drake/systems/framework/vector_system.h"
 
 namespace drake {
+namespace {
 
 using std::cout;
 using std::endl;
@@ -35,8 +36,9 @@ template <typename T>
 class CubicPolynomialSystem : public systems::VectorSystem<T> {
  public:
   CubicPolynomialSystem()
-      : systems::VectorSystem<T>(0, 0) {  // Zero inputs, zero outputs.
-    this->DeclareContinuousState(1);      // One state variable.
+      // Zero inputs, zero outputs, no feedthrough.
+      : systems::VectorSystem<T>(0, 0, false) {
+    this->DeclareContinuousState(1);  // One state variable.
   }
 
  private:
@@ -91,6 +93,7 @@ void ComputeRegionOfAttraction() {
   // Check that ρ ≃ 1.0.
   DRAKE_DEMAND(std::abs(result.GetSolution(rho) - 1.0) < 1e-6);
 }
+}  // namespace
 }  // namespace drake
 
 int main(int argc, char* argv[]) {

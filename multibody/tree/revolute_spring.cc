@@ -1,10 +1,7 @@
 #include "drake/multibody/tree/revolute_spring.h"
 
-#include <limits>
 #include <utility>
-#include <vector>
 
-#include "drake/multibody/tree/body.h"
 #include "drake/multibody/tree/multibody_tree.h"
 
 namespace drake {
@@ -26,6 +23,9 @@ RevoluteSpring<T>::RevoluteSpring(ModelInstanceIndex model_instance,
       stiffness_(stiffness) {
   DRAKE_THROW_UNLESS(stiffness >= 0);
 }
+
+template <typename T>
+RevoluteSpring<T>::~RevoluteSpring() = default;
 
 template <typename T>
 const RevoluteJoint<T>& RevoluteSpring<T>::joint() const {
@@ -116,4 +116,4 @@ RevoluteSpring<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::RevoluteSpring)
+    class ::drake::multibody::RevoluteSpring);

@@ -9,7 +9,7 @@
 #include "drake/common/drake_copyable.h"
 #include "drake/multibody/tree/joint.h"
 #include "drake/multibody/tree/multibody_forces.h"
-#include "drake/multibody/tree/space_xyz_mobilizer.h"
+#include "drake/multibody/tree/rpy_ball_mobilizer.h"
 
 namespace drake {
 namespace multibody {
@@ -26,7 +26,7 @@ namespace multibody {
 template <typename T>
 class BallRpyJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BallRpyJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BallRpyJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -49,8 +49,8 @@ class BallRpyJoint final : public Joint<T> {
   /// The additional parameters are:
   /// @param[in] damping
   ///   Viscous damping coefficient, in N⋅m⋅s, used to model losses within the
-  ///   joint. See documentation of damping() for details on modelling of the
-  ///   damping torque.
+  ///   joint. See documentation of default_damping() for details on modelling
+  ///   of the damping torque.
   /// @throws std::exception if damping is negative.
   BallRpyJoint(const std::string& name, const Frame<T>& frame_on_parent,
                const Frame<T>& frame_on_child, double damping = 0)
@@ -71,15 +71,17 @@ class BallRpyJoint final : public Joint<T> {
     DRAKE_THROW_UNLESS(damping >= 0);
   }
 
+  ~BallRpyJoint() override;
+
   const std::string& type_name() const override;
 
-  /// Returns `this` joint's damping constant in N⋅m⋅s. The damping torque
-  /// (in N⋅m) is modeled as `τ = -damping⋅ω`, i.e. opposing motion, with ω the
-  /// angular velocity of frame M in F (see get_angular_velocity()) and τ the
-  /// torque on child body B (to which M is rigidly attached).
-  double damping() const {
+  /// Returns `this` joint's default damping constant in N⋅m⋅s. The damping
+  /// torque (in N⋅m) is modeled as `τ = -damping⋅ω`, i.e. opposing motion, with
+  /// ω the angular velocity of frame M in F (see get_angular_velocity()) and τ
+  /// the torque on child body B (to which M is rigidly attached).
+  double default_damping() const {
     // N.B. All damping coefficients are set to the same value for this joint.
-    return this->damping_vector()[0];
+    return this->default_damping_vector()[0];
   }
 
   /// @name Context-dependent value access
@@ -128,7 +130,7 @@ class BallRpyJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const BallRpyJoint<T>& set_angles(Context<T>* context,
                                     const Vector3<T>& angles) const {
-    get_mobilizer()->set_angles(context, angles);
+    get_mobilizer()->SetAngles(context, angles);
     return *this;
   }
 
@@ -164,7 +166,7 @@ class BallRpyJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const BallRpyJoint<T>& set_angular_velocity(systems::Context<T>* context,
                                               const Vector3<T>& w_FM) const {
-    get_mobilizer()->set_angular_velocity(context, w_FM);
+    get_mobilizer()->SetAngularVelocity(context, w_FM);
     return *this;
   }
 
@@ -198,14 +200,15 @@ class BallRpyJoint final : public Joint<T> {
   /// Joint<T> override called through public NVI, Joint::AddInDamping().
   /// Therefore arguments were already checked to be valid.
   /// This method adds into `forces` a dissipative torque according to the
-  /// viscous law `τ = -d⋅ω`, with d the damping coefficient (see damping()).
+  /// viscous law `τ = -d⋅ω`, with d the damping coefficient (see
+  /// default_damping()).
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const override {
     Eigen::Ref<VectorX<T>> t_BMo_F =
         get_mobilizer()->get_mutable_generalized_forces_from_array(
             &forces->mutable_generalized_forces());
     const Vector3<T>& w_FM = get_angular_velocity(context);
-    t_BMo_F = -damping() * w_FM;
+    t_BMo_F = -this->GetDampingVector(context)[0] * w_FM;
   }
 
  private:
@@ -237,8 +240,8 @@ class BallRpyJoint final : public Joint<T> {
   }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const override;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const override;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const override;
@@ -258,21 +261,19 @@ class BallRpyJoint final : public Joint<T> {
   // Returns the mobilizer implementing this joint.
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
-  const internal::SpaceXYZMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
-    const internal::SpaceXYZMobilizer<T>* mobilizer =
-        dynamic_cast<const internal::SpaceXYZMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+  const internal::RpyBallMobilizer<T>* get_mobilizer() const {
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
+    const internal::RpyBallMobilizer<T>* mobilizer =
+        dynamic_cast<const internal::RpyBallMobilizer<T>*>(
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
-  internal::SpaceXYZMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
-    auto* mobilizer = dynamic_cast<internal::SpaceXYZMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+  internal::RpyBallMobilizer<T>* get_mutable_mobilizer() {
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
+    auto* mobilizer = dynamic_cast<internal::RpyBallMobilizer<T>*>(
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -281,9 +282,6 @@ class BallRpyJoint final : public Joint<T> {
   template <typename ToScalar>
   std::unique_ptr<Joint<ToScalar>> TemplatedDoCloneToScalar(
       const internal::MultibodyTree<ToScalar>& tree_clone) const;
-
-  // This joint's damping constant in N⋅m⋅s.
-  double damping_{0};
 };
 
 template <typename T>
@@ -293,4 +291,4 @@ const char BallRpyJoint<T>::kTypeName[] = "ball_rpy";
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::BallRpyJoint)
+    class ::drake::multibody::BallRpyJoint);

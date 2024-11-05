@@ -8,7 +8,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -32,19 +31,19 @@ GTEST_TEST(MultibodyPlantIntrospection, FloatingBodies) {
   const std::string atlas_url =
       "package://drake_models/atlas/atlas_convex_hull.urdf";
 
-  const std::string table_sdf_path = FindResourceOrThrow(
-      "drake/examples/kuka_iiwa_arm/models/table/"
-      "extra_heavy_duty_table_surface_only_collision.sdf");
+  const std::string table_url =
+      "package://drake/examples/kuka_iiwa_arm/models/table/"
+      "extra_heavy_duty_table_surface_only_collision.sdf";
 
-  const std::string mug_sdf_path =
-      FindResourceOrThrow("drake/examples/simple_gripper/simple_mug.sdf");
+  const std::string mug_url =
+      "package://drake/examples/simple_gripper/simple_mug.sdf";
 
   MultibodyPlant<double> plant(0.0);
 
   // Load a model of a table for the environment around the robot.
   Parser parser(&plant);
   const ModelInstanceIndex robot_table_model =
-      parser.AddModels(table_sdf_path).at(0);
+      parser.AddModelsFromUrl(table_url).at(0);
   plant.WeldFrames(plant.world_frame(),
                    plant.GetFrameByName("link", robot_table_model));
 
@@ -53,21 +52,23 @@ GTEST_TEST(MultibodyPlantIntrospection, FloatingBodies) {
       Parser(&plant, "atlas1").AddModelsFromUrl(atlas_url).at(0);
   const ModelInstanceIndex atlas_model2 =
       Parser(&plant, "atlas2").AddModelsFromUrl(atlas_url).at(0);
-  const Body<double>& pelvis1 = plant.GetBodyByName("pelvis", atlas_model1);
-  const Body<double>& pelvis2 = plant.GetBodyByName("pelvis", atlas_model2);
+  const RigidBody<double>& pelvis1 =
+      plant.GetBodyByName("pelvis", atlas_model1);
+  const RigidBody<double>& pelvis2 =
+      plant.GetBodyByName("pelvis", atlas_model2);
 
   // Add a floating mug.
-  const ModelInstanceIndex mug_model = parser.AddModels(mug_sdf_path).at(0);
-  const Body<double>& mug = plant.GetBodyByName("simple_mug", mug_model);
+  const ModelInstanceIndex mug_model = parser.AddModelsFromUrl(mug_url).at(0);
+  const RigidBody<double>& mug = plant.GetBodyByName("simple_mug", mug_model);
 
   // Introspection of the underlying mathematical model is not available until
   // we call Finalize().
   DRAKE_EXPECT_THROWS_MESSAGE(
       mug.is_floating(),
-      ".*The model to which this body belongs must be finalized.*");
+      ".*The model to which this rigid body belongs must be finalized.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
       mug.has_quaternion_dofs(),
-      ".*The model to which this body belongs must be finalized.*");
+      ".*The model to which this rigid body belongs must be finalized.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
       plant.GetFloatingBaseBodies(),
       "Pre-finalize calls to 'GetFloatingBaseBodies\\(\\)' are not allowed.*");
@@ -146,14 +147,15 @@ GTEST_TEST(MultibodyPlantIntrospection, FloatingBodies) {
        mug.floating_positions_start()});
   EXPECT_EQ(floating_positions_start, expected_floating_positions_start);
 
-  const int nq = plant.num_positions();
   const int atlas_nv = plant.num_velocities(atlas_model1);
-  const std::unordered_set<int> expected_floating_velocities_start(
-      {nq, nq + atlas_nv, nq + 2 * atlas_nv});
-  const std::unordered_set<int> floating_velocities_start(
-      {pelvis1.floating_velocities_start(), pelvis2.floating_velocities_start(),
-       mug.floating_velocities_start()});
-  EXPECT_EQ(floating_velocities_start, expected_floating_velocities_start);
+  const std::unordered_set<int> expected_floating_velocities_start_in_v(
+      {0, atlas_nv, 2 * atlas_nv});
+  const std::unordered_set<int> floating_velocities_start_in_v(
+      {pelvis1.floating_velocities_start_in_v(),
+       pelvis2.floating_velocities_start_in_v(),
+       mug.floating_velocities_start_in_v()});
+  EXPECT_EQ(floating_velocities_start_in_v,
+            expected_floating_velocities_start_in_v);
 }
 
 GTEST_TEST(MultibodyPlantIntrospection, NonUniqueBaseBody) {
@@ -162,9 +164,9 @@ GTEST_TEST(MultibodyPlantIntrospection, NonUniqueBaseBody) {
   // free.
   // To avoid unnecessary warnings/errors, use a non-zero spatial inertia.
   plant.AddRigidBody("free_body", default_model_instance(),
-      SpatialInertia<double>::MakeUnitary());
-  const Body<double>& fixed_body = plant.AddRigidBody(
-      "fixed_body", default_model_instance(), SpatialInertia<double>());
+                     SpatialInertia<double>::MakeUnitary());
+  const RigidBody<double>& fixed_body = plant.AddRigidBody(
+      "fixed_body", default_model_instance(), SpatialInertia<double>::NaN());
   plant.WeldFrames(plant.world_frame(), fixed_body.body_frame());
   plant.Finalize();
   // Even though there is only one free body, the base body is not unique.

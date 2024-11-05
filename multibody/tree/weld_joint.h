@@ -7,7 +7,6 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/multibody/tree/joint.h"
 #include "drake/multibody/tree/multibody_forces.h"
 #include "drake/multibody/tree/weld_mobilizer.h"
@@ -22,9 +21,9 @@ namespace multibody {
 template <typename T>
 class WeldJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(WeldJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(WeldJoint);
 
-  template<typename Scalar>
+  template <typename Scalar>
   using Context = systems::Context<Scalar>;
 
   static const char kTypeName[];
@@ -44,6 +43,8 @@ class WeldJoint final : public Joint<T> {
                  VectorX<double>() /* no acc upper limits */),
         X_FM_(X_FM) {}
 
+  ~WeldJoint() override;
+
   const std::string& type_name() const override;
 
   /// Returns the pose X_FM of frame M in F.
@@ -54,9 +55,8 @@ class WeldJoint final : public Joint<T> {
   /// Since frame F and M are welded together, it is physically not possible to
   /// apply forces between them. Therefore this method throws an exception if
   /// invoked.
-  void DoAddInOneForce(
-      const systems::Context<T>&, int, const T&,
-      MultibodyForces<T>*) const override {
+  void DoAddInOneForce(const systems::Context<T>&, int, const T&,
+                       MultibodyForces<T>*) const override {
     throw std::logic_error("Weld joints do not allow applying forces.");
   }
 
@@ -68,9 +68,7 @@ class WeldJoint final : public Joint<T> {
     return get_mobilizer()->velocity_start_in_v();
   }
 
-  int do_get_num_velocities() const override {
-    return 0;
-  }
+  int do_get_num_velocities() const override { return 0; }
 
   int do_get_position_start() const override {
     // Since WeldJoint has no state, the start index has no meaning. However,
@@ -79,9 +77,7 @@ class WeldJoint final : public Joint<T> {
     return get_mobilizer()->position_start_in_q();
   }
 
-  int do_get_num_positions() const override {
-    return 0;
-  }
+  int do_get_num_positions() const override { return 0; }
 
   std::string do_get_position_suffix(int index) const override {
     return get_mobilizer()->position_suffix(index);
@@ -94,8 +90,8 @@ class WeldJoint final : public Joint<T> {
   void do_set_default_positions(const VectorX<double>&) override { return; }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint>
-  MakeImplementationBlueprint() const override;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const override;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const override;
@@ -104,31 +100,30 @@ class WeldJoint final : public Joint<T> {
       const internal::MultibodyTree<AutoDiffXd>& tree_clone) const override;
 
   std::unique_ptr<Joint<symbolic::Expression>> DoCloneToScalar(
-      const internal::MultibodyTree<symbolic::Expression>&x) const override;
+      const internal::MultibodyTree<symbolic::Expression>& x) const override;
 
   // Make WeldJoint templated on every other scalar type a friend of
   // WeldJoint<T> so that CloneToScalar<ToAnyOtherScalar>() can access
   // private members of WeldJoint<T>.
-  template <typename> friend class WeldJoint;
+  template <typename>
+  friend class WeldJoint;
 
   // Returns the mobilizer implementing this joint.
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
   const internal::WeldMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     const internal::WeldMobilizer<T>* mobilizer =
         dynamic_cast<const internal::WeldMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
   internal::WeldMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     auto* mobilizer = dynamic_cast<internal::WeldMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -142,10 +137,11 @@ class WeldJoint final : public Joint<T> {
   const math::RigidTransform<double> X_FM_;
 };
 
-template <typename T> const char WeldJoint<T>::kTypeName[] = "weld";
+template <typename T>
+const char WeldJoint<T>::kTypeName[] = "weld";
 
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::WeldJoint)
+    class ::drake::multibody::WeldJoint);

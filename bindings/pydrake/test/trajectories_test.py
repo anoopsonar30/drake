@@ -17,6 +17,9 @@ from pydrake.trajectories import (
     BezierCurve_,
     BsplineTrajectory_,
     CompositeTrajectory_,
+    DerivativeTrajectory_,
+    ExponentialPlusPiecewisePolynomial,
+    FunctionHandleTrajectory_,
     PathParameterizedTrajectory_,
     PiecewisePolynomial_,
     PiecewisePose_,
@@ -32,6 +35,9 @@ from pydrake.symbolic import Variable, Expression
 class CustomTrajectory(Trajectory):
     def __init__(self):
         Trajectory.__init__(self)
+
+    def Clone(self):
+        return CustomTrajectory()
 
     def rows(self):
         return 1
@@ -59,6 +65,9 @@ class CustomTrajectory(Trajectory):
         elif derivative_order == 0:
             return self.value(t)
 
+    def DoMakeDerivative(self, derivative_order):
+        return DerivativeTrajectory_[float](self, derivative_order)
+
 
 class TestTrajectories(unittest.TestCase):
     @numpy_compare.check_all_types
@@ -82,6 +91,12 @@ class TestTrajectories(unittest.TestCase):
         numpy_compare.assert_float_equal(
             trajectory.EvalDerivative(t=2.3, derivative_order=2),
             np.zeros((1, 2)))
+        clone = trajectory.Clone()
+        numpy_compare.assert_float_equal(clone.value(t=1.5),
+                                         np.array([[2.5, 3.5]]))
+        deriv = trajectory.MakeDerivative(derivative_order=1)
+        numpy_compare.assert_float_equal(
+            deriv.value(t=2.3), np.ones((1, 2)))
 
     @numpy_compare.check_all_types
     def test_bezier_curve(self, T):
@@ -89,7 +104,7 @@ class TestTrajectories(unittest.TestCase):
         self.assertEqual(curve.rows(), 0)
         self.assertEqual(curve.cols(), 1)
 
-        points = np.mat("4.0, 5.0; 6.0, 7.0")
+        points = np.array([[4.0, 5.0], [6.0, 7.0]])
         curve = BezierCurve_[T](start_time=1,
                                 end_time=2,
                                 control_points=points)
@@ -162,6 +177,57 @@ class TestTrajectories(unittest.TestCase):
         self.assertEqual(copy.deepcopy(bspline).rows(), 3)
         assert_pickle(self, bspline,
                       lambda traj: np.array(traj.control_points()), T=T)
+
+    @numpy_compare.check_all_types
+    def test_derivative_trajectory(self, T):
+        breaks = [0, 1, 2]
+        samples = [[[0]], [[1]], [[2]]]
+        foh = PiecewisePolynomial_[T].FirstOrderHold(breaks, samples)
+        dut = DerivativeTrajectory_[T](nominal=foh, derivative_order=1)
+        self.assertEqual(dut.rows(), 1)
+        self.assertEqual(dut.cols(), 1)
+        dut.Clone()
+        copy.copy(dut)
+        copy.deepcopy(dut)
+
+    def test_exponential_plus_piecewise_polynomial(self):
+        K = np.array([1.23])
+        A = np.array([3.45])
+        alpha = np.array([6.78])
+        breaks = np.array([0.0, 0.5])
+        samples = np.array([[1.0, 2.0]])
+        polynomial_part = PiecewisePolynomial_[float].FirstOrderHold(
+            breaks, samples)
+        dut = ExponentialPlusPiecewisePolynomial(
+            K=K, A=A, alpha=alpha, piecewise_polynomial_part=polynomial_part)
+        self.assertEqual(dut.rows(), 1)
+        self.assertEqual(dut.cols(), 1)
+        self.assertEqual(dut.value(0.25).shape, (1, 1))
+        self.assertEqual(dut.start_time(), 0.0)
+        self.assertEqual(dut.end_time(), 0.5)
+        dut.shiftRight(1.0)
+        self.assertEqual(dut.start_time(), 1.0)
+        self.assertEqual(dut.end_time(), 1.5)
+        dut.Clone()
+        copy.copy(dut)
+        copy.deepcopy(dut)
+
+    @numpy_compare.check_all_types
+    def test_function_handle_trajectory(self, T):
+        def f(t):
+            print(t)
+            return np.array([[t, t**2]])
+        dut = FunctionHandleTrajectory_[T](
+            func=f, rows=1, cols=2, start_time=0, end_time=1)
+        self.assertEqual(dut.rows(), 1)
+        self.assertEqual(dut.cols(), 2)
+        numpy_compare.assert_float_equal(dut.start_time(), 0.0)
+        numpy_compare.assert_float_equal(dut.end_time(), 1.0)
+        for t in [0.0, 0.5, 1.0]:
+            numpy_compare.assert_float_equal(dut.value(t), f(t))
+        self.assertIsInstance(dut.Clone(), FunctionHandleTrajectory_[T])
+        copy.copy(dut)
+        copy.deepcopy(dut)
 
     def test_legacy_unpickle(self):
         """Checks that data pickled as BsplineTrajectory_[float] in Drake
@@ -481,6 +547,7 @@ class TestTrajectories(unittest.TestCase):
         pp1 = PiecewisePolynomial.FirstOrderHold([0.0, 1.0, 2.0], x)
         pp2 = PiecewisePolynomial.FirstOrderHold([2.0, 3.0, 4.0], x)
         traj = CompositeTrajectory(segments=[pp1, pp2])
+        self.assertEqual(traj.get_number_of_segments(), 2)
         self.assertEqual(traj.rows(), 1)
         self.assertEqual(traj.cols(), 1)
         numpy_compare.assert_float_equal(traj.start_time(), 0.0)
@@ -489,6 +556,9 @@ class TestTrajectories(unittest.TestCase):
                               PiecewisePolynomial)
         self.assertIsInstance(traj.segment(segment_index=1),
                               PiecewisePolynomial)
+
+        traj = CompositeTrajectory.AlignAndConcatenate(segments=[pp1, pp2])
+        self.assertIsInstance(traj, CompositeTrajectory)
 
     @numpy_compare.check_all_types
     def test_quaternion_slerp(self, T):

@@ -33,7 +33,7 @@ namespace multibody {
 template <typename T>
 class ScrewJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ScrewJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ScrewJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -63,13 +63,12 @@ class ScrewJoint final : public Joint<T> {
   /// @param[in] damping
   ///   Viscous damping coefficient, N⋅m⋅s/rad for
   ///   rotation, used to model losses within the joint. See documentation of
-  ///   damping() for details on modelling of the damping torque.
+  ///   default_damping() for details on modelling of the damping torque.
   /// @throws std::exception if damping is negative.
   ScrewJoint(const std::string& name, const Frame<T>& frame_on_parent,
-             const Frame<T>& frame_on_child, double screw_pitch,
-             double damping) :
-      ScrewJoint<T>(name, frame_on_parent, frame_on_child,
-                    Vector3<double>::UnitZ(), screw_pitch, damping) {}
+             const Frame<T>& frame_on_child, double screw_pitch, double damping)
+      : ScrewJoint<T>(name, frame_on_parent, frame_on_child,
+                      Vector3<double>::UnitZ(), screw_pitch, damping) {}
 
   /// Constructor to create a screw joint between two bodies so that frame F
   /// attached to the parent body P and frame M attached to the child body B
@@ -99,7 +98,7 @@ class ScrewJoint final : public Joint<T> {
   /// @param[in] damping
   ///   Viscous damping coefficient, N⋅m⋅s/rad for
   ///   rotation, used to model losses within the joint. See documentation of
-  ///   damping() for details on modelling of the damping torque.
+  ///   default_damping() for details on modelling of the damping torque.
   /// @throws std::exception if the L2 norm of `axis` is less than the square
   /// root of machine epsilon.
   /// @throws std::exception if damping is negative.
@@ -107,26 +106,26 @@ class ScrewJoint final : public Joint<T> {
              const Frame<T>& frame_on_child, const Vector3<double>& axis,
              double screw_pitch, double damping);
 
+  ~ScrewJoint() final;
+
   const std::string& type_name() const final;
 
   /// Returns the normalized axis of motion of `this` joint as a unit vector.
   /// Since the measures of this axis in either frame F or M are the same (see
   /// this class's documentation for frame definitions) then,
   /// `axis = axis_F = axis_M`.
-  const Vector3<double>& screw_axis() const {
-    return axis_;
-  }
+  const Vector3<double>& screw_axis() const { return axis_; }
 
   /// Returns `this` joint's amount of translation in meters
   /// occurring over a one full revolution.
   double screw_pitch() const { return screw_pitch_; }
 
-  /// Returns `this` joint's damping constant N⋅m⋅s for the rotational degree.
-  /// The damping torque (in N⋅m) is modeled as `τ = -damping⋅ω` i.e.
+  /// Returns `this` joint's default damping constant N⋅m⋅s for the rotational
+  /// degree. The damping torque (in N⋅m) is modeled as `τ = -damping⋅ω` i.e.
   ///  opposing motion, with ω the angular rate for `this` joint
   ///  (see get_angular_velocity()) and τ the torque on
   /// child body B expressed in frame F as t_B_F = τ⋅Fâ_F.
-  double damping() const { return this->damping_vector()[0]; }
+  double default_damping() const { return this->default_damping_vector()[0]; }
 
   /// @name Context-dependent value access
   /// @{
@@ -146,9 +145,8 @@ class ScrewJoint final : public Joint<T> {
   /// @param[in] z The desired translation in meters to be stored in `context`
   ///              as (z). See class documentation for details.
   /// @returns a constant reference to `this` joint.
-  const ScrewJoint<T>& set_translation(Context<T>* context,
-                                       const T& z) const {
-    get_mobilizer()->set_translation(context, z);
+  const ScrewJoint<T>& set_translation(Context<T>* context, const T& z) const {
+    get_mobilizer()->SetTranslation(context, z);
     return *this;
   }
 
@@ -168,8 +166,8 @@ class ScrewJoint final : public Joint<T> {
   ///                  See class documentation for details.
   /// @returns a constant reference to `this` joint.
   const ScrewJoint<T>& set_rotation(systems::Context<T>* context,
-                                     const T& theta) const {
-    get_mobilizer()->set_angle(context, theta);
+                                    const T& theta) const {
+    get_mobilizer()->SetAngle(context, theta);
     return *this;
   }
 
@@ -189,9 +187,9 @@ class ScrewJoint final : public Joint<T> {
   /// @param[in] vz The desired translational velocity of `this` joint in meters
   ///               per second along F frame's â-axis.
   /// @returns a constant reference to `this` joint.
-  const ScrewJoint<T>& set_translational_velocity(
-      systems::Context<T>* context, const T& vz) const {
-    get_mobilizer()->set_translation_rate(context, vz);
+  const ScrewJoint<T>& set_translational_velocity(systems::Context<T>* context,
+                                                  const T& vz) const {
+    get_mobilizer()->SetTranslationRate(context, vz);
     return *this;
   }
 
@@ -215,9 +213,28 @@ class ScrewJoint final : public Joint<T> {
   ///                      angle in radians per second.
   /// @returns a constant reference to `this` joint.
   const ScrewJoint<T>& set_angular_velocity(systems::Context<T>* context,
-                                             const T& theta_dot) const {
-    get_mobilizer()->set_angular_rate(context, theta_dot);
+                                            const T& theta_dot) const {
+    get_mobilizer()->SetAngularRate(context, theta_dot);
     return *this;
+  }
+
+  /// Returns the Context dependent damping coefficient stored as a parameter in
+  /// `context`. Refer to default_damping() for details.
+  /// @param[in] context The context storing the state and parameters for the
+  /// model to which `this` joint belongs.
+  const T& GetDamping(const Context<T>& context) const {
+    return this->GetDampingVector(context)[0];
+  }
+
+  /// Sets the value of the viscous damping coefficient for this joint, stored
+  /// as a parameter in `context`. Refer to default_damping() for details.
+  /// @param[out] context The context storing the state and parameters for the
+  /// model to which `this` joint belongs.
+  /// @param[in] damping The damping value.
+  /// @throws std::exception if `damping` is negative.
+  void SetDamping(Context<T>* context, const T& damping) const {
+    DRAKE_THROW_UNLESS(damping >= 0);
+    this->SetDampingVector(context, Vector1<T>(damping));
   }
 
   /// @}
@@ -225,7 +242,7 @@ class ScrewJoint final : public Joint<T> {
   /// Gets the default position for `this` joint.
   /// @retval z The default position of `this` joint.
   double get_default_translation() const {
-    return internal::get_screw_translation_from_rotation(
+    return internal::GetScrewTranslationFromRotation(
         this->default_positions()[0], screw_pitch());
   }
 
@@ -234,8 +251,8 @@ class ScrewJoint final : public Joint<T> {
   /// @param[in] z The desired default translation of the joint
   /// @throws std::exception if pitch is very near zero.
   void set_default_translation(const double& z) {
-    Vector1<double> state(internal::get_screw_rotation_from_translation(
-        z, screw_pitch()));
+    Vector1<double> state(
+        internal::GetScrewRotationFromTranslation(z, screw_pitch()));
     this->set_default_positions(state);
   }
 
@@ -285,14 +302,15 @@ class ScrewJoint final : public Joint<T> {
   /*  Joint<T> override called through public NVI, Joint::AddInDamping().
     Therefore arguments were already checked to be valid.
     This method adds into `forces` a dissipative force according to the
-    viscous law `f = -d⋅v`, with d the damping coefficient (see damping()). */
+    viscous law `f = -d⋅v`, with d the damping coefficient (see
+    default_damping()). */
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const final {
     Eigen::Ref<VectorX<T>> tau =
         get_mobilizer()->get_mutable_generalized_forces_from_array(
             &forces->mutable_generalized_forces());
     const T& v_angular = get_angular_velocity(context);
-    tau[0] -= damping() * v_angular;
+    tau[0] -= this->GetDamping(context) * v_angular;
   }
 
   int do_get_velocity_start() const final {
@@ -331,8 +349,8 @@ class ScrewJoint final : public Joint<T> {
   }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const final;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const final;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const final;
@@ -353,20 +371,18 @@ class ScrewJoint final : public Joint<T> {
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
   const internal::ScrewMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     const internal::ScrewMobilizer<T>* mobilizer =
         dynamic_cast<const internal::ScrewMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
   internal::ScrewMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     auto* mobilizer = dynamic_cast<internal::ScrewMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -387,4 +403,4 @@ class ScrewJoint final : public Joint<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::ScrewJoint)
+    class ::drake::multibody::ScrewJoint);

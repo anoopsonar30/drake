@@ -36,7 +36,7 @@ value set in a Context.
 template <typename T>
 class InputPort final : public InputPortBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(InputPort)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(InputPort);
 
   /** Returns a reference to the up-to-date value of this input port contained
   in the given Context. This is the preferred way to obtain an input port's
@@ -46,6 +46,11 @@ class InputPort final : public InputPortBase {
   will recalculate an up-to-date value before the reference is returned. The
   recalculation may be arbitrarily expensive, but Eval() is constant time and
   _very_ fast if the value is already up to date.
+
+  @param context A Context for this System that also contains the value source
+  for this input port. If that source is an output port of another System then
+  `context` must be a subcontext of the Diagram that contains both this System
+  and the one providing the output port.
 
   @tparam ValueType The type of the const-reference returned by this method.
   When omitted, the return type is `const VectorX<T>&` (this is only valid
@@ -204,4 +209,4 @@ class InputPort final : public InputPortBase {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::InputPort)
+    class ::drake::systems::InputPort);

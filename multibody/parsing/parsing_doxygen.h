@@ -2,8 +2,7 @@
  Doxygen-only documentation for @ref multibody_parsing. */
 
 /**
-@defgroup multibody_parsing Parsing Models for Multibody Dynamics
-@ingroup multibody
+@addtogroup multibody_parsing
 
 Drake's drake::multibody::Parser accepts model files written in a variety of
 input formats. Drake's parsing of URDF, SDFormat, and MJCF (Mujoco XML) has
@@ -50,7 +49,7 @@ future, we intend to update this documentation to itemize what isn't supported.
 Drake's SDFormat parsing supports composing multiple models into a single
 model, via lexical nesting and file inclusion. The file inclusion feature
 supports both SDFormat files and URDF files. Note that included URDF files pass
-through the Drake URDF parser, with all of it's extensions and limitations.
+through the Drake URDF parser, with all of its extensions and limitations.
 
 For full details, see the
 <a href='http://sdformat.org/tutorials?tut=composition_proposal#model-composition-proposed-behavior'>SDFormat documentation of model composition.</a>
@@ -92,11 +91,11 @@ Drake supports URDF files as described here: http://wiki.ros.org/urdf/XML.
 For Drake extensions to URDF format files, see
 @ref multibody_parsing_drake_extensions.
 
-@subsection multbody_parsing_urdf_unsupported URDF not supported by Drake
+@subsection multibody_parsing_urdf_unsupported URDF not supported by Drake
 
 Drake's parser does not implement all of the features of URDF. Here is a list
 of known URDF features that Drake does not use. For each, the parser applies
-one of several treaments:
+one of several treatments:
 
 - Issue a warning that the tag is unused.
 - Ignore silently, as documented below.
@@ -166,18 +165,22 @@ Here is the full list of custom elements:
 - @ref tag_drake_child
 - @ref tag_drake_collision_filter_group
 - @ref tag_drake_compliant_hydroelastic
+- @ref tag_drake_controller_gains
 - @ref tag_drake_damping
 - @ref tag_drake_declare_convex
 - @ref tag_drake_diffuse_map
 - @ref tag_drake_ellipsoid
 - @ref tag_drake_gear_ratio
 - @ref tag_drake_hunt_crossley_dissipation
+- @ref tag_drake_hydroelastic_margin
 - @ref tag_drake_hydroelastic_modulus
 - @ref tag_drake_ignored_collision_filter_group
 - @ref tag_drake_joint
 - @ref tag_drake_linear_bushing_rpy
 - @ref tag_drake_member
+- @ref tag_drake_member_group
 - @ref tag_drake_mesh_resolution_hint
+- @ref tag_drake_mimic
 - @ref tag_drake_mu_dynamic
 - @ref tag_drake_mu_static
 - @ref tag_drake_parent
@@ -236,7 +239,7 @@ drake::multibody::MultibodyPlant::AddBallConstraint().
 @subsection tag_drake_ball_constraint_body_A drake:ball_constraint_body_A
 
 - SDFormat path: `//model/drake:ball_constraint/drake:ball_constraint_body_A`
-- URDF path: `/robot/drake:ball_constraint/drake:ball_constraint_body_A/@value`
+- URDF path: `/robot/drake:ball_constraint/drake:ball_constraint_body_A/@name`
 - Syntax: String.
 
 @subsection tag_drake_ball_constraint_body_A_semantics Semantics
@@ -251,7 +254,7 @@ drake::multibody::MultibodyPlant::AddBallConstraint()
 @subsection tag_drake_ball_constraint_body_B drake:ball_constraint_body_B
 
 - SDFormat path: `//model/drake:ball_constraint/drake:ball_constraint_body_B`
-- URDF path: `/robot/drake:ball_constraint/drake:ball_constraint_body_B/@value`
+- URDF path: `/robot/drake:ball_constraint/drake:ball_constraint_body_B/@name`
 - Syntax: String.
 
 @subsection tag_drake_ball_constraint_body_B_semantics Semantics
@@ -421,14 +424,15 @@ with the child link of the joint being defined.
 - SDFormat path: `//model/drake:collision_filter_group`
 - URDF path: `/robot/drake:collision_filter_group`
 - Syntax: Attributes `name` (string) and `ignore` (boolean); nested elements
-          `drake:member` and `drake:ignored_collision_filter_group`.
+          `drake:member`, `drake:member_group`, and
+          `drake:ignored_collision_filter_group`.
 
 @subsubsection tag_drake_collision_filter_group_semantics Semantics
 
 This element names a group of bodies to participate in collision filtering
 rules. If the `ignore` attribute is present and true-valued, the entire element
 is skipped during parsing. The nested elements must included one or more
-`drake:member` elements, and zero or more
+`drake:member` or `drake:member_group` elements, and zero or more
 `drake:ignored_collision_filter_group` elements.
 
 This element defines a new group name that is only available during parsing. It
@@ -443,7 +447,7 @@ different collision groups excludes collisions between members of those groups
 naming the same group twice excludes collisions within the group (see
 drake::geometry::CollisionFilterDeclaration::ExcludeWithin()).
 
-@see @ref tag_drake_member, @ref tag_drake_ignored_collision_filter_group, @ref scoped_names
+@see @ref tag_drake_member, @ref tag_drake_member_group, @ref tag_drake_ignored_collision_filter_group, @ref scoped_names
 
 @subsection tag_drake_compliant_hydroelastic drake:compliant_hydroelastic
 
@@ -457,6 +461,24 @@ If present, this element sets the compliance type of the element being defined
 to be compliant, as opposed to rigid, in hydroelastic contact models.
 
 @see @ref tag_drake_proximity_properties, @ref creating_hydro_reps
+
+@subsection tag_drake_controller_gains drake:controller_gains
+
+- SDFormat path: `//model/joint/drake:controller_gains`
+- URDF path: `/robot/joint/actuator/drake:controller_gains`
+- Syntax: Two attributes `p` (proportional gain) containing a positive floating
+          point value and `d` (derivative gain) containing a non-negative
+          floating point value.
+
+@subsection tag_drake_controller_gains_semantics Semantics
+
+If present, this element provides proportional and derivative gains for a low
+level PD controller for the drake::multibody::JointActuator associated with the
+drake::multibody::Joint the element is defined under. It is stored in a
+drake::multibody::PdControllerGains object in the
+drake::multibody::JointActuator class. Both attributes `p` and `d` are required.
+
+@see @ref mbp_actuation, @ref pd_controlled_joint_actuator
 
 @subsection tag_drake_damping drake:damping
 
@@ -483,9 +505,9 @@ URDF Note: The comparable feature in URDF is the standard
 
 @subsubsection tag_drake_declare_convex_semantics Semantics
 
-If present, this element causes Drake to treat the parent mesh geometry as
-convex, without any further validation. The resulting geometry in memory will
-be drake::geometry::Convex, rather than drake::geometry::Mesh.
+If present, this element causes Drake to use the convex hull of the named mesh
+geometry. The resulting geometry in memory will be drake::geometry::Convex,
+rather than drake::geometry::Mesh.
 
 @see drake::geometry::Convex, drake::geometry::Mesh
 
@@ -549,8 +571,24 @@ i.e. s/m) for the Hunt-Crossley dissipation model. It is stored in a
 ProximityProperties object under `(material, hunt_crossley_dissipation)`.
 
 @see drake::geometry::ProximityProperties,
-@ref mbp_hydroelastic_materials_properties "Hydroelastic contact",
+@ref hydro_model_parameters "Hydroelastic contact parameters",
 @ref mbp_dissipation_model "Modeling Dissipation"
+
+@subsection tag_drake_hydroelastic_margin drake:hydroelastic_margin
+
+- SDFormat path: `//model/link/collision/drake:proximity_properties/drake:hydroelastic_margin`
+- URDF path: `/robot/link/collision/drake:proximity_properties/drake:hydroelastic_margin/@value`
+- Syntax: Non-negative floating point value.
+
+@subsubsection tag_drake_hydroelastic_margin_semantics Semantics
+
+If present, this element provides a value (units of length, i.e. m)
+for the hydroelastic margin. It is stored in a ProximityProperties object
+under `(hydroelastic, margin)`.
+
+@see drake::geometry::ProximityProperties,
+@ref hydro_model_parameters "Hydroelastic contact parameters",
+@ref hug_properties, @ref hydro_margin
 
 @subsection tag_drake_hydroelastic_modulus drake:hydroelastic_modulus
 
@@ -565,7 +603,7 @@ for the hydroelastic modulus. It is stored in a ProximityProperties object
 under `(hydroelastic, hydroelastic_modulus)`.
 
 @see drake::geometry::ProximityProperties,
-@ref mbp_hydroelastic_materials_properties "Hydroelastic contact",
+@ref hydro_model_parameters "Hydroelastic contact parameters",
 @ref hug_properties
 
 @subsection tag_drake_ignored_collision_filter_group drake:ignored_collision_filter_group
@@ -642,6 +680,22 @@ In SDFormat files only, the name may refer to a link within a nested model
 
 @see @ref tag_drake_collision_filter_group, @ref scoped_names
 
+@subsection tag_drake_member_group drake:member_group
+
+- SDFormat path: `//model/drake:collision_filter_group/drake:member_group`
+- URDF path: `/robot/drake:collision_filter_group/drake:member_group/@name`
+- Syntax: String.
+
+@subsubsection tag_drake_member_group_semantics Semantics
+
+This element names a collision filter group (defined elsewhere in the model), all
+of whose members become members of the parent collision filter group.
+
+In SDFormat files only, the name may refer to a link within a nested model
+(either URDF or SDFormat) by using a scoped name.
+
+@see @ref tag_drake_collision_filter_group, @ref scoped_names
+
 @subsection tag_drake_mesh_resolution_hint drake:mesh_resolution_hint
 
 - SDFormat path: `//model/link/collision/drake:proximity_properties/drake:mesh_resolution_hint`
@@ -657,6 +711,21 @@ limits, smaller values will select shorter edge lengths and a finer mesh, larger
 values will select longer edge lengths and a coarser mesh.
 
 @see @ref tag_drake_proximity_properties, @ref hug_properties
+
+@subsection tag_drake_mimic drake:mimic
+
+- SDFormat path: `//model/joint/drake:mimic`
+- URDF path: unsupported
+- Syntax: Attributes `joint` (string), `multiplier` (double) and `offset` (double)
+
+@subsubsection tag_drake_mimic_semantics Semantics
+
+This tag has equivalent semantics to those of the native URDF <mimic> tag. If
+`q0` is the position of the `<joint>` and `q1` the position of the joint
+specified by the `joint` attribute, the two joints are constrained to enforce
+the relation: `q0 = multiplier * q1 + offset`. The units of `multiplier` and
+`offset` depend on the type of joints specified. This tag only supports single
+degree of freedom joints that exist in the same model instance.
 
 @subsection tag_drake_mu_dynamic drake:mu_dynamic
 
@@ -685,9 +754,9 @@ The provided (dimensionless) value sets the static friction parameter for
 CoulombFriction. Refer to @ref stribeck_approximation for details on the
 friction model.
 
-@warning This value is ignored when modeling the multibody system with discrete
-dynamics, refer to MultibodyPlant's constructor documentation for details, in
-particular the parameter `time_step`.
+@warning Both `mu_dynamic` and `mu_static` are used by MultibodyPlant when the plant
+`time_step=0`, but only `mu_dynamic` is used when `time_step>0`. Refer to
+MultibodyPlant's constructor documentation for details.
 
 @see @ref tag_drake_proximity_properties, drake::multibody::CoulombFriction,
 @ref stribeck_approximation
@@ -717,7 +786,8 @@ If present, this element provides a stiffness value (units of N/m) for point
 contact calculations for this specific geometry. It is stored in a
 ProximityProperties object under `(material, point_contact_stiffness)`.
 
-@see @ref accessing_contact_properties, @ref mbp_penalty_method,
+@see @ref accessing_contact_properties "Accessing point contact parameters",
+@ref point_forces_modeling "Point Contact Forces", and
 drake::geometry::ProximityProperties
 
 @subsection tag_drake_proximity_properties drake:proximity_properties

@@ -4,12 +4,14 @@
  pydrake.geometry module. */
 
 #include "drake/bindings/pydrake/common/default_scalars_pybind.h"
-#include "drake/bindings/pydrake/common/monostate_pybind.h"
+#include "drake/bindings/pydrake/common/serialize_pybind.h"
 #include "drake/bindings/pydrake/common/type_pack.h"
 #include "drake/bindings/pydrake/common/value_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
+#include "drake/bindings/pydrake/geometry/geometry_py.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/scene_graph.h"
+#include "drake/geometry/scene_graph_config.h"
 
 namespace drake {
 namespace pydrake {
@@ -18,12 +20,14 @@ namespace {
 using systems::Context;
 using systems::LeafSystem;
 
+// NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
+using namespace drake::geometry;
+constexpr auto& doc = pydrake_doc.drake.geometry;
+
+// TODO(jwnimmer-tri) Reformat this entire file to remove the unnecessary
+// indentation.
+
 void DoScalarIndependentDefinitions(py::module m) {
-  constexpr auto& doc = pydrake_doc.drake.geometry;
-
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry;
-
   // HydroelasticContactRepresentation enumeration
   {
     using Class = HydroelasticContactRepresentation;
@@ -32,16 +36,33 @@ void DoScalarIndependentDefinitions(py::module m) {
         .value("kTriangle", Class::kTriangle, cls_doc.kTriangle.doc)
         .value("kPolygon", Class::kPolygon, cls_doc.kPolygon.doc);
   }
+
+  {
+    using Class = geometry::DefaultProximityProperties;
+    constexpr auto& cls_doc = doc.DefaultProximityProperties;
+    py::class_<Class> cls(m, "DefaultProximityProperties", cls_doc.doc);
+    cls  // BR
+        .def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls, cls_doc);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
+  }
+
+  {
+    using Class = geometry::SceneGraphConfig;
+    constexpr auto& cls_doc = doc.SceneGraphConfig;
+    py::class_<Class> cls(m, "SceneGraphConfig", cls_doc.doc);
+    cls  // BR
+        .def(ParamInit<Class>());
+    DefAttributesUsingSerialize(&cls, cls_doc);
+    DefReprUsingSerialize(&cls);
+    DefCopyAndDeepCopy(&cls);
+  }
 }
 
 template <typename T>
-void DoScalarDependentDefinitions(py::module m, T) {
+void DefineSceneGraphInspector(py::module m, T) {
   py::tuple param = GetPyParam<T>();
-  constexpr auto& doc = pydrake_doc.drake.geometry;
-
-  // NOLINTNEXTLINE(build/namespaces): Emulate placement in namespace.
-  using namespace drake::geometry;
-
   //  SceneGraphInspector
   {
     using Class = SceneGraphInspector<T>;
@@ -61,7 +82,7 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("num_geometries", &Class::num_geometries,
             cls_doc.num_geometries.doc)
         .def("GetAllGeometryIds", &Class::GetAllGeometryIds,
-            cls_doc.GetAllGeometryIds.doc)
+            py::arg("role") = std::nullopt, cls_doc.GetAllGeometryIds.doc)
         .def("GetGeometryIds", &Class::GetGeometryIds, py::arg("geometry_set"),
             py::arg("role") = std::nullopt, cls_doc.GetGeometryIds.doc)
         .def("NumGeometriesWithRole", &Class::NumGeometriesWithRole,
@@ -157,7 +178,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("geometry_version", &Class::geometry_version,
             py_rvp::reference_internal, cls_doc.geometry_version.doc);
   }
+}
 
+template <typename T>
+void DefineSceneGraph(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   //  SceneGraph
   {
     using Class = SceneGraph<T>;
@@ -165,7 +190,18 @@ void DoScalarDependentDefinitions(py::module m, T) {
     auto cls = DefineTemplateClassWithDefault<Class, LeafSystem<T>>(
         m, "SceneGraph", param, cls_doc.doc);
     cls  // BR
-        .def(py::init<>(), cls_doc.ctor.doc)
+        .def(py::init<>(), cls_doc.ctor.doc_0args)
+        .def(py::init<const SceneGraphConfig&>(), py::arg("config"),
+            cls_doc.ctor.doc_1args)
+        .def("set_config", &Class::set_config, py::arg("config"),
+            cls_doc.set_config.doc)
+        .def("get_config",
+            overload_cast_explicit<const SceneGraphConfig&>(&Class::get_config),
+            py_rvp::reference_internal, cls_doc.get_config.doc_0args)
+        .def("get_config",
+            overload_cast_explicit<const SceneGraphConfig&,
+                const systems::Context<T>&>(&Class::get_config),
+            cls_doc.get_config.doc_1args)
         .def("get_source_pose_port", &Class::get_source_pose_port,
             py_rvp::reference_internal, cls_doc.get_source_pose_port.doc)
         .def("get_source_configuration_port",
@@ -242,11 +278,48 @@ void DoScalarDependentDefinitions(py::module m, T) {
             overload_cast_explicit<CollisionFilterManager>(
                 &Class::collision_filter_manager),
             cls_doc.collision_filter_manager.doc_0args)
-        .def("AddRenderer", &Class::AddRenderer, py::arg("name"),
-            py::arg("renderer"), cls_doc.AddRenderer.doc)
-        .def("HasRenderer", &Class::HasRenderer, py::arg("name"),
-            cls_doc.HasRenderer.doc)
-        .def("RendererCount", &Class::RendererCount, cls_doc.RendererCount.doc)
+        .def("AddRenderer",
+            overload_cast_explicit<void, std::string,
+                std::unique_ptr<render::RenderEngine>>(&Class::AddRenderer),
+            py::arg("name"), py::arg("renderer"), cls_doc.AddRenderer.doc_2args)
+        .def("AddRenderer",
+            overload_cast_explicit<void, systems::Context<T>*, std::string,
+                std::unique_ptr<render::RenderEngine>>(&Class::AddRenderer),
+            py::arg("context"), py::arg("name"), py::arg("renderer"),
+            cls_doc.AddRenderer.doc_3args)
+        .def("RemoveRenderer",
+            overload_cast_explicit<void, const std::string&>(
+                &Class::RemoveRenderer),
+            py::arg("name"), cls_doc.RemoveRenderer.doc_1args)
+        .def("RemoveRenderer",
+            overload_cast_explicit<void, systems::Context<T>*,
+                const std::string&>(&Class::RemoveRenderer),
+            py::arg("context"), py::arg("name"),
+            cls_doc.RemoveRenderer.doc_2args)
+        .def("HasRenderer",
+            overload_cast_explicit<bool, const std::string&>(
+                &Class::HasRenderer),
+            py::arg("name"), cls_doc.HasRenderer.doc_1args)
+        .def("HasRenderer",
+            overload_cast_explicit<bool, const systems::Context<T>&,
+                const std::string&>(&Class::HasRenderer),
+            py::arg("context"), py::arg("name"), cls_doc.HasRenderer.doc_2args)
+        .def("RendererCount",
+            overload_cast_explicit<int>(&Class::RendererCount),
+            cls_doc.RendererCount.doc_0args)
+        .def("RendererCount",
+            overload_cast_explicit<int, const systems::Context<T>&>(
+                &Class::RendererCount),
+            py::arg("context"), cls_doc.RendererCount.doc_1args)
+        .def("GetRendererTypeName",
+            overload_cast_explicit<std::string, const std::string&>(
+                &Class::GetRendererTypeName),
+            py::arg("name"), cls_doc.GetRendererTypeName.doc_1args)
+        .def("GetRendererTypeName",
+            overload_cast_explicit<std::string, const systems::Context<T>&,
+                const std::string&>(&Class::GetRendererTypeName),
+            py::arg("context"), py::arg("name"),
+            cls_doc.GetRendererTypeName.doc_2args)
         // - Begin: AssignRole Overloads.
         // - - Proximity.
         .def(
@@ -350,8 +423,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def_static("world_frame_id", &Class::world_frame_id,
             cls_doc.world_frame_id.doc);
   }
+}
 
-  //  FramePoseVector
+template <typename T>
+void DefineFramePoseVector(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = FramePoseVector<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -376,8 +452,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("ids", &FramePoseVector<T>::ids, doc.KinematicsVector.ids.doc);
     AddValueInstantiation<FramePoseVector<T>>(m);
   }
+}
 
-  //  QueryObject
+template <typename T>
+void DefineQueryObject(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = QueryObject<T>;
     constexpr auto& cls_doc = doc.QueryObject;
@@ -480,8 +559,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
 
     AddValueInstantiation<QueryObject<T>>(m);
   }
+}
 
-  // SignedDistancePair
+template <typename T>
+void DefineSignedDistancePair(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = SignedDistancePair<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -504,8 +586,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
             return_value_policy_for_scalar_type<T>(),
             doc.SignedDistancePair.nhat_BA_W.doc);
   }
+}
 
-  // SignedDistanceToPoint
+template <typename T>
+void DefineSignedDistanceToPoint(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = SignedDistanceToPoint<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -523,8 +608,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
             return_value_policy_for_scalar_type<T>(),
             doc.SignedDistanceToPoint.grad_W.doc);
   }
+}
 
-  // PenetrationAsPointPair
+template <typename T>
+void DefinePenetrationAsPointPair(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   {
     using Class = PenetrationAsPointPair<T>;
     auto cls = DefineTemplateClassWithDefault<Class>(
@@ -544,8 +632,11 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def_readwrite("depth", &PenetrationAsPointPair<T>::depth,
             doc.PenetrationAsPointPair.depth.doc);
   }
+}
 
-  // ContactSurface
+template <typename T>
+void DefineContactSurface(py::module m, T) {
+  py::tuple param = GetPyParam<T>();
   // Currently we do not bind the constructor because users do not need to
   // construct it directly yet. We can get it from ComputeContactSurface*().
   if constexpr (scalar_predicate<T>::is_bool) {
@@ -589,13 +680,24 @@ void DoScalarDependentDefinitions(py::module m, T) {
         .def("Equal", &Class::Equal, py::arg("surface"), cls_doc.Equal.doc);
     DefCopyAndDeepCopy(&cls);
   }
-}  // NOLINT(readability/fn_size)
+}
 }  // namespace
 
 void DefineGeometrySceneGraph(py::module m) {
   py::module::import("pydrake.systems.framework");
   DoScalarIndependentDefinitions(m);
-  type_visit([m](auto dummy) { DoScalarDependentDefinitions(m, dummy); },
+  type_visit(
+      [m](auto dummy) {
+        // This list must remain in topological dependency order.
+        DefineFramePoseVector(m, dummy);
+        DefineContactSurface(m, dummy);
+        DefinePenetrationAsPointPair(m, dummy);
+        DefineSignedDistancePair(m, dummy);
+        DefineSignedDistanceToPoint(m, dummy);
+        DefineSceneGraphInspector(m, dummy);
+        DefineQueryObject(m, dummy);
+        DefineSceneGraph(m, dummy);
+      },
       CommonScalarPack{});
 }
 }  // namespace pydrake

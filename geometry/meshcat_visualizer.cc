@@ -9,17 +9,15 @@
 #include <fmt/format.h>
 
 #include "drake/common/extract_double.h"
+#include "drake/common/overloaded.h"
 #include "drake/geometry/meshcat_graphviz.h"
+#include "drake/geometry/meshcat_internal.h"
+#include "drake/geometry/proximity/polygon_to_triangle_mesh.h"
 #include "drake/geometry/proximity/volume_to_surface_mesh.h"
 #include "drake/geometry/utilities.h"
 
 namespace drake {
 namespace geometry {
-namespace {
-// Boilerplate for std::visit.
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-}  // namespace
 
 template <typename T>
 MeshcatVisualizer<T>::MeshcatVisualizer(std::shared_ptr<Meshcat> meshcat,
@@ -51,8 +49,8 @@ MeshcatVisualizer<T>::MeshcatVisualizer(std::shared_ptr<Meshcat> meshcat,
           .get_index();
 
   if (params_.enable_alpha_slider) {
-    meshcat_->AddSlider(
-      alpha_slider_name_, 0.02, 1.0, 0.02, alpha_value_);
+    alpha_value_ = params_.initial_alpha_slider_value;
+    meshcat_->AddSlider(alpha_slider_name_, 0.02, 1.0, 0.02, alpha_value_);
   }
 }
 
@@ -60,6 +58,9 @@ template <typename T>
 template <typename U>
 MeshcatVisualizer<T>::MeshcatVisualizer(const MeshcatVisualizer<U>& other)
     : MeshcatVisualizer(other.meshcat_, other.params_) {}
+
+template <typename T>
+MeshcatVisualizer<T>::~MeshcatVisualizer() = default;
 
 template <typename T>
 void MeshcatVisualizer<T>::Delete() const {
@@ -71,7 +72,7 @@ template <typename T>
 MeshcatAnimation* MeshcatVisualizer<T>::StartRecording(
     bool set_transforms_while_recording) {
   meshcat_->StartRecording(1.0 / params_.publish_period,
-                            set_transforms_while_recording);
+                           set_transforms_while_recording);
   return &meshcat_->get_mutable_recording();
 }
 
@@ -82,7 +83,7 @@ void MeshcatVisualizer<T>::StopRecording() {
 
 template <typename T>
 void MeshcatVisualizer<T>::PublishRecording() const {
-    meshcat_->PublishRecording();
+  meshcat_->PublishRecording();
 }
 
 template <typename T>
@@ -147,11 +148,7 @@ systems::EventStatus MeshcatVisualizer<T>::UpdateMeshcat(
       SetAlphas(/* initializing = */ false);
     }
   }
-  std::optional<double> rate = realtime_rate_calculator_.UpdateAndRecalculate(
-      ExtractDoubleOrThrow(context.get_time()));
-  if (rate) {
-    meshcat_->SetRealtimeRate(rate.value());
-  }
+  meshcat_->SetSimulationTime(ExtractDoubleOrThrow(context.get_time()));
 
   return systems::EventStatus::Succeeded();
 }
@@ -160,12 +157,12 @@ template <typename T>
 void MeshcatVisualizer<T>::SetObjects(
     const SceneGraphInspector<T>& inspector) const {
   // Frames registered previously that are not set again here should be deleted.
-  std::map <FrameId, std::string> frames_to_delete{};
+  std::map<FrameId, std::string> frames_to_delete{};
   dynamic_frames_.swap(frames_to_delete);
 
   // Geometries registered previously that are not set again here should be
   // deleted.
-  std::map <GeometryId, std::string> geometries_to_delete{};
+  std::map<GeometryId, std::string> geometries_to_delete{};
   geometries_.swap(geometries_to_delete);
 
   // TODO(SeanCurtis-TRI): Mimic the full tree structure in SceneGraph.
@@ -197,37 +194,55 @@ void MeshcatVisualizer<T>::SetObjects(
         continue;
       }
 
-      // Note: We use the frame_path/id instead of instance.GetName(geom_id),
-      // which is a garbled mess of :: and _ and a memory address by default
-      // when coming from MultibodyPlant.
-      // TODO(russt): Use the geometry names if/when they are cleaned up.
-      const std::string path =
-          fmt::format("{}/{}", frame_path, geom_id.get_value());
+      // We'll turn scoped names into meshcat paths.
+      const std::string geometry_name =
+          internal::TransformGeometryName(geom_id, inspector);
+      const std::string path = fmt::format("{}/{}", frame_path, geometry_name);
       const Rgba rgba = properties.GetPropertyOrDefault("phong", "diffuse",
                                                         params_.default_color);
-      bool used_hydroelastic = false;
+
+      // The "object" will typically be the geometry's shape. But, for the
+      // proximity role, we prefer, first, the hydroelastic surface if
+      // available, or, second, the convex hull. Record if we've used one of
+      // those proxies.
+      bool geometry_already_set = false;
+
       if constexpr (std::is_same_v<T, double>) {
         if (params_.show_hydroelastic) {
           auto maybe_mesh = inspector.maybe_get_hydroelastic_mesh(geom_id);
-          std::visit(
-              overloaded{[](std::monostate) -> void {},
-                         [&](const TriangleSurfaceMesh<double>* mesh) -> void {
+          std::visit<void>(
+              overloaded{[](std::monostate) {},
+                         [&](const TriangleSurfaceMesh<double>* mesh) {
                            DRAKE_DEMAND(mesh != nullptr);
                            meshcat_->SetObject(path, *mesh, rgba);
-                           used_hydroelastic = true;
+                           geometry_already_set = true;
                          },
-                         [&](const VolumeMesh<double>* mesh) -> void {
+                         [&](const VolumeMesh<double>* mesh) {
                            DRAKE_DEMAND(mesh != nullptr);
                            meshcat_->SetObject(
                                path, ConvertVolumeToSurfaceMesh(*mesh), rgba);
-                           used_hydroelastic = true;
+                           geometry_already_set = true;
                          }},
               maybe_mesh);
         }
       }
-      if (!used_hydroelastic) {
+
+      // Proximity role favors convex hulls if available.
+      if (const PolygonSurfaceMesh<double>* hull = nullptr;
+          (!geometry_already_set) &&
+          (params_.role == Role::kProximity) &&
+          (hull = inspector.GetConvexHull(geom_id))) {
+        // Convert polygonal surface mesh to triangle surface mesh.
+        const TriangleSurfaceMesh<double> tri_hull =
+            internal::MakeTriangleFromPolygonMesh(*hull);
+        meshcat_->SetObject(path, tri_hull, rgba);
+        geometry_already_set = true;
+      }
+
+      if (!geometry_already_set) {
         meshcat_->SetObject(path, inspector.GetShape(geom_id), rgba);
       }
+
       meshcat_->SetTransform(path, inspector.GetPoseInFrame(geom_id));
       geometries_[geom_id] = path;
       geometries_to_delete.erase(geom_id);  // Don't delete this one.
@@ -302,4 +317,4 @@ MeshcatVisualizer<T>::DoGetGraphvizFragment(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::MeshcatVisualizer)
+    class ::drake::geometry::MeshcatVisualizer);

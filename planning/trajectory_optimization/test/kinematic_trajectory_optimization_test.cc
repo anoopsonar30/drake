@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "drake/common/eigen_types.h"
@@ -9,6 +10,7 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/text_logging.h"
 #include "drake/math/matrix_util.h"
+#include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/osqp_solver.h"
 #include "drake/solvers/solve.h"
 
@@ -27,6 +29,7 @@ using solvers::OsqpSolver;
 using solvers::Solve;
 using solvers::VectorXDecisionVariable;
 using symbolic::Expression;
+using ::testing::HasSubstr;
 using trajectories::BsplineTrajectory;
 
 namespace {
@@ -52,7 +55,8 @@ class KinematicTrajectoryOptimizationTest : public ::testing::Test {
 TEST_F(KinematicTrajectoryOptimizationTest, AddPathPositionConstraint) {
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 0);
   VectorXd desired = VectorXd::Constant(num_positions_, 3.75);
-  trajopt_.AddPathPositionConstraint(desired, desired, 0.5);
+  auto binding = trajopt_.AddPathPositionConstraint(desired, desired, 0.5);
+  EXPECT_THAT(binding.to_string(), HasSubstr("path position constraint"));
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 1);
 
   trajopt_.AddDurationConstraint(1, 1);
@@ -85,8 +89,9 @@ class SimplePositionConstraint : public solvers::Constraint {
 
 TEST_F(KinematicTrajectoryOptimizationTest, AddPathPositionConstraintGeneric) {
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(), 0);
-  trajopt_.AddPathPositionConstraint(
+  auto binding = trajopt_.AddPathPositionConstraint(
       std::make_shared<SimplePositionConstraint>(), 0.2);
+  EXPECT_THAT(binding.to_string(), HasSubstr("path position constraint"));
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(), 1);
 
   trajopt_.AddDurationConstraint(1, 1);
@@ -106,7 +111,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPathPositionConstraintGeneric) {
 TEST_F(KinematicTrajectoryOptimizationTest, AddPathVelocityConstraint) {
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 0);
   VectorXd desired = VectorXd::Ones(num_positions_);
-  trajopt_.AddPathVelocityConstraint(desired, desired, 0.5);
+  auto binding = trajopt_.AddPathVelocityConstraint(desired, desired, 0.5);
+  EXPECT_THAT(binding.to_string(), HasSubstr("path velocity constraint"));
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 1);
 
   // r(0) = 0, r(1) = 1.
@@ -128,9 +134,10 @@ TEST_F(KinematicTrajectoryOptimizationTest,
   x_desired << 0.1, 0.2, 0.3, 0.4, 0.5, 0.6;
   // Note: Although it's a bounding box constraints on [q(t), v(t)], it becomes
   // a generic constraint on the decision variables.
-  trajopt_.AddVelocityConstraintAtNormalizedTime(
+  auto binding = trajopt_.AddVelocityConstraintAtNormalizedTime(
       std::make_shared<solvers::BoundingBoxConstraint>(x_desired, x_desired),
       0.2);
+  EXPECT_THAT(binding.to_string(), HasSubstr("velocity constraint"));
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(), 1);
 
   trajopt_.AddDurationConstraint(1, 1);
@@ -150,7 +157,8 @@ TEST_F(KinematicTrajectoryOptimizationTest,
 TEST_F(KinematicTrajectoryOptimizationTest, AddPathAccelerationConstraint) {
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 0);
   VectorXd desired = VectorXd::Ones(num_positions_);
-  trajopt_.AddPathAccelerationConstraint(desired, desired, 0.5);
+  auto binding = trajopt_.AddPathAccelerationConstraint(desired, desired, 0.5);
+  EXPECT_THAT(binding.to_string(), HasSubstr("path acceleration constraint"));
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 1);
 
   trajopt_.AddDurationConstraint(1.0, 1.0);
@@ -165,7 +173,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPathAccelerationConstraint) {
 TEST_F(KinematicTrajectoryOptimizationTest, AddDurationConstraint) {
   EXPECT_EQ(trajopt_.prog().bounding_box_constraints().size(), 1);
   // Try with both bounds.
-  trajopt_.AddDurationConstraint(1e-3, 10);
+  auto binding = trajopt_.AddDurationConstraint(1e-3, 10);
+  EXPECT_THAT(binding.to_string(), HasSubstr("duration constraint"));
   EXPECT_EQ(trajopt_.prog().bounding_box_constraints().size(), 2);
   // Try with upper bound only.
   trajopt_.AddDurationConstraint(nullopt, 10);
@@ -193,8 +202,9 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPositionBounds) {
 
   EXPECT_EQ(trajopt_.prog().bounding_box_constraints().size(), 2);
 
-  trajopt_.AddPositionBounds(-VectorXd::Ones(num_positions_),
-                             VectorXd::Ones(num_positions_));
+  auto binding = trajopt_.AddPositionBounds(-VectorXd::Ones(num_positions_),
+                                            VectorXd::Ones(num_positions_));
+  EXPECT_THAT(binding[0].to_string(), HasSubstr("position bound"));
 
   EXPECT_EQ(trajopt_.prog().bounding_box_constraints().size(),
             trajopt_.num_control_points() + 2);
@@ -239,8 +249,9 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddVelocityBounds) {
   EXPECT_LT(qdot->value(0.0).minCoeff(), -1.0);
 
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(), 0);
-  trajopt_.AddVelocityBounds(-VectorXd::Ones(num_positions_),
-                             VectorXd::Ones(num_positions_));
+  auto binding = trajopt_.AddVelocityBounds(-VectorXd::Ones(num_positions_),
+                                            VectorXd::Ones(num_positions_));
+  EXPECT_THAT(binding[0].to_string(), HasSubstr("velocity bound"));
   EXPECT_EQ(trajopt_.prog().linear_constraints().size(),
             trajopt_.num_control_points() - 1);
 
@@ -279,7 +290,9 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddAccelerationBounds) {
   EXPECT_LT(qddot->value(0.0).minCoeff(), -1.0);
 
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(), 0);
-  trajopt_.AddAccelerationBounds(-Vector3d::Ones(), Vector3d::Ones());
+  auto binding =
+      trajopt_.AddAccelerationBounds(-Vector3d::Ones(), Vector3d::Ones());
+  EXPECT_THAT(binding[0][0].to_string(), HasSubstr("acceleration bound"));
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(),
             trajopt_.num_positions() * (trajopt_.num_control_points() - 2));
 
@@ -311,6 +324,11 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddJerkBounds) {
   }
   trajopt_.AddDurationConstraint(1, 1);
 
+  // Help IPOPT.
+  trajopt_.AddPositionBounds(Vector3d::Constant(-20), Vector3d::Constant(20));
+  trajopt_.get_mutable_prog().SetSolverOption(solvers::IpoptSolver::id(), "tol",
+                                              1e-6);
+
   MathematicalProgramResult result = Solve(trajopt_.prog());
   EXPECT_TRUE(result.is_success());
   BsplineTrajectory<double> q = trajopt_.ReconstructTrajectory(result);
@@ -321,7 +339,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddJerkBounds) {
   EXPECT_LT(qdddot->value(0.0).minCoeff(), -1.0);
 
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(), 0);
-  trajopt_.AddJerkBounds(-Vector3d::Ones(), Vector3d::Ones());
+  auto binding = trajopt_.AddJerkBounds(-Vector3d::Ones(), Vector3d::Ones());
+  EXPECT_THAT(binding[0][0].to_string(), HasSubstr("jerk bound"));
   EXPECT_EQ(trajopt_.prog().generic_constraints().size(),
             trajopt_.num_positions() * (trajopt_.num_control_points() - 3));
 
@@ -341,7 +360,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddJerkBounds) {
 
 TEST_F(KinematicTrajectoryOptimizationTest, AddDurationCost) {
   EXPECT_EQ(trajopt_.prog().linear_costs().size(), 0);
-  trajopt_.AddDurationCost(1.0);
+  auto binding = trajopt_.AddDurationCost(1.0);
+  EXPECT_THAT(binding.to_string(), HasSubstr("duration cost"));
   EXPECT_EQ(trajopt_.prog().linear_costs().size(), 1);
 
   trajopt_.AddDurationConstraint(0.1, 1.0);
@@ -355,7 +375,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPathLengthCost) {
   trajopt_.AddPathPositionConstraint(Vector3d::Zero(), Vector3d::Zero(), 0);
   trajopt_.AddPathPositionConstraint(Vector3d::Ones(), Vector3d::Ones(), 1);
   EXPECT_EQ(trajopt_.prog().l2norm_costs().size(), 0);
-  trajopt_.AddPathLengthCost(2.0, false);
+  auto binding = trajopt_.AddPathLengthCost(2.0, false);
+  EXPECT_THAT(binding[0].to_string(), HasSubstr("path length cost"));
   EXPECT_EQ(trajopt_.prog().l2norm_costs().size(),
             trajopt_.num_control_points() - 1);
 
@@ -377,7 +398,8 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPathLengthCostConic) {
   trajopt_.AddPathPositionConstraint(Vector3d::Ones(), Vector3d::Ones(), 1);
   EXPECT_EQ(trajopt_.prog().linear_costs().size(), 0);
   EXPECT_EQ(trajopt_.prog().lorentz_cone_constraints().size(), 0);
-  trajopt_.AddPathLengthCost(2.0, true);
+  auto binding = trajopt_.AddPathLengthCost(2.0, true);
+  EXPECT_THAT(binding[0].to_string(), HasSubstr("path length cost"));
   EXPECT_EQ(trajopt_.prog().linear_costs().size(),
             trajopt_.num_control_points() - 1);
   EXPECT_EQ(trajopt_.prog().lorentz_cone_constraints().size(),
@@ -387,6 +409,32 @@ TEST_F(KinematicTrajectoryOptimizationTest, AddPathLengthCostConic) {
   auto result = Solve(trajopt_.prog());
   EXPECT_TRUE(result.is_success());
   EXPECT_NEAR(result.get_optimal_cost(), 2.0 * std::sqrt(3.0), 1e-6);
+}
+
+TEST_F(KinematicTrajectoryOptimizationTest, AddPathEnergyCost) {
+  trajopt_.AddPathPositionConstraint(Vector3d::Zero(), Vector3d::Zero(), 0);
+  trajopt_.AddPathPositionConstraint(Vector3d::Ones(), Vector3d::Ones(), 1);
+  EXPECT_EQ(trajopt_.prog().quadratic_costs().size(), 0);
+  auto binding = trajopt_.AddPathEnergyCost(2.0);
+  EXPECT_THAT(binding[0].to_string(), HasSubstr("path energy cost"));
+  EXPECT_EQ(trajopt_.prog().quadratic_costs().size(),
+            trajopt_.num_control_points() - 1);
+
+  // Fix a duration not equal to 1.0, to demonstrate that the trajectory
+  // duration does not affect the optimal cost.
+  trajopt_.AddDurationConstraint(4.0, 4.0);
+
+  // No initial guess is necessary, because the underlying optimization problem
+  // is a (convex) QP.
+  auto result = Solve(trajopt_.prog());
+  ASSERT_TRUE(result.is_success());
+
+  // For n control points (i.e. n-1 segments), evenly spaced between (0,0,0)
+  // and (1,1,1), the optimal cost should be (n-1) * (3 / (n-1)²), which
+  // simplifies to 3/(n-1). Because we used a weight of 2.0, the optimal cost
+  // should be twice that.
+  const double expected_cost = 6.0 / (trajopt_.num_control_points() - 1);
+  EXPECT_NEAR(result.get_optimal_cost(), expected_cost, 1e-6);
 }
 
 TEST_F(KinematicTrajectoryOptimizationTest, SolveWithAlmostEverything) {

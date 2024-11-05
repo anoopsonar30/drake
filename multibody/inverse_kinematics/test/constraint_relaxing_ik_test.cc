@@ -2,7 +2,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/random.h"
 #include "drake/multibody/parsing/parser.h"
 
@@ -16,8 +15,8 @@ namespace multibody {
 // an IK solution can be computed, and that the resulting pose lies
 // within the given tolerance from the forward kinematics poses.
 GTEST_TEST(ConstraintRelaxingIkTest, SolveIkFromFk) {
-  const std::string kModelPath = FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/urdf/"
+  const std::string kModelPath = PackageMap{}.ResolveUrl(
+      "package://drake_models/iiwa_description/urdf/"
       "iiwa14_polytope_collision.urdf");
   MultibodyPlant<double> iiwa(0);
   Parser(&iiwa).AddModels(kModelPath);
@@ -26,7 +25,7 @@ GTEST_TEST(ConstraintRelaxingIkTest, SolveIkFromFk) {
   iiwa.Finalize();
 
   const std::string kEndEffectorLinkName = "iiwa_link_ee";
-  const Body<double>& end_effector =
+  const RigidBody<double>& end_effector =
       iiwa.GetBodyByName(kEndEffectorLinkName);
 
   ConstraintRelaxingIk ik_planner(kModelPath, kEndEffectorLinkName);

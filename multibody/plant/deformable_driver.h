@@ -1,21 +1,24 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
 #include "drake/common/eigen_types.h"
+#include "drake/multibody/contact_solvers/contact_solver_results.h"
 #include "drake/multibody/contact_solvers/sap/partial_permutation.h"
 #include "drake/multibody/contact_solvers/sap/sap_fixed_constraint.h"
 #include "drake/multibody/contact_solvers/schur_complement.h"
 #include "drake/multibody/fem/discrete_time_integrator.h"
 #include "drake/multibody/fem/fem_solver.h"
-#include "drake/multibody/plant/contact_pair_kinematics.h"
+#include "drake/multibody/plant/deformable_contact_info.h"
 #include "drake/multibody/plant/deformable_model.h"
 #include "drake/multibody/plant/discrete_contact_data.h"
-#include "drake/multibody/plant/discrete_update_manager.h"
+#include "drake/multibody/plant/discrete_contact_pair.h"
+#include "drake/multibody/plant/geometry_contact_data.h"
 #include "drake/systems/framework/context.h"
 
 namespace drake {
@@ -69,6 +72,9 @@ class Multiplexer {
   int num_entries_{0};
 };
 
+template <typename T>
+class DiscreteUpdateManager;
+
 /* DeformableDriver is responsible for computing dynamics information about
  all deformable bodies. It works in tandem with a DeformableModel and a
  DiscreteUpdateManager that are provided at construction time. The deformable
@@ -92,7 +98,7 @@ class Multiplexer {
 template <typename T>
 class DeformableDriver : public ScalarConvertibleComponent<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DeformableDriver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DeformableDriver);
 
   /* Constructs a deformable driver that solves for the dynamics of the given
    `deformable_model`. The newly constructed driver is used in the given
@@ -103,7 +109,7 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
   DeformableDriver(const DeformableModel<T>* deformable_model,
                    const DiscreteUpdateManager<T>* manager);
 
-  ~DeformableDriver();
+  ~DeformableDriver() override;
 
   int num_deformable_bodies() const { return deformable_model_->num_bodies(); }
 
@@ -136,19 +142,12 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
   void AppendLinearDynamicsMatrix(const systems::Context<T>& context,
                                   std::vector<MatrixX<T>>* A) const;
 
-  /* Given the configuration stored in `context`, appends discrete pairs in
-   which one of the body in contact is deformable to the given `pairs`.
-   @pre pairs != nullptr. */
+  /* Appends discrete contact pairs where at least one of the bodies in contact
+   is deformable.
+   @pre result != nullptr. */
   void AppendDiscreteContactPairs(
       const systems::Context<T>& context,
-      DiscreteContactData<DiscreteContactPair<T>>* pairs) const;
-
-  /* Appends the contact kinematics information for each contact pair where at
-   least one of the body in contact is deformable.
-   @pre result != nullptr. */
-  void AppendContactKinematics(
-      const systems::Context<T>& context,
-      DiscreteContactData<ContactPairKinematics<T>>* result) const;
+      DiscreteContactData<DiscreteContactPair<T>>* result) const;
 
   /* Appends the constraint kinematics information for each deformable rigid
    fixed constraint.
@@ -157,6 +156,14 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
       const systems::Context<T>& context,
       std::vector<contact_solvers::internal::FixedConstraintKinematics<T>>*
           result) const;
+
+  /* Computes the contact information for all deformable bodies.
+   @pre contact_info != nullptr. */
+  void CalcDeformableContactInfo(
+      const geometry::internal::DeformableContact<T>& deformable_contact,
+      const DiscreteContactData<DiscreteContactPair<T>>& contact_pairs,
+      const contact_solvers::internal::ContactSolverResults<T>& solver_results,
+      std::vector<DeformableContactInfo<T>>* contact_info) const;
 
   /* Evaluates FemState at the next time step for each deformable body and
    copies the them into the corresponding DiscreteValues.
@@ -174,6 +181,14 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
   const geometry::internal::ContactParticipation& EvalConstraintParticipation(
       const systems::Context<T>& context, DeformableBodyIndex index) const;
 
+  /* Computes the contact information for all registered deformable bodies.
+   This is used by MbP to populate the GeometryContactData summary along with
+   all of the other types of geometry contacts (point, surface, etc).
+   @pre result != nullptr. */
+  void CalcDeformableContact(
+      const geometry::QueryObject<T>& query_object,
+      geometry::internal::DeformableContact<T>* result) const;
+
  private:
   friend class DeformableDriverTest;
   friend class DeformableDriverContactTest;
@@ -187,7 +202,6 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
     std::vector<systems::CacheIndex> fem_states;
     std::vector<systems::CacheIndex> fem_solvers;
     std::vector<systems::CacheIndex> next_fem_states;
-    systems::CacheIndex deformable_contact;
     std::vector<systems::CacheIndex> constraint_participations;
     std::vector<systems::CacheIndex> dof_permutations;
     std::unordered_map<geometry::GeometryId, systems::CacheIndex>
@@ -196,6 +210,58 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
     systems::CacheIndex participating_velocities;
     systems::CacheIndex participating_free_motion_velocities;
   };
+
+  /* Struct to hold intermediate data from one of the two geometries in contact
+   when computing DiscreteContactPair. */
+  struct ContactData {
+    /* The world frame position of the relative-to point for reporting the
+     contact results. See DiscreteContactPair::p_ApC_W and
+     DiscreteContactPair::p_BqC_W. `p_WG` is coincident with P and Q (and as
+     they are all measured and expressed in the world frame, they will all
+     have the same values). */
+    Vector3<T> p_WG;
+    /* Contact Jacobians for the kinematic tree corresponding to the object
+     participating in the contact. `jacobian[i]` stores the contact Jacobian for
+     the i-th contact point. This is empty if the geometry is rigid and welded
+     to World. */
+    std::vector<typename DiscreteContactPair<T>::JacobianTreeBlock> jacobian;
+    /* Velocity (in the world frame) of the point Gc affixed to the geometry
+     that is coincident with the contact point C. `v_WGc[i]` stores the
+     world-frame velocity of the i-th contact point. This is empty if the
+     geometry is rigid and welded to World. */
+    std::vector<Vector3<T>> v_WGc;
+    /* Name of the geometry in contact. */
+    std::string name;
+  };
+
+  /* Computes the contact data for a deformable geometry G participating in
+   contact.
+   @param[in] context          Context of the MultibodyPlant owning this driver.
+   @param[in] contact_surface  The contact surface between two geometries with
+                               one of the geometries being geometry G.
+   @param[in] is_A             True if geometry G is labeled as geometry A in
+                               the given `contact_surface`. See class
+                               documentation for
+                               geometry::internal::DeformableContactSurface for
+                               details. */
+  ContactData ComputeContactDataForDeformable(
+      const systems::Context<T>& context,
+      const geometry::internal::DeformableContactSurface<T>& contact_surface,
+      bool is_A) const;
+
+  /* Computes the contact data for a rigid geometry G participating in contact.
+   @param[in] context          Context of the MultibodyPlant owning this driver.
+   @param[in] contact_surface  The contact surface between two geometries with
+                               one of the geometries being geometry G.
+   @note Unlike ComputeContactDataForDeformable where we need to determine
+   whether geometry G is labeled as geometry A or B in DeformableContactSurface,
+   by convention, a rigid geometry is always labeled as geometry B in
+   DeformableContactSurface if it participates in deformable contact. */
+  ContactData ComputeContactDataForRigid(
+      const systems::Context<T>& context,
+      const geometry::internal::DeformableContactSurface<T>& contact_surface)
+      const;
+
   /* Copies the state of the deformable body with `id` in the given `context`
    to the `fem_state`.
    @pre fem_state != nullptr and has size compatible with the state of the
@@ -247,15 +313,8 @@ class DeformableDriver : public ScalarConvertibleComponent<T> {
   const fem::FemState<T>& EvalNextFemState(const systems::Context<T>& context,
                                            DeformableBodyIndex index) const;
 
-  /* Computes the contact information for all registered deformable bodies
-   @pre The geometry query input port of the MultibodyPlant that owns the
-        manager associated with this DeformableDriver is connected.
-   @pre result != nullptr. */
-  void CalcDeformableContact(
-      const systems::Context<T>& context,
-      geometry::internal::DeformableContact<T>* result) const;
-
-  /* Eval version of CalcDeformableContact(). */
+  /* Eval version of CalcDeformableContact(), though notably routed through
+   MultibodyPlant so that the plant can own the GeometryContactData cache. */
   const geometry::internal::DeformableContact<T>& EvalDeformableContact(
       const systems::Context<T>& context) const;
 

@@ -7,12 +7,14 @@
 
 #include "drake/common/fmt_ostream.h"
 #include "drake/common/never_destroyed.h"
+#include "drake/common/parallelism.h"
 #include "drake/math/quadratic_form.h"
 #include "drake/solvers/aggregate_costs_constraints.h"
 
 namespace drake {
 namespace solvers {
 namespace internal {
+namespace {
 // Given a vector of triplets (which might contain duplicated entries in the
 // matrix), returns the vector of rows, columns and values.
 void ConvertTripletsToVectors(
@@ -37,6 +39,7 @@ void ConvertTripletsToVectors(
     }
   }
 }
+}  // namespace
 
 size_t MatrixVariableEntry::get_next_id() {
   static never_destroyed<std::atomic<int>> next_id(0);
@@ -48,7 +51,7 @@ MosekSolverProgram::MosekSolverProgram(const MathematicalProgram& prog,
     : map_decision_var_to_mosek_var_{prog} {
   // Create the optimization task.
   // task is initialized as a null pointer, same as in Mosek's documentation
-  // https://docs.mosek.com/10.0/capi/design.html#hello-world-in-mosek
+  // https://docs.mosek.com/10.1/capi/design.html#hello-world-in-mosek
   task_ = nullptr;
   MSK_maketask(env, 0,
                map_decision_var_to_mosek_var_
@@ -398,21 +401,9 @@ MSKrescodee MosekSolverProgram::AddBoundingBoxConstraints(
                        std::pair<ConstraintDualIndices, ConstraintDualIndices>>*
         dual_indices) {
   int num_decision_vars = prog.num_vars();
-  std::vector<double> x_lb(num_decision_vars,
-                           -std::numeric_limits<double>::infinity());
-  std::vector<double> x_ub(num_decision_vars,
-                           std::numeric_limits<double>::infinity());
-  for (const auto& binding : prog.bounding_box_constraints()) {
-    const auto& constraint = binding.evaluator();
-    const Eigen::VectorXd& lower_bound = constraint->lower_bound();
-    const Eigen::VectorXd& upper_bound = constraint->upper_bound();
-
-    for (int i = 0; i < static_cast<int>(binding.GetNumElements()); ++i) {
-      size_t x_idx = prog.FindDecisionVariableIndex(binding.variables()(i));
-      x_lb[x_idx] = std::max(x_lb[x_idx], lower_bound[i]);
-      x_ub[x_idx] = std::min(x_ub[x_idx], upper_bound[i]);
-    }
-  }
+  std::vector<double> x_lb;
+  std::vector<double> x_ub;
+  AggregateBoundingBoxConstraints(prog, &x_lb, &x_ub);
 
   auto add_variable_bound_in_mosek = [this](int mosek_var_index, double lower,
                                             double upper) {
@@ -526,7 +517,7 @@ MSKrescodee MosekSolverProgram::AddBoundingBoxConstraints(
         // This variable is a Mosek matrix variable. The bound on this variable
         // is imposed as a linear constraint.
         DRAKE_DEMAND(
-            decision_variable_to_mosek_matrix_variable().count(var_index) > 0);
+            decision_variable_to_mosek_matrix_variable().contains(var_index));
         lower_bound_duals[i].type = DualVarType::kLinearConstraint;
         upper_bound_duals[i].type = DualVarType::kLinearConstraint;
         const int linear_constraint_index =
@@ -692,7 +683,7 @@ MSKrescodee MosekSolverProgram::AddQuadraticConstraints(
     }
 
     // Pre-allocate the size for the Q matrix according to
-    // https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.putqcon
+    // https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.putqcon
     rescode = MSK_putmaxnumqnz(task_, qcsubi.size());
     if (rescode != MSK_RES_OK) {
       return rescode;
@@ -736,7 +727,7 @@ MSKrescodee MosekSolverProgram::AddAffineConeConstraint(
     const Eigen::SparseMatrix<double>& B,
     const VectorX<symbolic::Variable>& decision_vars,
     const std::vector<MSKint32t>& slack_vars_mosek_indices,
-    const Eigen::VectorXd& c, MSKconetypee cone_type, MSKint64t* acc_index) {
+    const Eigen::VectorXd& c, MSKdomaintypee cone_type, MSKint64t* acc_index) {
   MSKrescodee rescode = MSK_RES_OK;
   std::vector<MSKint32t> F_subi;
   std::vector<MSKint32t> F_subj;
@@ -796,16 +787,20 @@ MSKrescodee MosekSolverProgram::AddAffineConeConstraint(
   // Create the domain.
   MSKint64t dom_idx;
   switch (cone_type) {
-    case MSK_CT_QUAD: {
+    case MSK_DOMAIN_QUADRATIC_CONE: {
       rescode = MSK_appendquadraticconedomain(task_, afe_dim, &dom_idx);
       break;
     }
-    case MSK_CT_RQUAD: {
+    case MSK_DOMAIN_RQUADRATIC_CONE: {
       rescode = MSK_appendrquadraticconedomain(task_, afe_dim, &dom_idx);
       break;
     }
-    case MSK_CT_PEXP: {
+    case MSK_DOMAIN_PRIMAL_EXP_CONE: {
       rescode = MSK_appendprimalexpconedomain(task_, &dom_idx);
+      break;
+    }
+    case MSK_DOMAIN_SVEC_PSD_CONE: {
+      rescode = MSK_appendsvecpsdconedomain(task_, afe_dim, &dom_idx);
       break;
     }
     default: {
@@ -855,92 +850,65 @@ MSKrescodee MosekSolverProgram::AddPositiveSemidefiniteConstraints(
 }
 
 MSKrescodee MosekSolverProgram::AddLinearMatrixInequalityConstraint(
-    const MathematicalProgram& prog) {
-  // 1. Create the matrix variable X_bar.
-  // 2. Add the constraint
-  //     x1 * F1(m, n) + ... + xk * Fk(m, n) + <E_mn, X_bar> = -F0(m, n)
-  //    where E_mn is a symmetric matrix, the matrix inner product <E_mn, X_bar>
-  //    = -X_bar(m, n).
-  //    This linear constraint can be written as [F1_lower F2_lower ...
-  //    Fk_lower] * [x1; ...; xk] - X_bar_lower = -F0_lower
+    const MathematicalProgram& prog,
+    std::unordered_map<Binding<LinearMatrixInequalityConstraint>, MSKint64t>*
+        acc_indices) {
+  // Use Mosek's "affine cone constraint". See
+  // https://docs.mosek.com/latest/capi/tutorial-sdo-shared.html#example-sdo-lmi-linear-matrix-inequalities-and-the-vectorized-semidefinite-domain
+  // for more details.
+  DRAKE_ASSERT(acc_indices != nullptr);
   MSKrescodee rescode = MSK_RES_OK;
+  const double sqrt2 = std::sqrt(2);
+  // For each LMI constraint, to impose the LMI that
+  // F0 + x1 * F1 + x2 * F2 + ... + xk * Fk is psd,
+  // Mosek takes the lower triangular part of the psd matrix, scales the
+  // off-diagonal terms by sqrt(2), and impose that the concatenation of the
+  // scaled lower triangular part is in the SVEC_PSD_CONE.
+
+  // We write the concatenated scaled lower-triangular part of
+  // F0 + x1 * F1 + x2 * F2 + ... + xk * Fk
+  // as
+  // A * x + c
+  // where A is a sparse matrix.
+  std::vector<Eigen::Triplet<double>> A_triplets;
   for (const auto& binding : prog.linear_matrix_inequality_constraints()) {
-    int num_linear_constraint = 0;
-    rescode = MSK_getnumcon(task_, &num_linear_constraint);
-    if (rescode != MSK_RES_OK) {
-      return rescode;
-    }
-
-    const int rows = binding.evaluator()->matrix_rows();
-    rescode = MSK_appendbarvars(task_, 1, &rows);
-    if (rescode != MSK_RES_OK) {
-      return rescode;
-    }
-    MSKint32t bar_X_index;
-    rescode = MSK_getnumbarvar(task_, &bar_X_index);
-    if (rescode != MSK_RES_OK) {
-      return rescode;
-    }
-    bar_X_index -= 1;
-    // Now form the matrix F_lower = [F1_lower F2_lower ... Fk_lower]
-    std::vector<Eigen::Triplet<double>> F_lower_triplets;
-    const int num_lower_entries = rows * (rows + 1) / 2;
-    F_lower_triplets.reserve(
-        num_lower_entries * static_cast<int>(binding.evaluator()->F().size()) -
-        1);
-    int lower_index = 0;
-    for (int k = 1; k < static_cast<int>(binding.evaluator()->F().size());
-         ++k) {
-      lower_index = 0;
-      for (int j = 0; j < rows; ++j) {
-        for (int i = j; i < rows; ++i) {
-          if (std::abs(binding.evaluator()->F()[k](i, j)) >
-              Eigen::NumTraits<double>::epsilon()) {
-            F_lower_triplets.emplace_back(lower_index, k - 1,
-                                          binding.evaluator()->F()[k](i, j));
+    // Allocate memory for A_triplets. We allocate the maximal memory by
+    // assuming that A is dense.
+    // TODO(hongkai.dai): change LinearMatrixInequalityConstraint::F() to return
+    // a vector of sparse matrices, and call std::vector::reserve here to
+    // reserve the right amount of memory.
+    A_triplets.reserve((binding.evaluator()->matrix_rows() + 1) *
+                       binding.evaluator()->matrix_rows() *
+                       binding.variables().rows());
+    int A_row_index = 0;
+    Eigen::VectorXd c(binding.evaluator()->matrix_rows() *
+                      (binding.evaluator()->matrix_rows() + 1) / 2);
+    for (int j = 0; j < binding.evaluator()->matrix_rows(); ++j) {
+      for (int i = j; i < binding.evaluator()->matrix_rows(); ++i) {
+        const double scaling_factor = i == j ? 1 : sqrt2;
+        c(A_row_index) = binding.evaluator()->F().at(0)(i, j) * scaling_factor;
+        for (int k = 1; k < ssize(binding.evaluator()->F()); ++k) {
+          if (binding.evaluator()->F()[k](i, j) != 0) {
+            A_triplets.emplace_back(
+                A_row_index, k - 1,
+                binding.evaluator()->F()[k](i, j) * scaling_factor);
           }
-          lower_index++;
         }
+        ++A_row_index;
       }
     }
-    Eigen::SparseMatrix<double> F_lower(num_lower_entries,
-                                        binding.variables().rows());
-    F_lower.setFromTriplets(F_lower_triplets.begin(), F_lower_triplets.end());
-
-    Eigen::VectorXd bound(num_lower_entries);
-    lower_index = 0;
-    for (int j = 0; j < rows; ++j) {
-      for (int i = j; i < rows; ++i) {
-        bound(lower_index++) = -binding.evaluator()->F()[0](i, j);
-      }
-    }
-
-    rescode = AddLinearConstraintToMosek(
-        prog, F_lower, Eigen::SparseMatrix<double>(num_lower_entries, 0), bound,
-        bound, binding.variables(), {}, LinearConstraintBoundType::kEquality);
+    Eigen::SparseMatrix<double> A(c.rows(),
+                                  binding.evaluator()->F().size() - 1);
+    A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+    MSKint64t acc_index;
+    rescode = this->AddAffineConeConstraint(
+        prog, A, Eigen::SparseMatrix<double>(A.rows(), 0), binding.variables(),
+        {}, c, MSK_DOMAIN_SVEC_PSD_CONE, &acc_index);
     if (rescode != MSK_RES_OK) {
       return rescode;
     }
-    // Now add <Eₘₙ, X̅> = -X̅(m,n) to the linear constraint
-    lower_index = 0;
-    for (int j = 0; j < rows; ++j) {
-      for (int i = j; i < rows; ++i) {
-        const MSKrealt val = i == j ? -1.0 : -0.5;
-        MSKint64t E_index;
-        rescode =
-            MSK_appendsparsesymmat(task_, rows, 1, &i, &j, &val, &E_index);
-        if (rescode != MSK_RES_OK) {
-          return rescode;
-        }
-        const MSKrealt weights{1.0};
-        rescode = MSK_putbaraij(task_, num_linear_constraint + lower_index,
-                                bar_X_index, 1, &E_index, &weights);
-        if (rescode != MSK_RES_OK) {
-          return rescode;
-        }
-        lower_index++;
-      }
-    }
+    acc_indices->emplace(binding, acc_index);
+    A_triplets.clear();
   }
   return rescode;
 }
@@ -1041,7 +1009,7 @@ MSKrescodee MosekSolverProgram::AddQuadraticCostAsLinearCost(
   }
   const MSKint32t s_index = num_mosek_vars;
   // Put bound on s as s >= 0.
-  rescode = MSK_putvarbound(task_, s_index, MSK_BK_FR, 0, MSK_INFINITY);
+  rescode = MSK_putvarbound(task_, s_index, MSK_BK_LO, 0, MSK_INFINITY);
   if (rescode != MSK_RES_OK) {
     return rescode;
   }
@@ -1071,9 +1039,9 @@ MSKrescodee MosekSolverProgram::AddQuadraticCostAsLinearCost(
   g(0) = 1;
   std::vector<MSKint32t> slack_vars(1);
   slack_vars[0] = s_index;
-  rescode =
-      this->AddAffineConeConstraint(prog, L_bar_sparse, s_coeff, quadratic_vars,
-                                    slack_vars, g, MSK_CT_RQUAD, &acc_index);
+  rescode = this->AddAffineConeConstraint(
+      prog, L_bar_sparse, s_coeff, quadratic_vars, slack_vars, g,
+      MSK_DOMAIN_RQUADRATIC_CONE, &acc_index);
   if (rescode != MSK_RES_OK) {
     return rescode;
   }
@@ -1104,8 +1072,9 @@ MSKrescodee MosekSolverProgram::AddQuadraticCost(
   for (int j = 0; j < Q_quadratic_vars.outerSize(); ++j) {
     for (Eigen::SparseMatrix<double>::InnerIterator it(Q_quadratic_vars, j); it;
          ++it) {
-      Q_lower_triplets.emplace_back(var_indices[it.row()],
-                                    var_indices[it.col()], it.value());
+      int row = std::max(var_indices[it.row()], var_indices[it.col()]);
+      int col = std::min(var_indices[it.row()], var_indices[it.col()]);
+      Q_lower_triplets.emplace_back(row, col, it.value());
     }
   }
   std::vector<MSKint32t> qrow, qcol;
@@ -1114,6 +1083,71 @@ MSKrescodee MosekSolverProgram::AddQuadraticCost(
   ConvertTripletsToVectors(Q_lower_triplets, xDim, xDim, &qrow, &qcol, &qval);
   const int Q_nnz = static_cast<int>(qrow.size());
   rescode = MSK_putqobj(task_, Q_nnz, qrow.data(), qcol.data(), qval.data());
+  if (rescode != MSK_RES_OK) {
+    return rescode;
+  }
+  return rescode;
+}
+
+MSKrescodee MosekSolverProgram::AddL2NormCost(
+    const Eigen::SparseMatrix<double>& C, const Eigen::VectorXd& d,
+    const VectorX<symbolic::Variable>& x, const MathematicalProgram& prog) {
+  // We will take the following steps:
+  // 1. Add a slack variable t.
+  // 2. Add the affine cone constraint
+  //    [0  1] * [x] + [0] is in Lorentz cone.
+  //    [C  0]   [t]   [d]
+  // 3. Add the cost min t.
+  MSKrescodee rescode = MSK_RES_OK;
+  // Add a slack variable t.
+  MSKint32t num_mosek_vars = 0;
+  rescode = MSK_getnumvar(task_, &num_mosek_vars);
+  if (rescode != MSK_RES_OK) {
+    return rescode;
+  }
+  rescode = MSK_appendvars(task_, 1);
+  if (rescode != MSK_RES_OK) {
+    return rescode;
+  }
+  const MSKint32t t_index = num_mosek_vars;
+  // Put the bound on t as t >= 0.
+  rescode = MSK_putvarbound(task_, t_index, MSK_BK_LO, 0, MSK_INFINITY);
+  if (rescode != MSK_RES_OK) {
+    return rescode;
+  }
+  // Add the constraint that
+  // [0  1] * [x] + [0]
+  // [C  0]   [t]   [d]
+  // is in Lorentz cone.
+  //
+  // We use A = [0]  and B = [1]
+  //            [C]          [0]
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  A_triplets.reserve(C.nonZeros());
+  for (int i = 0; i < C.outerSize(); ++i) {
+    for (Eigen::SparseMatrix<double>::InnerIterator it(C, i); it; ++it) {
+      A_triplets.emplace_back(it.row() + 1, it.col(), it.value());
+    }
+  }
+  Eigen::SparseMatrix<double> A(C.rows() + 1, C.cols());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+
+  std::array<Eigen::Triplet<double>, 1> B_triplets;
+  B_triplets[0] = Eigen::Triplet<double>(0, 0, 1);
+  Eigen::SparseMatrix<double> B(C.rows() + 1, 1);
+  B.setFromTriplets(B_triplets.begin(), B_triplets.end());
+  MSKint64t acc_index;
+  Eigen::VectorXd offset(1 + C.rows());
+  offset(0) = 0;
+  offset.tail(C.rows()) = d;
+  rescode = this->AddAffineConeConstraint(
+      prog, A, B, x, std::vector<MSKint32t>{{t_index}}, offset,
+      MSK_DOMAIN_QUADRATIC_CONE, &acc_index);
+  if (rescode != MSK_RES_OK) {
+    return rescode;
+  }
+  // Add the linear cost min t.
+  rescode = MSK_putcj(task_, t_index, 1.0);
   if (rescode != MSK_RES_OK) {
     return rescode;
   }
@@ -1146,7 +1180,8 @@ MSKrescodee MosekSolverProgram::AddCosts(const MathematicalProgram& prog) {
         prog.rotated_lorentz_cone_constraints().empty() &&
         prog.linear_matrix_inequality_constraints().empty() &&
         prog.positive_semidefinite_constraints().empty() &&
-        prog.exponential_cone_constraints().empty()) {
+        prog.exponential_cone_constraints().empty() &&
+        prog.l2norm_costs().empty()) {
       // This is a QP, add the quadratic cost.
       rescode = AddQuadraticCost(Q_lower, quadratic_vars, prog);
 
@@ -1160,6 +1195,16 @@ MSKrescodee MosekSolverProgram::AddCosts(const MathematicalProgram& prog) {
       if (rescode != MSK_RES_OK) {
         return rescode;
       }
+    }
+  }
+
+  // Now add all the L2NormCost.
+  for (const auto& l2norm_cost : prog.l2norm_costs()) {
+    rescode = this->AddL2NormCost(l2norm_cost.evaluator()->get_sparse_A(),
+                                  l2norm_cost.evaluator()->b(),
+                                  l2norm_cost.variables(), prog);
+    if (rescode != MSK_RES_OK) {
+      return rescode;
     }
   }
 
@@ -1285,7 +1330,7 @@ MapDecisionVariableToMosekVariable::MapDecisionVariableToMosekVariable(
   // Mosek.
   int nonmatrix_variable_count = 0;
   for (int i = 0; i < prog.num_vars(); ++i) {
-    if (decision_variable_to_mosek_matrix_variable.count(i) == 0) {
+    if (!decision_variable_to_mosek_matrix_variable.contains(i)) {
       decision_variable_to_mosek_nonmatrix_variable.emplace(
           i, nonmatrix_variable_count++);
     }
@@ -1440,73 +1485,72 @@ void ThrowForInvalidOption(MSKrescodee rescode, const std::string& option,
 
 // This function is used to print information for each iteration to the console,
 // it will show PRSTATUS, PFEAS, DFEAS, etc. For more information, check out
-// https://docs.mosek.com/10.0/capi/solver-io.html. This printstr is copied
-// directly from https://docs.mosek.com/10.0/capi/solver-io.html#stream-logging.
+// https://docs.mosek.com/10.1/capi/solver-io.html. This printstr is copied
+// directly from https://docs.mosek.com/10.1/capi/solver-io.html#stream-logging.
 void MSKAPI printstr(void*, const char str[]) {
   printf("%s", str);
 }
 
 }  // namespace
 
-MSKrescodee MosekSolverProgram::UpdateOptions(
-    const SolverOptions& merged_options, const SolverId mosek_id,
-    bool* print_to_console, std::string* print_file_name,
+void MosekSolverProgram::UpdateOptions(
+    internal::SpecificOptions* options, bool* is_printing,
     std::optional<std::string>* msk_writedata) {
-  MSKrescodee rescode{MSK_RES_OK};
-  for (const auto& double_options : merged_options.GetOptionsDouble(mosek_id)) {
-    if (rescode == MSK_RES_OK) {
-      rescode = MSK_putnadouparam(task_, double_options.first.c_str(),
-                                  double_options.second);
-      ThrowForInvalidOption(rescode, double_options.first,
-                            double_options.second);
-    }
-  }
-  for (const auto& int_options : merged_options.GetOptionsInt(mosek_id)) {
-    if (rescode == MSK_RES_OK) {
-      rescode = MSK_putnaintparam(task_, int_options.first.c_str(),
-                                  int_options.second);
-      ThrowForInvalidOption(rescode, int_options.first, int_options.second);
-    }
-  }
-  for (const auto& str_options : merged_options.GetOptionsStr(mosek_id)) {
-    if (rescode == MSK_RES_OK) {
-      if (str_options.first == "writedata") {
-        if (str_options.second != "") {
-          msk_writedata->emplace(str_options.second);
-        }
-      } else {
-        rescode = MSK_putnastrparam(task_, str_options.first.c_str(),
-                                    str_options.second.c_str());
-        ThrowForInvalidOption(rescode, str_options.first, str_options.second);
-      }
-    }
-  }
-  // log file.
-  *print_to_console = merged_options.get_print_to_console();
-  *print_file_name = merged_options.get_print_file_name();
-  // Refer to https://docs.mosek.com/10.0/capi/solver-io.html#stream-logging
-  // for Mosek stream logging.
-  // First we check if the user wants to print to both the console and the file.
-  // If true, throw an error BEFORE we create the log file through
-  // MSK_linkfiletotaskstream. Otherwise we might create the log file but cannot
-  // close it.
-  if (*print_to_console && !print_file_name->empty()) {
-    throw std::runtime_error(
-        "MosekSolver::Solve(): cannot print to both the console and the log "
-        "file.");
-  } else if (*print_to_console) {
-    if (rescode == MSK_RES_OK) {
-      rescode =
-          MSK_linkfunctotaskstream(task_, MSK_STREAM_LOG, nullptr, printstr);
-    }
-  } else if (!print_file_name->empty()) {
-    if (rescode == MSK_RES_OK) {
-      rescode = MSK_linkfiletotaskstream(task_, MSK_STREAM_LOG,
-                                         print_file_name->c_str(), 0);
-    }
-  }
+  // The "writedata" option needs special handling.
+  *msk_writedata = options->template Pop<std::string>("writedata");
 
-  return rescode;
+  // Copy all remaining options into our `task_`.
+  options->Respell([&](const auto& common, auto* respelled) {
+    // This is a convenient place to configure printing (i.e., logging); see
+    // https://docs.mosek.com/10.1/capi/solver-io.html#stream-logging.
+    // Printing to console vs file are mutually exclusive; if the user has
+    // requested both, then we must throw an error BEFORE we create the log
+    // file; otherwise we might create it but never close it.
+    if (common.print_to_console && common.print_file_name.size()) {
+      throw std::logic_error(
+          "MosekSolver: cannot print to both the console and a file");
+    }
+    *is_printing = false;
+    if (common.print_to_console) {
+      DRAKE_DEMAND(common.print_file_name.empty());
+      MSKrescodee rescode =
+          MSK_linkfunctotaskstream(task_, MSK_STREAM_LOG, nullptr, printstr);
+      if (rescode != MSK_RES_OK) {
+        throw std::runtime_error(fmt::format(
+            "MosekSolver(): kPrintToConsole=1 failed with response code {}",
+            fmt_streamed(rescode)));
+      }
+      *is_printing = true;
+    }
+    if (!common.print_file_name.empty()) {
+      DRAKE_DEMAND(common.print_to_console == false);
+      MSKrescodee rescode = MSK_linkfiletotaskstream(
+          task_, MSK_STREAM_LOG, common.print_file_name.c_str(), 0);
+      if (rescode != MSK_RES_OK) {
+        throw std::runtime_error(fmt::format(
+            "MosekSolver(): kPrintToFile={} failed with response code {}",
+            common.print_file_name, fmt_streamed(rescode)));
+      }
+      *is_printing = true;
+    }
+    const int num_threads = common.max_threads.value_or(
+        Parallelism::Max().num_threads());
+    respelled->emplace("MSK_IPAR_NUM_THREADS", num_threads);
+  });
+  options->CopyToCallbacks(
+      [&](const std::string& key, double value) {
+        MSKrescodee rescode = MSK_putnadouparam(task_, key.c_str(), value);
+        ThrowForInvalidOption(rescode, key, value);
+      },
+      [&](const std::string& key, int value) {
+        MSKrescodee rescode = MSK_putnaintparam(task_, key.c_str(), value);
+        ThrowForInvalidOption(rescode, key, value);
+      },
+      [&](const std::string& key, const std::string& value) {
+        MSKrescodee rescode =
+            MSK_putnastrparam(task_, key.c_str(), value.c_str());
+        ThrowForInvalidOption(rescode, key, value);
+      });
 }
 
 MSKrescodee MosekSolverProgram::SetDualSolution(
@@ -1534,7 +1578,7 @@ MSKrescodee MosekSolverProgram::SetDualSolution(
   if (which_sol == MSK_SOL_ITG) {
     // Mosek cannot return dual solution if the solution type is MSK_SOL_ITG
     // (which stands for mixed integer optimizer), see
-    // https://docs.mosek.com/10.0/capi/accessing-solution.html#available-solutions
+    // https://docs.mosek.com/10.1/capi/accessing-solution.html#available-solutions
     return rescode;
   }
   int num_mosek_vars{0};
@@ -1544,7 +1588,7 @@ MSKrescodee MosekSolverProgram::SetDualSolution(
   }
   // Mosek dual variables for variable lower bounds (slx) and upper bounds
   // (sux). Refer to
-  // https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsolution
+  // https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsolution
   // for more explanation.
   std::vector<MSKrealt> slx(num_mosek_vars);
   std::vector<MSKrealt> sux(num_mosek_vars);
@@ -1563,7 +1607,7 @@ MSKrescodee MosekSolverProgram::SetDualSolution(
   }
   // Mosek dual variables for linear constraints lower bounds (slc) and upper
   // bounds (suc). Refer to
-  // https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsolution
+  // https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsolution
   // for more explanation.
   std::vector<MSKrealt> slc(num_linear_constraints);
   std::vector<MSKrealt> suc(num_linear_constraints);

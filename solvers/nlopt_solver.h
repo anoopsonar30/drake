@@ -20,7 +20,7 @@ struct NloptSolverDetails {
 
 class NloptSolver final : public SolverBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NloptSolver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NloptSolver);
 
   /// Type of details stored in MathematicalProgramResult.
   using Details = NloptSolverDetails;
@@ -55,8 +55,9 @@ class NloptSolver final : public SolverBase {
   using SolverBase::Solve;
 
  private:
-  void DoSolve(const MathematicalProgram&, const Eigen::VectorXd&,
-               const SolverOptions&, MathematicalProgramResult*) const final;
+  void DoSolve2(const MathematicalProgram&, const Eigen::VectorXd&,
+                internal::SpecificOptions*,
+                MathematicalProgramResult*) const final;
 };
 
 }  // namespace solvers

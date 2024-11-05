@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "drake/common/unused.h"
 #include "drake/systems/framework/system_visitor.h"
@@ -105,6 +106,12 @@ template <typename T>
 void System<T>::SetDefaultContext(Context<T>* context) const {
   this->ValidateContext(context);
 
+  // Set the default parameters, checking that the number of parameters does
+  // not change.
+  const int num_params = context->num_numeric_parameter_groups();
+  SetDefaultParameters(*context, &context->get_mutable_parameters());
+  DRAKE_DEMAND(num_params == context->num_numeric_parameter_groups());
+
   // Set the default state, checking that the number of state variables does
   // not change.
   const int n_xc = context->num_continuous_states();
@@ -116,12 +123,6 @@ void System<T>::SetDefaultContext(Context<T>* context) const {
   DRAKE_DEMAND(n_xc == context->num_continuous_states());
   DRAKE_DEMAND(n_xd == context->num_discrete_state_groups());
   DRAKE_DEMAND(n_xa == context->num_abstract_states());
-
-  // Set the default parameters, checking that the number of parameters does
-  // not change.
-  const int num_params = context->num_numeric_parameter_groups();
-  SetDefaultParameters(*context, &context->get_mutable_parameters());
-  DRAKE_DEMAND(num_params == context->num_numeric_parameter_groups());
 }
 
 template <typename T>
@@ -483,16 +484,15 @@ void System<T>::GetInitializationEvents(
 
 template <typename T>
 void System<T>::ExecuteInitializationEvents(Context<T>* context) const {
-  auto discrete_updates = AllocateDiscreteVariables();
-  auto state = context->CloneState();
   auto init_events = AllocateCompositeEventCollection();
+  GetInitializationEvents(*context, init_events.get());
 
   // NOTE: The execution order here must match the code in
   // Simulator::Initialize().
-  GetInitializationEvents(*context, init_events.get());
 
   // Do unrestricted updates first.
   if (init_events->get_unrestricted_update_events().HasEvents()) {
+    auto state = context->CloneState();
     const EventStatus status = CalcUnrestrictedUpdate(
         *context, init_events->get_unrestricted_update_events(), state.get());
     status.ThrowOnFailure(__func__);
@@ -501,6 +501,7 @@ void System<T>::ExecuteInitializationEvents(Context<T>* context) const {
   }
   // Do restricted (discrete variable) updates next.
   if (init_events->get_discrete_update_events().HasEvents()) {
+    auto discrete_updates = AllocateDiscreteVariables();
     const EventStatus status = CalcDiscreteVariableUpdate(
         *context, init_events->get_discrete_update_events(),
         discrete_updates.get());
@@ -512,6 +513,39 @@ void System<T>::ExecuteInitializationEvents(Context<T>* context) const {
   if (init_events->get_publish_events().HasEvents()) {
     const EventStatus status =
         Publish(*context, init_events->get_publish_events());
+    status.ThrowOnFailure(__func__);
+  }
+}
+
+template <typename T>
+void System<T>::ExecuteForcedEvents(Context<T>* context,
+                                    bool publish) const {
+  // NOTE: The execution order here must match the code in
+  // Simulator::Initialize().
+
+  // Do unrestricted updates first.
+  if (get_forced_unrestricted_update_events().HasEvents()) {
+    auto state = context->CloneState();
+    const EventStatus status = CalcUnrestrictedUpdate(
+        *context, get_forced_unrestricted_update_events(), state.get());
+    status.ThrowOnFailure(__func__);
+    ApplyUnrestrictedUpdate(get_forced_unrestricted_update_events(),
+                            state.get(), context);
+  }
+  // Do restricted (discrete variable) updates next.
+  if (get_forced_discrete_update_events().HasEvents()) {
+    auto discrete_updates = AllocateDiscreteVariables();
+    const EventStatus status = CalcDiscreteVariableUpdate(
+        *context, get_forced_discrete_update_events(),
+        discrete_updates.get());
+    status.ThrowOnFailure(__func__);
+    ApplyDiscreteVariableUpdate(get_forced_discrete_update_events(),
+                                discrete_updates.get(), context);
+  }
+  // Do any publishes last.
+  if (publish && get_forced_publish_events().HasEvents()) {
+    const EventStatus status =
+        Publish(*context, get_forced_publish_events());
     status.ThrowOnFailure(__func__);
   }
 }
@@ -550,6 +584,17 @@ bool System<T>::IsDifferenceEquationSystem(double* time_period) const {
 
   if (time_period != nullptr) {
     *time_period = periodic_data->period_sec();
+  }
+  return true;
+}
+
+template <typename T>
+bool System<T>::IsDifferentialEquationSystem() const {
+  if (num_discrete_state_groups() || num_abstract_states()) { return false; }
+  for (int i = 0; i < num_input_ports(); ++i) {
+    if (get_input_port(i).get_data_type() != PortDataType::kVectorValued) {
+      return false;
+    }
   }
   return true;
 }
@@ -891,7 +936,9 @@ const OutputPort<T>& System<T>::GetOutputPort(
   std::vector<std::string_view> port_names;
   port_names.reserve(num_output_ports());
   for (OutputPortIndex i{0}; i < num_output_ports(); i++) {
-    port_names.push_back(get_output_port_base(i).get_name());
+    const OutputPortBase& port_base = this->GetOutputPortBaseOrThrow(
+        __func__, i, /* warn_deprecated = */ false);
+    port_names.push_back(port_base.get_name());
   }
   if (port_names.empty()) {
     port_names.push_back("it has no output ports");
@@ -960,102 +1007,6 @@ template <typename T>
 VectorX<T> System<T>::CopyContinuousStateVector(
     const Context<T>& context) const {
   return context.get_continuous_state().CopyToVector();
-}
-
-// Remove this stanza on 2024-01-01.
-namespace {
-void WarnGraphvizDeprecation() {
-  static const logging::Warn log_once(
-      "The member functions "
-      "System<T>::GetGraphvizFragment(), "
-      "System<T>::GetGraphvizInputPortToken(), "
-      "System<T>::GetGraphvizOutputPortToken(), and "
-      "System<T>::GetGraphvizId() "
-      "are deprecated and will be removed from Drake on or after 2024-01-01. "
-      "Instead, either call GetGraphvizFragment() or "
-      "override DoGetGraphvizFragment().");
-}
-constexpr const int kGraphvizMagicNumber = 0xFACADE;
-}  // namespace
-
-// Remove this function on 2024-01-01. This is a backwards-compatibility
-// shim so that the user's custom override of the deprecated virtual function
-// System<T>::GetGraphvizFragment(int, std::stringstream*) is still obeyed.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-template <typename T>
-typename System<T>::GraphvizFragment System<T>::DoGetGraphvizFragment(
-    const typename System<T>::GraphvizFragmentParams& params) const {
-  // Check to see if the user has overridden GetGraphvizFragment.
-  std::stringstream override_check;
-  GetGraphvizFragment(kGraphvizMagicNumber, &override_check);
-  if (override_check.str() == fmt::to_string(kGraphvizMagicNumber)) {
-    // The user did NOT override GetGraphvizFragment(int, std::stringstream*),
-    // so it's safe to use the default SystemBase implementation of graphviz.
-    return SystemBase::DoGetGraphvizFragment(params);
-  }
-
-  // The user DID override GetGraphvizFragment(int, std::stringstream*).
-  // Transmogrify the user's override into the return type we need.
-  WarnGraphvizDeprecation();
-  System<T>::GraphvizFragment result;
-  std::stringstream dot;
-  GetGraphvizFragment(params.max_depth, &dot);
-  result.fragments.push_back(dot.str());
-  for (int i = 0; i < num_input_ports(); ++i) {
-    std::stringstream temp;
-    GetGraphvizInputPortToken(get_input_port(i), params.max_depth, &temp);
-    result.input_ports.push_back(temp.str());
-  }
-  for (int i = 0; i < num_output_ports(); ++i) {
-    std::stringstream temp;
-    GetGraphvizOutputPortToken(get_output_port(i), params.max_depth, &temp);
-    result.output_ports.push_back(temp.str());
-  }
-  return result;
-}
-#pragma GCC diagnostic pop
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-void System<T>::GetGraphvizFragment(int max_depth,
-                                    std::stringstream* dot) const {
-  if (max_depth == kGraphvizMagicNumber) {
-    // This is a magic value from System<T>::DoGetGraphvizFragment to indicate
-    // that it's probing for a user-provided virtual override. In that case, we
-    // should echo back the magic number so that it can detect that the user
-    // didn't override anything.
-    *dot << fmt::to_string(kGraphvizMagicNumber);
-    return;
-  }
-  WarnGraphvizDeprecation();
-  auto result = SystemBase::GetGraphvizFragment(max_depth);
-  *dot << fmt::format("{}", fmt::join(result.fragments, ""));
-}
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-void System<T>::GetGraphvizInputPortToken(const InputPort<T>& port,
-                                          int max_depth,
-                                          std::stringstream* dot) const {
-  WarnGraphvizDeprecation();
-  unused(port, max_depth, dot);
-}
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-void System<T>::GetGraphvizOutputPortToken(const OutputPort<T>& port,
-                                           int max_depth,
-                                           std::stringstream* dot) const {
-  WarnGraphvizDeprecation();
-  unused(port, max_depth, dot);
-}
-
-// Remove this deprecated function on 2024-01-01.
-template <typename T>
-int64_t System<T>::GetGraphvizId() const {
-  WarnGraphvizDeprecation();
-  return get_system_id().get_value();
 }
 
 template <typename T>
@@ -1500,4 +1451,4 @@ void System<T>::AddExternalConstraints(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::System)
+    class ::drake::systems::System);

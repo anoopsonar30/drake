@@ -23,14 +23,14 @@ namespace trajectories {
 template <typename T>
 class PathParameterizedTrajectory final : public Trajectory<T> {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PathParameterizedTrajectory)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PathParameterizedTrajectory);
 
   /** Constructs a trajectory with the given `path` and `time_scaling`.
   @pre time_scaling.rows() == time_scaling.cols() == 1 */
   PathParameterizedTrajectory(const Trajectory<T>& path,
                               const Trajectory<T>& time_scaling);
 
-  ~PathParameterizedTrajectory() final = default;
+  ~PathParameterizedTrajectory() final;
 
   // Required methods for trajectories::Trajectory interface.
   std::unique_ptr<trajectories::Trajectory<T>> Clone() const override;
@@ -70,6 +70,10 @@ class PathParameterizedTrajectory final : public Trajectory<T> {
   // @pre derivative_order must be non-negative.
   MatrixX<T> DoEvalDerivative(const T& t, int derivative_order) const override;
 
+  // Uses DerivativeTrajectory to provide a derivative object.
+  std::unique_ptr<Trajectory<T>> DoMakeDerivative(
+      int derivative_order) const final;
+
   // Evaluates the Bell Polynomial B_n,k(x) for use in calculating the
   // derivative.
   // @pre n and k must be non-negative and the length of x must be at least n.
@@ -87,4 +91,4 @@ class PathParameterizedTrajectory final : public Trajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PathParameterizedTrajectory)
+    class drake::trajectories::PathParameterizedTrajectory);

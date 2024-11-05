@@ -10,23 +10,24 @@ namespace multibody {
 
 template <typename T>
 ScrewJoint<T>::ScrewJoint(const std::string& name,
-            const Frame<T>& frame_on_parent, const Frame<T>& frame_on_child,
-            const Vector3<double>& axis, double screw_pitch, double damping)
-    : Joint<T>(name, frame_on_parent, frame_on_child,
-               VectorX<double>::Constant(1, damping),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, -std::numeric_limits<double>::infinity()),
-               VectorX<double>::Constant(
-                   1, std::numeric_limits<double>::infinity()))
-    , screw_pitch_{screw_pitch} {
+                          const Frame<T>& frame_on_parent,
+                          const Frame<T>& frame_on_child,
+                          const Vector3<double>& axis, double screw_pitch,
+                          double damping)
+    : Joint<T>(
+          name, frame_on_parent, frame_on_child,
+          VectorX<double>::Constant(1, damping),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1, std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1, std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    -std::numeric_limits<double>::infinity()),
+          VectorX<double>::Constant(1,
+                                    std::numeric_limits<double>::infinity())),
+      screw_pitch_{screw_pitch} {
   const double kEpsilon = std::numeric_limits<double>::epsilon();
   if (axis.isZero(kEpsilon)) {
     throw std::logic_error("Screw joint axis vector must have nonzero length.");
@@ -36,6 +37,9 @@ ScrewJoint<T>::ScrewJoint(const std::string& name,
   }
   axis_ = axis.normalized();
 }
+
+template <typename T>
+ScrewJoint<T>::~ScrewJoint() = default;
 
 template <typename T>
 const std::string& ScrewJoint<T>::type_name() const {
@@ -55,9 +59,7 @@ std::unique_ptr<Joint<ToScalar>> ScrewJoint<T>::TemplatedDoCloneToScalar(
   // Make the Joint<T> clone.
   auto joint_clone = std::make_unique<ScrewJoint<ToScalar>>(
       this->name(), frame_on_parent_body_clone, frame_on_child_body_clone,
-      this->screw_axis(),
-      this->screw_pitch(),
-      this->damping());
+      this->screw_axis(), this->screw_pitch(), this->default_damping());
   joint_clone->set_position_limits(this->position_lower_limits(),
                                    this->position_upper_limits());
   joint_clone->set_velocity_limits(this->velocity_lower_limits(),
@@ -92,13 +94,16 @@ std::unique_ptr<Joint<symbolic::Expression>> ScrewJoint<T>::DoCloneToScalar(
 // in the header file.
 template <typename T>
 std::unique_ptr<typename Joint<T>::BluePrint>
-ScrewJoint<T>::MakeImplementationBlueprint() const {
+ScrewJoint<T>::MakeImplementationBlueprint(
+    const internal::SpanningForest::Mobod& mobod) const {
   auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+  const auto [inboard_frame, outboard_frame] =
+      this->tree_frames(mobod.is_reversed());
+  // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
   auto screw_mobilizer = std::make_unique<internal::ScrewMobilizer<T>>(
-      this->frame_on_parent(), this->frame_on_child(), this->screw_axis(),
-      screw_pitch_);
+      mobod, *inboard_frame, *outboard_frame, this->screw_axis(), screw_pitch_);
   screw_mobilizer->set_default_position(this->default_positions());
-  blue_print->mobilizers_.push_back(std::move(screw_mobilizer));
+  blue_print->mobilizer = std::move(screw_mobilizer);
   return blue_print;
 }
 
@@ -106,4 +111,4 @@ ScrewJoint<T>::MakeImplementationBlueprint() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::ScrewJoint)
+    class ::drake::multibody::ScrewJoint);

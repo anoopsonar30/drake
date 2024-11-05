@@ -81,12 +81,6 @@ struct AddModel {
       return false;
     }
     for (const auto& [body_name, pose] : default_free_body_pose) {
-      if (pose.base_frame) {
-        drake::log()->error(
-            "add_model: `default_free_body_pose` must not specify a "
-            "`base_frame`; the pose is always in the world frame.");
-        return false;
-      }
       if (!pose.IsDeterministic()) {
         drake::log()->error(
             "add_model: `default_free_body_pose` must specify a "
@@ -109,9 +103,46 @@ struct AddModel {
   std::string file;
   /// The model instance name.
   std::string name;
-  /// Map of joint_name => default position vector.
+  /// Map of joint_name => default position vector. Each joint name must be
+  /// a name within the scope of the model added by this directive. The name
+  /// must not contains *this* model's scoped name (nor that of any previously
+  /// added model).
   std::map<std::string, Eigen::VectorXd> default_joint_positions;
-  /// Map of body_name => default free body pose.
+  /// Map of body_name or frame_name => default free body pose. The name must
+  /// be a name within the scope of the model added by this directive. The name
+  /// must not be scoped (i.e., no "foo::link", just "link"). If the name is
+  /// empty, then the posed frame will be the body frame of the model's sole
+  /// body (and if the model has >1 body then it is an error).
+  ///
+  /// However, the schema::Transform associated with that named body/frame can
+  /// define a `base_frame` referring to any frame that has been added prior to
+  /// or including this declaration.  The named frame must *always* be a scoped
+  /// name, even if its part of the model added by this directive.
+  ///
+  /// @warning there are two important implications for the named frame if the
+  /// transform's `base_frame` is not the world (explicitly or implicitly by
+  /// omission):
+  ///
+  ///  1. The named body will *not* be considered a "floating base" body (see
+  ///     @ref mbp_working_with_free_bodies "Working with free bodies"). Calls
+  ///     to MultibodyPlant::SetDefaultFreeBodyPose() will have no effect on an
+  ///     allocated context. If you want to change its default pose after
+  ///     adding the model, you need to acquire the body's joint and set the
+  ///     new default pose on the joint directly. Note: what you will
+  ///     *actually* be posing is the *named* frame. If it's the name of the
+  ///     body, you will be posing the body. If it's a frame affixed to the
+  ///     body frame, you will be posing the fixed frame (with the body offset
+  ///     based on the relationship between the two frames).
+  ///  2. The body associated with the named frame will have a six-dof joint
+  ///     between itself and the body associated with the transform's
+  ///     `base_frame`. When interpreting the qs for the "named" body, it is the
+  ///     six-dof pose of the body measured and expressed in the parent frame
+  ///     (transform's `base_frame`). This is true whether setting the position
+  ///     values in the resulting joint directly or using the
+  ///     @ref mbp_working_with_free_bodies "MultibodyPlant free body APIs".
+  ///
+  /// @warning There should not already be a joint in the model between the two
+  /// bodies implied by the named frames.
   std::map<std::string, drake::schema::Transform> default_free_body_pose;
 };
 
@@ -144,6 +175,11 @@ struct AddFrame {
     } else if (!X_PF.base_frame || X_PF.base_frame->empty()) {
       drake::log()->error("add_frame: `X_PF.base_frame` must be defined");
       return false;
+    } else if (!X_PF.IsDeterministic()) {
+      drake::log()->error(
+          "add_frame: `X_PF` must specify a deterministic transform, not a "
+          "distribution.");
+      return false;
     }
     return true;
   }
@@ -170,9 +206,10 @@ struct AddCollisionFilterGroup {
       drake::log()->error(
           "add_collision_filter_group: `name` must be non-empty");
       return false;
-    } else if (members.empty()) {
+    } else if (members.empty() && member_groups.empty()) {
       drake::log()->error(
-          "add_collision_filter_group: `members` must be non-empty");
+          "add_collision_filter_group:"
+          " at least one of `members` or `member_groups` must be non-empty");
       return false;
     }
     return true;
@@ -182,15 +219,25 @@ struct AddCollisionFilterGroup {
   void Serialize(Archive* a) {
     a->Visit(DRAKE_NVP(name));
     a->Visit(DRAKE_NVP(members));
+    a->Visit(DRAKE_NVP(member_groups));
+    a->Visit(DRAKE_NVP(model_namespace));
     a->Visit(DRAKE_NVP(ignored_collision_filter_groups));
   }
 
-  /// Name of group to be added. Must not be a scoped name.
+  /// Name of group to be added.  This is an unscoped name, and must be
+  /// unique either globally or within its specified model namespace.
   std::string name;
+  /// Optional model namespace.  Allows `name` to be reused between models
+  /// and lets you use the scoped name in `ignored_collision_filter_groups`.
+  std::optional<std::string> model_namespace;
   /// Names of members of the group. May be scoped and refer to bodies of
   /// already added models. This data is analogous to a sequence of
   /// @ref tag_drake_member in XML model formats.
   std::vector<std::string> members;
+  /// Names of groups to add en masse as members of the group. May be scoped
+  /// and refer to bodies of already added models. This data is analogous to a
+  /// sequence of @ref tag_drake_member_group in XML model formats.
+  std::vector<std::string> member_groups;
   /// Names of groups against which to ignore collisions. If another group is
   /// named, collisions between this group and that group will be ignored. If
   /// this group is named, collisions within this group will be ignored. Names

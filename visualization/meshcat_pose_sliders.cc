@@ -146,7 +146,7 @@ void MeshcatPoseSliders<T>::Delete() {
   if (was_registered) {
     for (int i = 0; i < 6; ++i) {
       if (visible_[i]) {
-        meshcat_->DeleteSlider(slider_names_[i]);
+        meshcat_->DeleteSlider(slider_names_[i], /*strict = */ false);
       }
     }
   }
@@ -154,7 +154,13 @@ void MeshcatPoseSliders<T>::Delete() {
 
 template <typename T>
 MeshcatPoseSliders<T>::~MeshcatPoseSliders() {
-  Delete();
+  // Destructors are not allowed to throw. Ensure this by catching any
+  // exceptions and failing fast.
+  try {
+    Delete();
+  } catch (...) {
+    DRAKE_UNREACHABLE();
+  }
 }
 
 template <typename T>
@@ -275,4 +281,4 @@ void MeshcatPoseSliders<T>::SetPose(const RigidTransformd& pose) const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::visualization::MeshcatPoseSliders)
+    class ::drake::visualization::MeshcatPoseSliders);

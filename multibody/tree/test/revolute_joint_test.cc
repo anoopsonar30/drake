@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/eigen_types.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/multibody/tree/rigid_body.h"
 #include "drake/systems/framework/context.h"
@@ -43,13 +44,13 @@ class RevoluteJointTest : public ::testing::Test {
   std::unique_ptr<internal::MultibodyTree<double>> MakeModel() {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
     // Add some bodies so we can add joints between them:
-    body1_ = &model->AddBody<RigidBody>("Body1", M_B);
+    body1_ = &model->AddRigidBody("Body1", M_B);
 
     // Add a revolute joint between the world and body1:
     joint1_ = &model->AddJoint<RevoluteJoint>(
@@ -120,12 +121,15 @@ TEST_F(RevoluteJointTest, GetJointLimits) {
 TEST_F(RevoluteJointTest, Damping) {
   std::unique_ptr<internal::MultibodyTree<double>> model = MakeModel();
   auto& joint = model->GetMutableJointByName<RevoluteJoint>("Joint1");
-  EXPECT_EQ(joint.damping(), kDamping);
-  EXPECT_EQ(joint.damping_vector(), Vector1d(kDamping));
+  EXPECT_EQ(joint.default_damping(), kDamping);
+  EXPECT_EQ(joint.default_damping_vector(), Vector1d(kDamping));
   const double new_damping = 2.0 * kDamping;
   joint.set_default_damping(new_damping);
-  EXPECT_EQ(joint.damping(), new_damping);
-  EXPECT_EQ(joint.damping_vector(), Vector1d(new_damping));
+  EXPECT_EQ(joint.default_damping(), new_damping);
+  EXPECT_EQ(joint.default_damping_vector(), Vector1d(new_damping));
+
+  // Expect to throw on invalid damping values.
+  EXPECT_THROW(joint.set_default_damping(-1), std::exception);
 }
 
 // Context-dependent value access.
@@ -138,6 +142,24 @@ TEST_F(RevoluteJointTest, ContextDependentAccess) {
   // Angular rate access:
   joint1_->set_angular_rate(context_.get(), some_value);
   EXPECT_EQ(joint1_->get_angular_rate(*context_), some_value);
+
+  // Damping.
+  EXPECT_EQ(joint1_->GetDamping(*context_), kDamping);
+  EXPECT_EQ(joint1_->GetDampingVector(*context_), Vector1d(kDamping));
+
+  EXPECT_NO_THROW(
+      joint1_->SetDampingVector(context_.get(), Vector1d(some_value)));
+  EXPECT_EQ(joint1_->GetDamping(*context_), some_value);
+  EXPECT_EQ(joint1_->GetDampingVector(*context_), Vector1d(some_value));
+
+  EXPECT_NO_THROW(joint1_->SetDamping(context_.get(), kDamping));
+  EXPECT_EQ(joint1_->GetDamping(*context_), kDamping);
+  EXPECT_EQ(joint1_->GetDampingVector(*context_), Vector1d(kDamping));
+
+  // Expect to throw on invalid damping values.
+  EXPECT_THROW(joint1_->SetDamping(context_.get(), -1), std::exception);
+  EXPECT_THROW(joint1_->SetDampingVector(context_.get(), Vector1d(-1)),
+               std::exception);
 }
 
 // Tests API to apply torques to a joint.
@@ -150,7 +172,6 @@ TEST_F(RevoluteJointTest, AddInTorques) {
   joint1_->AddInTorque(*context_, some_value, &forces1);
   joint1_->AddInTorque(*context_, some_value, &forces1);
 
-
   MultibodyForces<double> forces2(tree());
   // Add value only once:
   joint1_->AddInTorque(*context_, some_value, &forces2);
@@ -162,6 +183,21 @@ TEST_F(RevoluteJointTest, AddInTorques) {
   auto F2 = forces2.body_forces().cbegin();
   for (auto& F1 : forces1.body_forces())
     EXPECT_TRUE(F1.IsApprox(*F2++, kEpsilon));
+}
+
+// Tests API to add in damping forces.
+TEST_F(RevoluteJointTest, AddInDampingForces) {
+  const double angular_velocity = 0.1;
+  const double damping = 0.2 * kDamping;
+
+  const Vector1d damping_force_expected(-damping * angular_velocity);
+
+  joint1_->set_angular_rate(context_.get(), angular_velocity);
+  joint1_->SetDamping(context_.get(), damping);
+
+  MultibodyForces<double> forces(tree());
+  joint1_->AddInDamping(*context_, &forces);
+  EXPECT_EQ(forces.generalized_forces(), damping_force_expected);
 }
 
 TEST_F(RevoluteJointTest, Clone) {
@@ -186,7 +222,7 @@ TEST_F(RevoluteJointTest, Clone) {
             joint1_->acceleration_lower_limits());
   EXPECT_EQ(joint1_clone.acceleration_upper_limits(),
             joint1_->acceleration_upper_limits());
-  EXPECT_EQ(joint1_clone.damping(), joint1_->damping());
+  EXPECT_EQ(joint1_clone.default_damping(), joint1_->default_damping());
   EXPECT_EQ(joint1_clone.get_default_angle(), joint1_->get_default_angle());
 }
 
@@ -201,14 +237,14 @@ TEST_F(RevoluteJointTest, SetVelocityAndAccelerationLimits) {
   // Does not match num_velocities().
   EXPECT_THROW(mutable_joint1_->set_velocity_limits(VectorX<double>(1),
                                                     VectorX<double>()),
-               std::runtime_error);
+               std::exception);
   EXPECT_THROW(mutable_joint1_->set_velocity_limits(VectorX<double>(),
                                                     VectorX<double>(1)),
-               std::runtime_error);
+               std::exception);
   // Lower limit is larger than upper limit.
   EXPECT_THROW(mutable_joint1_->set_velocity_limits(Vector1<double>(2),
                                                     Vector1<double>(0)),
-               std::runtime_error);
+               std::exception);
 
   // Check for acceleration limits.
   mutable_joint1_->set_acceleration_limits(Vector1<double>(new_lower),
@@ -218,14 +254,14 @@ TEST_F(RevoluteJointTest, SetVelocityAndAccelerationLimits) {
   // Does not match num_velocities().
   EXPECT_THROW(mutable_joint1_->set_acceleration_limits(VectorX<double>(1),
                                                         VectorX<double>()),
-               std::runtime_error);
+               std::exception);
   EXPECT_THROW(mutable_joint1_->set_acceleration_limits(VectorX<double>(),
                                                         VectorX<double>(1)),
-               std::runtime_error);
+               std::exception);
   // Lower limit is larger than upper limit.
   EXPECT_THROW(mutable_joint1_->set_acceleration_limits(Vector1<double>(2),
                                                         Vector1<double>(0)),
-               std::runtime_error);
+               std::exception);
 }
 
 TEST_F(RevoluteJointTest, CanRotateOrTranslate) {

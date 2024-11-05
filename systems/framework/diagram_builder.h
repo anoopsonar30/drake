@@ -13,6 +13,7 @@
 #include "drake/common/drake_copyable.h"
 #include "drake/common/hash.h"
 #include "drake/common/pointer_cast.h"
+#include "drake/common/string_map.h"
 #include "drake/systems/framework/diagram.h"
 #include "drake/systems/framework/system.h"
 
@@ -63,7 +64,7 @@ template <typename T>
 class DiagramBuilder {
  public:
   // DiagramBuilder objects are neither copyable nor moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramBuilder)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramBuilder);
 
   /// A designator for a "system + input port" pair, to uniquely refer to
   /// some input port on one of this builder's subsystems.
@@ -405,7 +406,7 @@ class DiagramBuilder {
   /// previously built via ExportInput().
   /// @post @p input is connected to the indicated Diagram input port.
   void ConnectInput(
-      const std::string& diagram_port_name, const InputPort<T>& input);
+      std::string_view diagram_port_name, const InputPort<T>& input);
 
   /// Connects an input to the entire Diagram, indicated by @p
   /// diagram_port_index, to the given @p input port of a constituent system.
@@ -521,7 +522,7 @@ class DiagramBuilder {
   std::vector<ExportedInputData> diagram_input_data_;
 
   // The InputPort fan-out API requires name lookup in some cases.
-  std::map<std::string, InputPortIndex> diagram_input_indices_;
+  string_map<InputPortIndex> diagram_input_indices_;
 
   // A map from the input ports of constituent systems, to the output ports of
   // the systems from which they get their values.
@@ -538,4 +539,4 @@ class DiagramBuilder {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::DiagramBuilder)
+    class ::drake::systems::DiagramBuilder);

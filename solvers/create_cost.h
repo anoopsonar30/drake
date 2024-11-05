@@ -32,6 +32,12 @@ Binding<QuadraticCost> ParseQuadraticCost(
 Binding<PolynomialCost> ParsePolynomialCost(const symbolic::Expression& e);
 
 /*
+ * Assist MathematicalProgram::AddL2NormCost(...)
+ */
+Binding<L2NormCost> ParseL2NormCost(const symbolic::Expression& e,
+                                    double psd_tol, double coefficient_tol);
+
+/*
  * Assist MathematicalProgram::AddCost(...).
  */
 Binding<Cost> ParseCost(const symbolic::Expression& e);

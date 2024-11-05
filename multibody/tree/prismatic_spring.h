@@ -10,9 +10,6 @@
 namespace drake {
 namespace multibody {
 
-template <typename T>
-class Body;
-
 /// This %ForceElement models a linear spring attached to a PrismaticJoint
 /// and applies a force to that joint according to
 /// <pre>
@@ -31,7 +28,7 @@ class Body;
 template <typename T>
 class PrismaticSpring final : public ForceElement<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PrismaticSpring)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PrismaticSpring);
 
   /// Constructor for a linear spring attached to the given prismatic joint.
   /// @param[in] nominal_position
@@ -41,10 +38,10 @@ class PrismaticSpring final : public ForceElement<T> {
   /// @param[in] stiffness
   /// The stiffness k of the spring in N/m.
   /// @throws std::exception if `stiffness` is (strictly) negative.
-  PrismaticSpring(
-      const PrismaticJoint<T>& joint,
-      double nominal_position,
-      double stiffness);
+  PrismaticSpring(const PrismaticJoint<T>& joint, double nominal_position,
+                  double stiffness);
+
+  ~PrismaticSpring() override;
 
   const PrismaticJoint<T>& joint() const;
 
@@ -84,11 +81,12 @@ class PrismaticSpring final : public ForceElement<T> {
 
   // Allow different specializations to access each other's private data for
   // scalar conversion.
-  template <typename U> friend class PrismaticSpring;
+  template <typename U>
+  friend class PrismaticSpring;
 
   // Private constructor for internal use in TemplatedDoCloneToScalar()
   PrismaticSpring(ModelInstanceIndex model_instance, JointIndex joint_index,
-                 double nominal_position, double stiffness);
+                  double nominal_position, double stiffness);
 
   // Helper method to make a clone templated on ToScalar().
   template <typename ToScalar>
@@ -104,4 +102,4 @@ class PrismaticSpring final : public ForceElement<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::PrismaticSpring)
+    class ::drake::multibody::PrismaticSpring);

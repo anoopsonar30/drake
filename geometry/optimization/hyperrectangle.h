@@ -15,18 +15,24 @@ namespace geometry {
 namespace optimization {
 
 /** Axis-aligned hyperrectangle in Rᵈ defined by its lower bounds and upper
- * bounds as {x| lb ≤ x ≤ ub} */
+ bounds as {x| lb ≤ x ≤ ub}
+ @ingroup geometry_optimization
+ */
 class Hyperrectangle final : public ConvexSet {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperrectangle)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Hyperrectangle);
 
+  /** Constructs a default (zero-dimensional, nonempty) hyperrectangle. */
   Hyperrectangle();
 
   /** Constructs a hyperrectangle from its lower and upper bounds.
    @pre lb.size() == ub.size()
+   @pre lb and ub are finite.
    @pre lb(i) <= ub(i) for all i */
   Hyperrectangle(const Eigen::Ref<const Eigen::VectorXd>& lb,
                  const Eigen::Ref<const Eigen::VectorXd>& ub);
+
+  ~Hyperrectangle() final;
 
   /** Get the lower bounds of the hyperrectangle. */
   const Eigen::VectorXd& lb() const { return lb_; }
@@ -42,6 +48,13 @@ class Hyperrectangle final : public ConvexSet {
 
   /** Helper to convert this hyperrectangle to an HPolyhedron. */
   HPolyhedron MakeHPolyhedron() const;
+
+  /** Constructs the intersection of two Hyperrectangle by taking the pointwise
+  maximum of the lower bounds and the pointwise minimums of the upper
+  bounds. Returns std::nullopt if the intersection is empty.
+   @pre this and other need to have the same ambient dimension.*/
+  [[nodiscard]] std::optional<Hyperrectangle> MaybeGetIntersection(
+      const Hyperrectangle& other) const;
 
   /** Returns the minimum axis-aligned bounding box of a convex set, for sets
   with finite volume. (std::nullopt otherwise). */
@@ -65,12 +78,15 @@ class Hyperrectangle final : public ConvexSet {
    */
   bool DoIsEmpty() const final { return false; }
 
+  /** We only support finite hyperrectangles */
+  std::optional<bool> DoIsBoundedShortcut() const final { return true; }
+
   std::optional<Eigen::VectorXd> DoMaybeGetPoint() const final;
 
   std::optional<Eigen::VectorXd> DoMaybeGetFeasiblePoint() const final;
 
-  bool DoPointInSet(const Eigen::Ref<const Eigen::VectorXd>& x,
-                    double tol) const final;
+  std::optional<bool> DoPointInSetShortcut(
+      const Eigen::Ref<const Eigen::VectorXd>& x, double tol) const final;
 
   std::pair<VectorX<symbolic::Variable>,
             std::vector<solvers::Binding<solvers::Constraint>>>
@@ -96,6 +112,11 @@ class Hyperrectangle final : public ConvexSet {
 
   std::pair<std::unique_ptr<Shape>, math::RigidTransformd> DoToShapeWithPose()
       const final;
+
+  std::unique_ptr<ConvexSet> DoAffineHullShortcut(
+      std::optional<double> tol) const final;
+
+  // TODO(Alexandre.Amice) Implement DoProjectionShortcut.
 
   double DoCalcVolume() const final;
 

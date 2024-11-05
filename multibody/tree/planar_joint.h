@@ -32,7 +32,7 @@ namespace multibody {
 template <typename T>
 class PlanarJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PlanarJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PlanarJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -53,12 +53,12 @@ class PlanarJoint final : public Joint<T> {
   /// @param[in] damping
   ///   Viscous damping coefficient, in N⋅s/m for translation and N⋅m⋅s for
   ///   rotation, used to model losses within the joint. See documentation of
-  ///   damping() for details on modelling of the damping force and torque.
+  ///   default_damping() for details on modelling of the damping force and
+  ///   torque.
   /// @throws std::exception if any element of damping is negative.
   PlanarJoint(const std::string& name, const Frame<T>& frame_on_parent,
               const Frame<T>& frame_on_child, Vector3<double> damping)
-      : Joint<T>(name, frame_on_parent, frame_on_child,
-                 std::move(damping),
+      : Joint<T>(name, frame_on_parent, frame_on_child, std::move(damping),
                  VectorX<double>::Constant(
                      3, -std::numeric_limits<double>::infinity()),
                  VectorX<double>::Constant(
@@ -74,19 +74,23 @@ class PlanarJoint final : public Joint<T> {
     DRAKE_THROW_UNLESS((damping.array() >= 0).all());
   }
 
+  ~PlanarJoint() final;
+
   const std::string& type_name() const final;
 
-  /// Returns `this` joint's damping constant in N⋅s/m for the translational
-  /// degrees and N⋅m⋅s for the rotational degree. The damping force (in N) is
-  /// modeled as `fᵢ = -dampingᵢ⋅vᵢ, i = 1, 2` i.e. opposing motion, with vᵢ
-  /// the translation rates along the i-th axis for `this` joint (see
-  /// get_translational_velocity()) and fᵢ the force on child body B at Mo and
-  /// expressed in F. That is, f_BMo_F = (f₁, f₂). The damping torque (in N⋅m)
-  /// is modeled as `τ = -damping₃⋅ω` i.e. opposing motion, with ω the angular
-  /// rate for `this` joint (see get_angular_velocity()) and τ the torque on
-  /// child body B expressed in frame F as t_B_F = τ⋅Fz_F.
+  /// Returns `this` joint's default damping constant in N⋅s/m for the
+  /// translational degrees and N⋅m⋅s for the rotational degree. The damping
+  /// force (in N) is modeled as `fᵢ = -dampingᵢ⋅vᵢ, i = 1, 2` i.e. opposing
+  /// motion, with vᵢ the translation rates along the i-th axis for `this` joint
+  /// (see get_translational_velocity()) and fᵢ the force on child body B at Mo
+  /// and expressed in F. That is, f_BMo_F = (f₁, f₂). The damping torque (in
+  /// N⋅m) is modeled as `τ = -damping₃⋅ω` i.e. opposing motion, with ω the
+  /// angular rate for `this` joint (see get_angular_velocity()) and τ the
+  /// torque on child body B expressed in frame F as t_B_F = τ⋅Fz_F.
   // TODO(amcastro-tri): return reference instead.
-  Vector3<double> damping() const { return this->damping_vector(); }
+  Vector3<double> default_damping() const {
+    return this->default_damping_vector();
+  }
 
   /// @name Context-dependent value access
   /// @{
@@ -130,7 +134,7 @@ class PlanarJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const PlanarJoint<T>& set_rotation(systems::Context<T>* context,
                                      const T& theta) const {
-    get_mobilizer()->set_angle(context, theta);
+    get_mobilizer()->SetAngle(context, theta);
     return *this;
   }
 
@@ -148,7 +152,7 @@ class PlanarJoint final : public Joint<T> {
                                  const Vector2<T>& p_FoMo_F,
                                  const T& theta) const {
     get_mobilizer()->set_translations(context, p_FoMo_F);
-    get_mobilizer()->set_angle(context, theta);
+    get_mobilizer()->SetAngle(context, theta);
     return *this;
   }
 
@@ -171,7 +175,7 @@ class PlanarJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const PlanarJoint<T>& set_translational_velocity(
       systems::Context<T>* context, const Vector2<T>& v_FoMo_F) const {
-    get_mobilizer()->set_translation_rates(context, v_FoMo_F);
+    get_mobilizer()->SetTranslationRates(context, v_FoMo_F);
     return *this;
   }
 
@@ -196,7 +200,7 @@ class PlanarJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const PlanarJoint<T>& set_angular_velocity(systems::Context<T>* context,
                                              const T& theta_dot) const {
-    get_mobilizer()->set_angular_rate(context, theta_dot);
+    get_mobilizer()->SetAngularRate(context, theta_dot);
     return *this;
   }
 
@@ -274,7 +278,8 @@ class PlanarJoint final : public Joint<T> {
   /// Joint<T> override called through public NVI, Joint::AddInDamping().
   /// Therefore arguments were already checked to be valid.
   /// This method adds into `forces` a dissipative force according to the
-  /// viscous law `f = -d⋅v`, with d the damping coefficient (see damping()).
+  /// viscous law `f = -d⋅v`, with d the damping coefficient (see
+  /// default_damping()).
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const final {
     Eigen::Ref<VectorX<T>> tau =
@@ -282,7 +287,7 @@ class PlanarJoint final : public Joint<T> {
             &forces->mutable_generalized_forces());
     const Vector2<T>& v_translation = get_translational_velocity(context);
     const T& v_angular = get_angular_velocity(context);
-    const Vector3<double> damping_coeff = damping();
+    const Vector3<T> damping_coeff = this->GetDampingVector(context);
     tau[0] -= damping_coeff[0] * v_translation[0];
     tau[1] -= damping_coeff[1] * v_translation[1];
     tau[2] -= damping_coeff[2] * v_angular;
@@ -316,8 +321,8 @@ class PlanarJoint final : public Joint<T> {
   }
 
   // Joint<T> overrides:
-  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint()
-      const final;
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const final;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const internal::MultibodyTree<double>& tree_clone) const final;
@@ -338,20 +343,18 @@ class PlanarJoint final : public Joint<T> {
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
   const internal::PlanarMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     const internal::PlanarMobilizer<T>* mobilizer =
         dynamic_cast<const internal::PlanarMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
   internal::PlanarMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     auto* mobilizer = dynamic_cast<internal::PlanarMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -366,4 +369,4 @@ class PlanarJoint final : public Joint<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::PlanarJoint)
+    class ::drake::multibody::PlanarJoint);

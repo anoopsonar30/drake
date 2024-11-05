@@ -37,8 +37,9 @@ DEFINE_string(contact_model, "hydroelastic",
 DEFINE_string(contact_surface_representation, "polygon",
               "Contact-surface representation for hydroelastics. "
               "Options are: 'triangle' or 'polygon'.");
-DEFINE_string(discrete_solver, "tamsi",
-              "Discrete contact solver. Options are: 'tamsi', 'sap'.");
+DEFINE_string(contact_approximation, "tamsi",
+              "Discrete contact approximation. Options are: 'tamsi', "
+              "'sap', 'similar', 'lagged'");
 
 // Simulator settings.
 DEFINE_double(realtime_rate, 1,
@@ -75,7 +76,7 @@ namespace {
 // dimensional signal, but we will use a 2-dimensional signal for our gripper.
 class Square final : public systems::LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Square)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Square);
 
   // Constructs a %Square system where different amplitudes, duty cycles,
   // periods, and phases can be applied to each square wave.
@@ -134,7 +135,7 @@ int DoMain() {
   plant_config.time_step = FLAGS_mbp_discrete_update_period;
   plant_config.stiction_tolerance = FLAGS_stiction_tolerance;
   plant_config.contact_model = FLAGS_contact_model;
-  plant_config.discrete_contact_solver = FLAGS_discrete_solver;
+  plant_config.discrete_contact_approximation = FLAGS_contact_approximation;
   plant_config.contact_surface_representation =
       FLAGS_contact_surface_representation;
 
@@ -145,10 +146,10 @@ int DoMain() {
   // Parse the gripper and spatula models.
   multibody::Parser parser(&plant, &scene_graph);
   parser.AddModelsFromUrl(
-      "package://drake/examples/hydroelastic/spatula_slip_control/models/"
+      "package://drake_models/wsg_50_description/sdf/"
       "schunk_wsg_50_hydro_bubble.sdf");
   parser.AddModelsFromUrl(
-      "package://drake/examples/hydroelastic/spatula_slip_control/models/"
+      "package://drake/examples/hydroelastic/spatula_slip_control/"
       "spatula.sdf");
   // Pose the gripper and weld it to the world.
   const math::RigidTransform<double> X_WF0 = math::RigidTransform<double>(
@@ -252,8 +253,9 @@ int main(int argc, char* argv[]) {
       "The example poses the spatula in the closed grip of the gripper and\n"
       "uses an open loop square wave controller to perform a controlled\n"
       "rotational slip of the spatula while maintaining the spatula in\n"
-      "the gripper's grasp. Launch drake_visualizer before running this\n"
-      "example. See the README.md file for more information.\n");
+      "the gripper's grasp. Use the MeshCat URL from the console log\n"
+      "messages for visualization. See the README.md file for more\n"
+      "information.\n");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   return drake::examples::spatula_slip_control::DoMain();
 }

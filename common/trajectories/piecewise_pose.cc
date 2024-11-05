@@ -22,6 +22,9 @@ PiecewisePose<T>::PiecewisePose(
 }
 
 template <typename T>
+PiecewisePose<T>::~PiecewisePose() = default;
+
+template <typename T>
 PiecewisePose<T> PiecewisePose<T>::MakeLinear(
     const std::vector<T>& times,
     const std::vector<math::RigidTransform<T>>& poses) {
@@ -152,4 +155,4 @@ std::unique_ptr<Trajectory<T>> PiecewisePose<T>::DoMakeDerivative(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::PiecewisePose)
+    class drake::trajectories::PiecewisePose);

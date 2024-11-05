@@ -1,11 +1,11 @@
+load("@vtk_internal//:modules.bzl", "MODULES", "PLATFORM")
+load("@vtk_internal//:settings.bzl", "MODULE_SETTINGS")
 load("//tools/skylark:cc.bzl", "cc_library")
-load("//tools/workspace:generate_file.bzl", "generate_file")
 load(
     "//tools/workspace:cmake_configure_file.bzl",
     "cmake_configure_files",
 )
-load("@vtk_internal//:modules.bzl", "MODULES", "PLATFORM")
-load("@vtk_internal//:settings.bzl", "MODULE_SETTINGS")
+load("//tools/workspace:generate_file.bzl", "generate_file")
 
 # You can manually set this to True, to get some feedback during upgrades.
 _VERBOSE = False
@@ -38,6 +38,7 @@ def _vtk_cc_module_impl(
         cmake_defines = [],
         cmake_undefines = [],
         defines_extra = [],
+        strip_include_prefix_extra = "",
         copts_extra = [],
         linkopts_extra = [],
         deps_extra = [],
@@ -125,6 +126,9 @@ def _vtk_cc_module_impl(
     srcs = srcs_extra + native.glob(
         [subdir + "/*.cxx"] + srcs_glob_extra,
         exclude = included_cxxs + srcs_glob_exclude + [
+            # Unwanted serialization code which leaks non-namespaced symbols.
+            "**/*SerDesHelper.cxx",
+            # Never build test code into our runtime libraries.
             "**/vtkTest*",
             "**/test*",
         ],
@@ -133,8 +137,6 @@ def _vtk_cc_module_impl(
     copts = ["-w"] + copts_extra
     linkopts = linkopts_extra
     deps = []
-    if "ThirdParty" not in subdir:
-        deps.append(":vtkABINamespace")
     deps = deps + gen_hdrs_lib
     deps = deps + module_deps_public
     deps = deps + module_deps_private
@@ -172,7 +174,7 @@ def _vtk_cc_module_impl(
         name = module_name,
         srcs = srcs,
         hdrs = hdrs,
-        strip_include_prefix = subdir,
+        strip_include_prefix = subdir + strip_include_prefix_extra,
         defines = defines_extra,
         copts = copts,
         linkopts = linkopts,
@@ -238,6 +240,8 @@ def vtk_cc_module(
         cmake_undefines: When generating a header file, sets these definitions
             to be undefined. See cmake_configure_file() for details.
         defines_extra: Adds `defines = []` to the cc_library.
+        strip_include_prefix_extra: Appends the given string after the default
+            strip_include_prefix (i.e., the subdir name).
         copts_extra: Adds `copts = []` to the cc_library.
         linkopts_extra: Adds `linkopts = []` to the cc_library.
         deps_extra: Adds `deps = []` to the cc_library.
@@ -283,6 +287,11 @@ def modules_closure(module_names, *, max_depth = 10):
                         continue
                     if dep_name in ignore:
                         continue
+                    if _VERBOSE:
+                        print("Modules closure: {} uses {}".format(
+                            name,
+                            dep_name,
+                        ))
                     next_worklist.append(dep_name)
         worklist = next_worklist
     if worklist:
@@ -311,7 +320,6 @@ def compile_all_modules():
         for name in MODULE_SETTINGS
         if name not in names
     ]
-    unused_settings.remove("ABI")  # Not a real module.
     modules_no_settings = [
         name
         for name in names
@@ -321,24 +329,6 @@ def compile_all_modules():
         print("settings.bzl has unused modules: " + str(unused_settings))
     if _VERBOSE and modules_no_settings:
         print("settings.bzl does not customize: " + str(modules_no_settings))
-
-def generate_abi_namespace():
-    """Generates vtkABINamespace.h, mimicking the Common/Core/CMakeLists.txt.
-    """
-    cmake_configure_files(
-        name = "_vtkABINamespace_genrule",
-        srcs = ["CMake/vtkABINamespace.h.in"],
-        outs = ["CMake/vtkABINamespace.h"],
-        defines = MODULE_SETTINGS["ABI"]["cmake_defines"],
-        strict = True,
-    )
-    cc_library(
-        name = "vtkABINamespace",
-        hdrs = ["CMake/vtkABINamespace.h"],
-        strip_include_prefix = "CMake",
-        linkstatic = True,
-        visibility = ["//visibility:public"],
-    )
 
 def generate_common_core_array_dispatch_array_list():
     """Mimics the vtkCreateArrayDispatchArrayList.cmake logic.
@@ -352,6 +342,7 @@ def generate_common_core_array_dispatch_array_list():
 #pragma once
 #include "vtkTypeList.h"
 #include "vtkAOSDataArrayTemplate.h"
+#include "vtkStructuredPointArray.h"
 namespace vtkArrayDispatch {
 VTK_ABI_NAMESPACE_BEGIN
 typedef vtkTypeList::Unique<
@@ -372,6 +363,17 @@ typedef vtkTypeList::Unique<
     vtkAOSDataArrayTemplate<vtkIdType>
   >
 >::Result Arrays;
+typedef vtkTypeList::Unique<
+  vtkTypeList::Create<
+    vtkStructuredPointArray<double>
+  >
+>::Result ReadOnlyArrays;
+typedef vtkTypeList::Unique<
+  vtkTypeList::Append<
+    Arrays,
+    ReadOnlyArrays
+  >::Result
+>::Result AllArrays;
 VTK_ABI_NAMESPACE_END
 }
 """
@@ -507,7 +509,19 @@ def generate_common_core_array_instantiations():
         "double",
     ):
         for stem in (
+            "vtkAffineArrayInstantiate",
+            "vtkAffineImplicitBackendInstantiate",
+            "vtkCompositeArrayInstantiate",
+            "vtkCompositeImplicitBackendInstantiate",
+            "vtkConstantArrayInstantiate",
+            "vtkConstantImplicitBackendInstantiate",
+            "vtkIndexedArrayInstantiate",
+            "vtkIndexedImplicitBackendInstantiate",
             "vtkSOADataArrayTemplateInstantiate",
+            "vtkStdFunctionArrayInstantiate",
+            "vtkStructuredPointBackendInstantiate",
+            "vtkStructuredPointArrayInstantiate",
+            "vtkTypedDataArrayInstantiate",
             "vtkGenericDataArrayValueRangeInstantiate",
         ):
             if "Generic" in stem and "long" not in ctype:
@@ -538,30 +552,6 @@ def generate_common_core_sources():
     generate_common_core_vtk_type_arrays()
     generate_common_core_array_instantiations()
 
-def cxx_embed(*, src, out, constant_name):
-    """Mimics the vtkEncodeString.cmake logic.
-    Generates an `*.h` file with the contents of a data file.
-    """
-    header = """
-#pragma once
-VTK_ABI_NAMESPACE_BEGIN
-constexpr char {constant_name}[] = R"drakevtkinternal(
-""".format(constant_name = constant_name)
-    footer = """
-)drakevtkinternal";
-VTK_ABI_NAMESPACE_END
-"""
-    native.genrule(
-        name = "_genrule_" + out,
-        srcs = [src],
-        outs = [out],
-        cmd = " && ".join([
-            "(echo '" + header + "' > $@)",
-            "(cat $< >> $@)",
-            "(echo '" + footer + "' >> $@)",
-        ]),
-    )
-
 def _path_stem(src):
     """Returns e.g. "quux" when given "foo/bar/quux.ext".
     """
@@ -576,6 +566,12 @@ def generate_rendering_opengl2_sources():
     ]):
         stem = _path_stem(src)
         hdr = "Rendering/OpenGL2/" + stem + ".h"
-        cxx_embed(src = src, out = hdr, constant_name = stem)
+        native.genrule(
+            name = "_genrule_" + hdr,
+            srcs = [src],
+            outs = [hdr],
+            cmd = "$(execpath :data_to_header) $< > $@",
+            tools = [":data_to_header"],
+        )
         hdrs.append(hdr)
     native.filegroup(name = name, srcs = hdrs)

@@ -38,7 +38,7 @@ std::unique_ptr<MultibodyPlant<T>> ConstructTwoFreeBodiesPlant();
  * Constructs a MultibodyPlant consisting of an Iiwa robot.
  */
 std::unique_ptr<MultibodyPlant<double>> ConstructIiwaPlant(
-    const std::string& file_path, double time_step, int num_iiwa = 1);
+    const std::string& url, double time_step, int num_iiwa = 1);
 
 /**
  * Compares if two eigen matrices of AutoDiff have the same values and
@@ -68,7 +68,7 @@ Eigen::Vector4d QuaternionToVectorWxyz(const Eigen::Quaterniond& q);
 // satisfy the kinematic constraints.
 class IiwaKinematicConstraintTest : public ::testing::Test {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IiwaKinematicConstraintTest)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(IiwaKinematicConstraintTest);
 
   IiwaKinematicConstraintTest();
 
@@ -86,7 +86,7 @@ class IiwaKinematicConstraintTest : public ::testing::Test {
 // Test kinematic constraints on two free floating bodies.
 class TwoFreeBodiesConstraintTest : public ::testing::Test {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(TwoFreeBodiesConstraintTest)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(TwoFreeBodiesConstraintTest);
 
   TwoFreeBodiesConstraintTest();
 

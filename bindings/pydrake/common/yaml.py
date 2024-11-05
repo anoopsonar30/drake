@@ -3,10 +3,12 @@ import copy
 import dataclasses
 import math
 import functools
+import types
 import typing
 
 import numpy as np
 import yaml
+import yaml.representer
 
 from pydrake.common import pretty_class_name
 
@@ -54,12 +56,13 @@ def yaml_load_data(data, *, private=False):
     """
     result = yaml.load(data, Loader=_SchemaLoader)
     if not private:
-        keys_to_remove = [
-            key for key in result.keys()
-            if key.startswith("_")
-        ]
-        for key in keys_to_remove:
-            del result[key]
+        try:
+            all_keys = list(result.keys())
+        except AttributeError:
+            all_keys = []
+        for key in all_keys:
+            if key.startswith("_"):
+                del result[key]
     return result
 
 
@@ -85,8 +88,16 @@ def yaml_load(*, data=None, filename=None, private=False):
     without any schema checking nor default values. To load with respect to
     a schema with defaults, see ``yaml_load_typed()``.
     """
-    if sum(bool(x) for x in [data, filename]) != 1:
-        raise RuntimeError("Must specify exactly one of data= and filename=")
+    has_data = data is not None
+    has_filename = filename is not None
+    if has_data and has_filename:
+        raise RuntimeError(
+            "Exactly one of `data=...` or `filename=...` must be provided, "
+            "but both were non-None")
+    if not has_data and not has_filename:
+        raise RuntimeError(
+            "Exactly one of `data=...` or `filename=...` must be provided, "
+            "but both were None")
     if data:
         return yaml_load_data(data, private=private)
     else:
@@ -103,6 +114,22 @@ _FLOW_STYLE = None
 class _SchemaDumper(yaml.dumper.SafeDumper):
     """Customizes SafeDumper for the purposes of this module."""
 
+    class ExplicitScalar(typing.NamedTuple):
+        """Wrapper type used when dumping a document. When this type is dumped,
+        it will always emit the tag, e.g., `!!int 10`. (By default, tags for
+        scalars are not emitted by pyyaml.)
+        """
+        value: typing.Union[bool, int, float, str]
+
+    def _represent_explicit_scalar(self, explicit_scalar):
+        assert isinstance(explicit_scalar, _SchemaDumper.ExplicitScalar)
+        value = explicit_scalar.value
+        node = self.yaml_representers[type(value)](self, value)
+        # Encourage pyyaml to emit the secondary tag, e.g., `!!int`.
+        # This does not work for strings.
+        node.style = "'"
+        return node
+
     def _represent_dict(self, data):
         """Permits a reverse of _SchemaLoader."""
         if "_tag" in data:
@@ -113,8 +140,37 @@ class _SchemaDumper(yaml.dumper.SafeDumper):
         else:
             return super().represent_dict(data)
 
+    def _represent_undefined(self, data):
+        if getattr(type(data), "__module__", "").startswith("pydrake"):
+            raise yaml.representer.RepresenterError(
+                "yaml_dump does not operate on pydrake objects; "
+                "use yaml_dump_typed instead", data)
+        return super().represent_undefined(data)
 
+
+_SchemaDumper.add_representer(None, _SchemaDumper._represent_undefined)
 _SchemaDumper.add_representer(dict, _SchemaDumper._represent_dict)
+_SchemaDumper.add_representer(
+    _SchemaDumper.ExplicitScalar,
+    _SchemaDumper._represent_explicit_scalar)
+
+
+class _DrakeFlowSchemaDumper(_SchemaDumper):
+    """Implements the 'drake flow' emitter styling, which follows the
+    conventions from yaml_write_archive.cc:
+
+    - For sequences: if all children are scalars, then formats the sequence
+      onto a single line; otherwise, format as a bulleted list. This exact
+      logic is already implemented in PyYAML when using _DEFAULT_FLOW_STYLE.
+
+    - For mappings: If there are no children, then formats this map onto a
+      single line; otherwise, format over multiple lines.
+    """
+
+    def serialize_node(self, node, parent, index):
+        if isinstance(node, yaml.MappingNode):
+            node.flow_style = len(node.value) == 0
+        return super().serialize_node(node, parent, index)
 
 
 def yaml_dump(data, *, filename=None):
@@ -169,12 +225,19 @@ def _enumerate_field_types(schema):
         f"Schema objects of type {schema} are not yet supported")
 
 
+def _is_union(generic_base):
+    """Given a generic_base type (from typing.get_origin), returns True iff it
+    is a sum type (i.e., a Union).
+    """
+    return generic_base in [typing.Union, types.UnionType]
+
+
 def _get_nested_optional_type(schema):
     """If the given schema (i.e., type) is equivalent to an Optional[Foo], then
     returns Foo. Otherwise, returns None.
     """
     generic_base = typing.get_origin(schema)
-    if generic_base == typing.Union:
+    if _is_union(generic_base):
         generic_args = typing.get_args(schema)
         NoneType = type(None)
         if len(generic_args) == 2 and generic_args[-1] == NoneType:
@@ -193,7 +256,7 @@ def _create_from_schema(*, schema, forthcoming_value):
     When schema is a numpy type, returns a 1-d ndarray with the same size as
     the ``forthcoming_value`` if provided, otherwise an empty array.
     """
-    if typing.get_origin(schema) is typing.Union:
+    if _is_union(typing.get_origin(schema)):
         return None
     if schema == np.ndarray:
         size = len(forthcoming_value)
@@ -289,6 +352,8 @@ def _merge_yaml_dict_item_into_target(*, options, name, yaml_value,
     # what was there iff retain_map_defaults was set.
     if generic_base in (dict, collections.abc.Mapping):
         (key_type, value_type) = generic_args
+        # This requirement matches what we have in C++. Allowing sequences
+        # or maps as keys would mean we're no longer JSON-compatible.
         assert key_type == str
         if options.retain_map_defaults:
             old_value = getter()
@@ -308,7 +373,7 @@ def _merge_yaml_dict_item_into_target(*, options, name, yaml_value,
         return
 
     # Handle schema sum types (std::variant<...> or typing.Union[...]).
-    if generic_base is typing.Union:
+    if _is_union(generic_base):
         # The YAML data might be a scalar value (as opposed to a mapping).
         yaml_value_type = type(yaml_value)
         if yaml_value_type in list(_PRIMITIVE_YAML_TYPES) + [type(None)]:
@@ -346,9 +411,13 @@ def _merge_yaml_dict_item_into_target(*, options, name, yaml_value,
             refined_yaml_value = yaml_value
             refined_value_schema = generic_args[0]
         # Self-call, but now with an updated value and type.
-        setter(_create_from_schema(
-            schema=refined_value_schema,
-            forthcoming_value=yaml_value))
+        refined_value_schema_origin = typing.get_origin(refined_value_schema)
+        if refined_value_schema_origin is None:
+            refined_value_schema_origin = refined_value_schema
+        if not isinstance(getter(), refined_value_schema_origin):
+            setter(_create_from_schema(
+                schema=refined_value_schema_origin,
+                forthcoming_value=yaml_value))
         _merge_yaml_dict_item_into_target(
             options=options, name=name, yaml_value=refined_yaml_value,
             target=target, value_schema=refined_value_schema)
@@ -421,7 +490,7 @@ def _merge_yaml_dict_into_target(*, options, yaml_dict,
             target=target, value_schema=sub_schema)
 
 
-def yaml_load_typed(*, schema,
+def yaml_load_typed(*, schema=None,
                     data=None,
                     filename=None,
                     child_name=None,
@@ -433,10 +502,15 @@ def yaml_load_typed(*, schema,
     ``schema`` type and returns an instance of that type.
 
     This mimics the C++ function ``drake::common::yaml::LoadYamlFile``.
+    This is the complementary operation to ``yaml_dump_typed``.
 
     Args:
-        schema: The type to load. Must be a ``dataclass``. (Adding support for
-            more type classes is future work.)
+        schema: The type to load as. This either must be a ``dataclass``, a C++
+            class bound using pybind11 and ``DefAttributesUsingSerialize``, or
+            a ``Mapping[str, ...]`` where the mapping's value type is one of
+            those two categories. If a non-None ``defaults`` is provided, then
+            ``schema`` can be ``None`` and will use ``type(defaults)`` in that
+            case.
         data: The string of YAML data to be loaded. Exactly one of either
             ``data`` or ``filename`` must be provided.
         filename: The filename of YAML data to be loaded. Exactly one of either
@@ -461,6 +535,14 @@ def yaml_load_typed(*, schema,
            schema can have default values that are left intact unless the YAML
            data provides a value *for that specific key*.
     """
+
+    # Infer the schema when possible.
+    if schema is None:
+        if defaults is None:
+            raise ValueError(
+                "At least one of schema= and defaults= must be provided")
+        schema = type(defaults)
+
     # Choose the allow/retain setting in case none were provided.
     options = _LoadYamlOptions(
         allow_yaml_with_no_schema=allow_yaml_with_no_schema,
@@ -479,6 +561,9 @@ def yaml_load_typed(*, schema,
         root_node = document[child_name]
     else:
         root_node = document
+    if not isinstance(root_node, collections.abc.Mapping):
+        raise RuntimeError(
+            f"YAML root was a {type(root_node)} but should have been a dict")
 
     # Merge the document into the result.
     _merge_yaml_dict_into_target(
@@ -487,8 +572,228 @@ def yaml_load_typed(*, schema,
     return result
 
 
+def _yaml_dump_get_attribute(*, obj, name):
+    """Given an object ``obj`` and attribute name ``name``, gets and returns
+    the value of the given attribute, akin to ``getattr`. The difference is
+    that for bound C++ types sometimes the Serialize function does non-standard
+    tricks, so the yaml dictionary key name in __fields__ differs from the
+    attribute name. This function provides a protocol for the bound type to
+    communicate that distinction during yaml_dump_typed.
+    """
+    if hasattr(obj, "_rewrite_yaml_dump_attr_name"):
+        name = obj._rewrite_yaml_dump_attr_name(name)
+    return getattr(obj, name)
+
+
+def _yaml_dump_typed_item(*, obj, schema):
+    """Given an object ``obj`` and its type ``schema``, returns the plain YAML
+    object that should be serialized. Objects that are already primitive types
+    (str, float, etc.) are returned unchanged. Bare collection types (List and
+    Mapping) are processed recursively. Structs (dataclasses) are processed
+    using their schema. The result is "plain" in the sense that's it's always
+    just a tree of primitives, lists, and dicts -- no user-defined types.
+    """
+    assert schema is not None
+
+    # Handle all of the plain YAML scalars:
+    #  https://yaml.org/spec/1.2.2/#scalars
+    #  https://yaml.org/spec/1.2.2/#json-schema
+    if schema in _PRIMITIVE_YAML_TYPES:
+        return schema(obj)
+
+    # Check if the field is generic like list[str]; if yes, the generic_base
+    # will be, e.g., `list` and generic_args will be, e.g., `[str]`.
+    generic_base = typing.get_origin(schema)
+    generic_args = typing.get_args(schema)
+
+    # Handle YAML sequences:
+    #  https://yaml.org/spec/1.2.2/#sequence
+    if generic_base in (list, typing.List):
+        (item_schema,) = generic_args
+        return [
+            _yaml_dump_typed_item(obj=item, schema=item_schema)
+            for item in obj
+        ]
+
+    # Handle YAML maps:
+    #  https://yaml.org/spec/1.2.2/#mapping
+    if generic_base in (dict, collections.abc.Mapping):
+        (key_schema, value_schema) = generic_args
+        if key_schema != str:
+            # This requirement matches what we have in C++. Allowing sequences
+            # or maps as keys would mean we're no longer JSON-compatible.
+            raise RuntimeError(f"Dict keys must be strings, not {key_schema}")
+        result = dict()
+        for key in sorted(obj):
+            value = obj[key]
+            value_plain = _yaml_dump_typed_item(obj=value, schema=value_schema)
+            result[key] = value_plain
+        return result
+
+    # Handle nullable types (std::optional<T> or typing.Optional[T]).
+    optional_schema = _get_nested_optional_type(schema)
+    if optional_schema is not None:
+        if obj is None:
+            return None
+        return _yaml_dump_typed_item(obj=obj, schema=optional_schema)
+
+    # Handle schema sum types (std::variant<...> or typing.Union[...]).
+    if _is_union(generic_base):
+        if obj is None:
+            if type(None) in generic_args:
+                return None
+            raise RuntimeError(f"The {schema} does not allow None as a value")
+        match = None
+        for i, one_schema in enumerate(generic_args):
+            one_schema_origin = typing.get_origin(one_schema)
+            if one_schema_origin is None:
+                one_schema_origin = one_schema
+            if isinstance(obj, one_schema_origin):
+                match = i
+                break
+        if match is None:
+            raise RuntimeError(
+                f"A value of type {type(obj)} did not match any {schema}")
+        union_schema = generic_args[i]
+        result = _yaml_dump_typed_item(obj=obj, schema=union_schema)
+        if i != 0:
+            if union_schema in _PRIMITIVE_YAML_TYPES:
+                result = _SchemaDumper.ExplicitScalar(result)
+            else:
+                class_name_with_args = pretty_class_name(union_schema)
+                class_name = class_name_with_args.split("[", 1)[0]
+                result["_tag"] = "!" + class_name
+        return result
+
+    # Handle NumPy types.
+    if schema == np.ndarray:
+        # TODO(jwnimmer-tri) We should use the numpy.typing module here to
+        # statically specify a shape and/or dtype in the schema. For now,
+        # we only support floats with no restrictions on the shape.
+        assert obj.dtype == np.dtype(np.float64)
+        list_value = obj.tolist()
+        list_schema = float
+        for _ in obj.shape:
+            list_schema = typing.List[list_schema]
+        return _yaml_dump_typed_item(obj=list_value, schema=list_schema)
+
+    # If no special case matched, then we'll assume it's a nested class and
+    # dump its fields one by one.
+    result = dict()
+    for name, item_schema in _enumerate_field_types(schema).items():
+        item_obj = _yaml_dump_get_attribute(obj=obj, name=name)
+        item_plain = _yaml_dump_typed_item(obj=item_obj, schema=item_schema)
+        if item_plain is None:
+            if _get_nested_optional_type(item_schema) is not None:
+                # When an Optional member field is set to None, then don't emit
+                # "{name}: null"; instead, just skip it entirely.
+                continue
+        result[name] = item_plain
+    return result
+
+
+def _erase_matching_maps(*, node, defaults):
+    """This logic mimics the C++ YamlWriteArchive function of the same name."""
+    # Remove from `node` any key-value pair that is identical within both
+    # `node` and `defaults`.
+    keys_to_prune = []
+    for key in node:
+        if key not in defaults:
+            # Don't prune and don't recurse.
+            continue
+        sub_node = node[key]
+        sub_defaults = defaults[key]
+        if sub_node is sub_defaults or sub_node == sub_defaults:
+            # Found a match. Prune and don't recurse. (We check both 'is' and
+            # '==' because `math.nan` does not compare equal to itself.)
+            keys_to_prune.append(key)
+            continue
+        if not isinstance(sub_node, dict):
+            continue
+        if sub_node.get("_tag") != sub_defaults.get("_tag"):
+            # The maps are tagged differently, so we should not subtract their
+            # children, since they may have different semantics.
+            continue
+        # Recurse into children with the same key name.
+        _erase_matching_maps(node=sub_node, defaults=sub_defaults)
+    for key in keys_to_prune:
+        del node[key]
+
+
+def yaml_dump_typed(data,
+                    *,
+                    filename=None,
+                    schema=None,
+                    child_name=None,
+                    defaults=None):
+    """Dumps an object to a YAML string or ``filename`` (if specified), using
+    the ``schema`` in order to support non-primitive types.
+
+    This mimics the C++ function ``drake::common::yaml::SaveYamlFile``.
+    This is the complementary operation to ``yaml_load_typed``.
+
+    Args:
+        data: The object to be dumped.
+        filename: If provided, the YAML filename to be written to. When None,
+            this function will return a YAML string instead of writing to a
+            file.
+        schema: If provided, the type to dump as. When None, the default is
+            ``type(data)``. This either must be a ``dataclass``, a C++ class
+            bound using pybind11 and ``DefAttributesUsingSerialize``, or a
+            ``Mapping[str, ...]`` where the mapping's value type is one of
+            those two categories.
+        child_name: If provided, dumps using given name as the document root,
+            with the ``data`` nested underneath.
+        defaults: If provided, then only data that differs from the given
+            ``defaults`` will be dumped.
+    """
+    # Sanity checks.
+    assert data is not None
+    if child_name is not None:
+        if type(child_name) not in _PRIMITIVE_YAML_TYPES:
+            raise RuntimeError("The child_name must be a primitive type, "
+                               f"not a {type(child_name)}")
+
+    # If no schema was provided, then choose one.
+    if schema is None:
+        schema = type(data)
+
+    # Convert to a tree of primitives, lists, and dicts.
+    root = _yaml_dump_typed_item(obj=data, schema=schema)
+
+    # If a baseline value was provided, then subtract it from the result.
+    if defaults is not None:
+        plain_defaults = _yaml_dump_typed_item(obj=defaults, schema=schema)
+        _erase_matching_maps(node=root, defaults=plain_defaults)
+
+    # If a child_name was provided, then weave it into the root.
+    if child_name is not None:
+        root = {child_name: root}
+
+    # To align with the capabilities of yaml_load_typed, we limit the root to
+    # be a mapping node (not scalar nor list).
+    if not isinstance(root, collections.abc.Mapping):
+        raise RuntimeError(
+            f"YAML root was a {type(root)} but should have been a dict")
+
+    # Write the data to disk xor return a string, based on the presence of a
+    # filename. Use layout options to match the C++ (SaveYamlFile) style.
+    dump_func = functools.partial(
+        yaml.dump,
+        Dumper=_DrakeFlowSchemaDumper,
+        default_flow_style=_FLOW_STYLE,
+        sort_keys=False,
+    )
+    if filename is not None:
+        with open(filename, "w", encoding="utf-8") as f:
+            dump_func(root, f)
+    else:
+        return dump_func(root)
+
+
 __all__ = [
     "yaml_dump",
+    "yaml_dump_typed",
     "yaml_load",
     "yaml_load_data",
     "yaml_load_file",

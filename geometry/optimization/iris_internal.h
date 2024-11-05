@@ -21,12 +21,12 @@ namespace internal {
  */
 class SamePointConstraint : public solvers::Constraint {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SamePointConstraint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SamePointConstraint);
 
   SamePointConstraint(const multibody::MultibodyPlant<double>* plant,
                       const systems::Context<double>& context);
 
-  ~SamePointConstraint() override {}
+  ~SamePointConstraint() override;
 
   void set_frameA(const multibody::Frame<double>* frame) { frameA_ = frame; }
 
@@ -74,6 +74,8 @@ class ClosestCollisionProgram {
       const Eigen::Ref<const Eigen::MatrixXd>& A,
       const Eigen::Ref<const Eigen::VectorXd>& b);
 
+  ~ClosestCollisionProgram();
+
   void UpdatePolytope(const Eigen::Ref<const Eigen::MatrixXd>& A,
                       const Eigen::Ref<const Eigen::VectorXd>& b);
 
@@ -81,6 +83,7 @@ class ClosestCollisionProgram {
   // Sets `closest` to an optimizing solution q*, if a solution is found.
   bool Solve(const solvers::SolverInterface& solver,
              const Eigen::Ref<const Eigen::VectorXd>& q_guess,
+             const std::optional<solvers::SolverOptions>& solver_options,
              Eigen::VectorXd* closest);
 
  private:

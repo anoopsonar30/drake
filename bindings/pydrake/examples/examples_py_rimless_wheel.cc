@@ -1,10 +1,10 @@
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/examples/examples_py.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
-#include "drake/examples/rimless_wheel/gen/rimless_wheel_continuous_state.h"
-#include "drake/examples/rimless_wheel/gen/rimless_wheel_params.h"
 #include "drake/examples/rimless_wheel/rimless_wheel.h"
+#include "drake/examples/rimless_wheel/rimless_wheel_continuous_state.h"
 #include "drake/examples/rimless_wheel/rimless_wheel_geometry.h"
+#include "drake/examples/rimless_wheel/rimless_wheel_params.h"
 
 namespace drake {
 namespace pydrake {
@@ -22,21 +22,6 @@ void DefineExamplesRimlessWheel(py::module m) {
   // conversion.
   using T = double;
 
-  py::class_<RimlessWheel<T>, LeafSystem<T>>(
-      m, "RimlessWheel", doc.RimlessWheel.doc)
-      .def(py::init<>(), doc.RimlessWheel.ctor.doc)
-      .def("get_minimal_state_output_port",
-          &RimlessWheel<T>::get_minimal_state_output_port,
-          py_rvp::reference_internal,
-          doc.RimlessWheel.get_minimal_state_output_port.doc)
-      .def("get_floating_base_state_output_port",
-          &RimlessWheel<T>::get_floating_base_state_output_port,
-          py_rvp::reference_internal,
-          doc.RimlessWheel.get_floating_base_state_output_port.doc)
-      .def_static("calc_alpha", &RimlessWheel<T>::calc_alpha, py::arg("params"),
-          doc.RimlessWheel.calc_alpha.doc);
-
-  // TODO(russt): Remove custom bindings once #8096 is resolved.
   py::class_<RimlessWheelParams<T>, BasicVector<T>>(
       m, "RimlessWheelParams", doc.RimlessWheelParams.doc)
       .def(py::init<>(), doc.RimlessWheelParams.ctor.doc)
@@ -72,6 +57,20 @@ void DefineExamplesRimlessWheel(py::module m) {
           doc.RimlessWheelContinuousState.set_theta.doc)
       .def("set_thetadot", &RimlessWheelContinuousState<T>::set_thetadot,
           doc.RimlessWheelContinuousState.set_thetadot.doc);
+
+  py::class_<RimlessWheel<T>, LeafSystem<T>>(
+      m, "RimlessWheel", doc.RimlessWheel.doc)
+      .def(py::init<>(), doc.RimlessWheel.ctor.doc)
+      .def("get_minimal_state_output_port",
+          &RimlessWheel<T>::get_minimal_state_output_port,
+          py_rvp::reference_internal,
+          doc.RimlessWheel.get_minimal_state_output_port.doc)
+      .def("get_floating_base_state_output_port",
+          &RimlessWheel<T>::get_floating_base_state_output_port,
+          py_rvp::reference_internal,
+          doc.RimlessWheel.get_floating_base_state_output_port.doc)
+      .def_static("calc_alpha", &RimlessWheel<T>::calc_alpha, py::arg("params"),
+          doc.RimlessWheel.calc_alpha.doc);
 
   py::class_<RimlessWheelGeometry, LeafSystem<double>>(
       m, "RimlessWheelGeometry", doc.RimlessWheelGeometry.doc)

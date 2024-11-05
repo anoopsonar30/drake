@@ -8,7 +8,6 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/eigen_types.h"
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/multibody/math/spatial_algebra.h"
@@ -18,9 +17,9 @@
 #include "drake/systems/framework/basic_vector.h"
 #include "drake/systems/framework/fixed_input_port_value.h"
 
+using drake::multibody::MultibodyPlant;
 using Eigen::VectorXd;
 using std::make_unique;
-using drake::multibody::MultibodyPlant;
 
 namespace drake {
 namespace systems {
@@ -30,11 +29,14 @@ namespace {
 class InverseDynamicsTest : public ::testing::Test {
  protected:
   void Init(std::unique_ptr<MultibodyPlant<double>> plant,
-            const InverseDynamics<double>::InverseDynamicsMode mode) {
+            const InverseDynamics<double>::InverseDynamicsMode mode,
+            std::unique_ptr<Context<double>> plant_context = nullptr) {
     multibody_plant_ = std::move(plant);
-    multibody_context_ = multibody_plant_->CreateDefaultContext();
+    multibody_context_ = (plant_context == nullptr)
+                             ? multibody_plant_->CreateDefaultContext()
+                             : std::move(plant_context);
     inverse_dynamics_ = make_unique<InverseDynamics<double>>(
-        multibody_plant_.get(), mode);
+        multibody_plant_.get(), mode, multibody_context_.get());
     FinishInit(mode);
   }
 
@@ -46,13 +48,12 @@ class InverseDynamicsTest : public ::testing::Test {
     EXPECT_TRUE(inverse_dynamics_context_->is_stateless());
 
     // Checks that the number of input and output ports are as desired.
-    // (N.B. During the deprecation window, each port appears twice.)
     if (mode == InverseDynamics<double>::kGravityCompensation) {
-      EXPECT_EQ(inverse_dynamics_->num_input_ports(), 2);
+      EXPECT_EQ(inverse_dynamics_->num_input_ports(), 1);
     } else {
-      EXPECT_EQ(inverse_dynamics_->num_input_ports(), 4);
+      EXPECT_EQ(inverse_dynamics_->num_input_ports(), 2);
     }
-    EXPECT_EQ(inverse_dynamics_->num_output_ports(), 2);
+    EXPECT_EQ(inverse_dynamics_->num_output_ports(), 1);
   }
 
   void CheckGravityTorque(const Eigen::VectorXd& position) {
@@ -63,7 +64,7 @@ class InverseDynamicsTest : public ::testing::Test {
   void CheckTorque(const Eigen::VectorXd& position,
                    const Eigen::VectorXd& velocity,
                    const Eigen::VectorXd& acceleration_desired) {
-    // desired acceleration.
+    // Desired acceleration.
     VectorXd vd_d = VectorXd::Zero(num_velocities());
     if (!inverse_dynamics_->is_pure_gravity_compensation()) {
       vd_d = acceleration_desired;
@@ -85,10 +86,9 @@ class InverseDynamicsTest : public ::testing::Test {
     // Compute the expected torque.
     VectorXd expected_torque;
     ASSERT_TRUE(multibody_plant_.get());
-    ASSERT_TRUE(multibody_context_.get());
+    ASSERT_TRUE(multibody_context_);
     expected_torque = controllers_test::ComputeTorque(
-        *multibody_plant_, position, velocity, vd_d,
-        multibody_context_.get());
+        *multibody_plant_, position, velocity, vd_d, multibody_context_.get());
 
     // Checks the expected and computed gravity torque.
     const BasicVector<double>* output_vector = output_->get_vector_data(0);
@@ -129,15 +129,13 @@ class InverseDynamicsTest : public ::testing::Test {
 // desired acceleration for the iiwa arm.
 TEST_F(InverseDynamicsTest, InverseDynamicsTest) {
   auto mbp = std::make_unique<MultibodyPlant<double>>(0.0);
-  const std::string full_name = drake::FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf");
-  multibody::Parser(mbp.get()).AddModels(full_name);
-  mbp->WeldFrames(mbp->world_frame(),
-                  mbp->GetFrameByName("iiwa_link_0"));
+  multibody::Parser(mbp.get()).AddModelsFromUrl(
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
+  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
 
   // Add gravitational forces, finalize the model, and transfer ownership.
-  mbp->mutable_gravity_field().set_gravity_vector(
-      -9.8 * Vector3<double>::UnitZ());
+  mbp->mutable_gravity_field().set_gravity_vector(-9.8 *
+                                                  Vector3<double>::UnitZ());
   mbp->Finalize();
   Init(std::move(mbp),
        InverseDynamics<double>::InverseDynamicsMode::kInverseDynamics);
@@ -157,16 +155,47 @@ TEST_F(InverseDynamicsTest, InverseDynamicsTest) {
   CheckTorque(q, v, vd_d);
 }
 
+// Tests that inverse dynamics returns the expected torque for a given state and
+// desired acceleration for the iiwa arm with a custom context.
+TEST_F(InverseDynamicsTest, InverseDynamicsWithCustomContextTest) {
+  auto mbp = std::make_unique<MultibodyPlant<double>>(0.0);
+  multibody::Parser(mbp.get()).AddModelsFromUrl(
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
+  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
+  mbp->Finalize();
+
+  // Create custom context.
+  auto custom_context = mbp->CreateDefaultContext();
+  const auto& iiwa_link_7 = mbp->GetBodyByName("iiwa_link_7");
+  iiwa_link_7.SetMass(custom_context.get(), 10.0);
+
+  // Transfer ownership.
+  Init(std::move(mbp),
+       InverseDynamics<double>::InverseDynamicsMode::kInverseDynamics,
+       std::move(custom_context));
+
+  Eigen::VectorXd q = Eigen::VectorXd::Zero(7);
+  Eigen::VectorXd v = Eigen::VectorXd::Zero(7);
+  Eigen::VectorXd vd_d = Eigen::VectorXd::Zero(7);
+  for (int i = 0; i < 7; ++i) {
+    q[i] = i * 0.1 - 0.3;
+    v[i] = i - 3;
+    vd_d[i] = i - 3;
+  }
+
+  // Check torques with the custom context.
+  CheckTorque(q, v, vd_d);
+}
+
 // Tests that the expected value of the gravity compensating torque and the
 // value computed by the InverseDynamics in pure gravity compensation mode
 // for a given joint configuration of the KUKA IIWA Arm are identical.
 TEST_F(InverseDynamicsTest, GravityCompensationTest) {
   auto mbp = std::make_unique<MultibodyPlant<double>>(0.0);
-  const std::string full_name = drake::FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf");
-  multibody::Parser(mbp.get()).AddModels(full_name);
-  mbp->WeldFrames(mbp->world_frame(),
-                  mbp->GetFrameByName("iiwa_link_0"));
+  const std::string url =
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
+  multibody::Parser(mbp.get()).AddModelsFromUrl(url);
+  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
 
   mbp->mutable_gravity_field().set_gravity_vector(Vector3<double>::Zero());
 
@@ -184,13 +213,12 @@ TEST_F(InverseDynamicsTest, GravityCompensationTest) {
 
   // Re-initialize the model so we can add gravity.
   mbp = std::make_unique<MultibodyPlant<double>>(0.0);
-  multibody::Parser(mbp.get()).AddModels(full_name);
-  mbp->WeldFrames(mbp->world_frame(),
-                  mbp->GetFrameByName("iiwa_link_0"));
+  multibody::Parser(mbp.get()).AddModelsFromUrl(url);
+  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
 
   // Add gravitational forces, finalize the model, and transfer ownership.
-  mbp->mutable_gravity_field().set_gravity_vector(
-      -9.8 * Vector3<double>::UnitZ());
+  mbp->mutable_gravity_field().set_gravity_vector(-9.8 *
+                                                  Vector3<double>::UnitZ());
   mbp->Finalize();
   Init(std::move(mbp),
        InverseDynamics<double>::InverseDynamicsMode::kGravityCompensation);
@@ -203,11 +231,9 @@ TEST_F(InverseDynamicsTest, GravityCompensationTest) {
 
 GTEST_TEST(AdditionalInverseDynamicsTest, ScalarConversion) {
   auto mbp = std::make_unique<MultibodyPlant<double>>(0.0);
-  const std::string full_name = drake::FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf");
-  multibody::Parser(mbp.get()).AddModels(full_name);
-  mbp->WeldFrames(mbp->world_frame(),
-                  mbp->GetFrameByName("iiwa_link_0"));
+  multibody::Parser(mbp.get()).AddModelsFromUrl(
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf");
+  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
   mbp->Finalize();
   const int num_states = mbp->num_multibody_states();
 
@@ -224,56 +250,53 @@ GTEST_TEST(AdditionalInverseDynamicsTest, ScalarConversion) {
   EXPECT_EQ(id_sym->get_input_port_estimated_state().size(), num_states);
   EXPECT_FALSE(id_sym->is_pure_gravity_compensation());
 
-  InverseDynamics<double> id_with_ownership(std::move(mbp),
-                             InverseDynamics<double>::kGravityCompensation);
+  // Create custom context.
+  auto custom_context = mbp->CreateDefaultContext();
+  const auto& iiwa_link_7 = mbp->GetBodyByName("iiwa_link_7");
+  iiwa_link_7.SetMass(custom_context.get(), 10.0);
+
+  auto mbp_copy = drake::multibody::MultibodyPlant<double>::Clone(*mbp);
+  InverseDynamics<double> id_with_modified_mass(
+      std::move(mbp), InverseDynamics<double>::kGravityCompensation,
+      custom_context.get());
 
   // Test AutoDiffXd.
-  id_ad = systems::System<double>::ToAutoDiffXd(id_with_ownership);
+  id_ad = systems::System<double>::ToAutoDiffXd(id_with_modified_mass);
   // Check the multibody plant.
   EXPECT_EQ(id_ad->get_input_port_estimated_state().size(), num_states);
   // Check the mode.
   EXPECT_TRUE(id_ad->is_pure_gravity_compensation());
 
   // Test Expression.
-  id_sym = systems::System<double>::ToSymbolic(id_with_ownership);
+  id_sym = systems::System<double>::ToSymbolic(id_with_modified_mass);
   EXPECT_EQ(id_sym->get_input_port_estimated_state().size(), num_states);
   EXPECT_TRUE(id_sym->is_pure_gravity_compensation());
-}
 
-GTEST_TEST(InverseDynamicsDeprecatedTest, SmokeTest) {
-  // Create the plant.
-  auto mbp = std::make_unique<MultibodyPlant<double>>(0.0);
-  const std::string full_name = drake::FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf");
-  multibody::Parser(mbp.get()).AddModels(full_name);
-  mbp->WeldFrames(mbp->world_frame(), mbp->GetFrameByName("iiwa_link_0"));
-  mbp->Finalize();
-
-  // Create the device under test.
-  auto mode = InverseDynamics<double>::InverseDynamicsMode::kInverseDynamics;
-  auto dut = make_unique<InverseDynamics<double>>(mbp.get(), mode);
-
-  // Compute inverse dynamics using the dut system.
-  Eigen::VectorXd q(7);
-  Eigen::VectorXd v(7);
-  Eigen::VectorXd vd_d(7);
-  for (int i = 0; i < 7; ++i) {
-    q[i] = i * 0.1 - 0.3;
-    v[i] = i - 3;
-    vd_d[i] = i - 3;
-  }
-  auto context = dut->CreateDefaultContext();
-  dut->GetInputPort("u0").FixValue(context.get(),
-                                   (VectorXd(14) << q, v).finished());
-  dut->GetInputPort("u1").FixValue(context.get(), vd_d);
-  auto torque = dut->GetOutputPort("y0").Eval(*context);
-
-  // Check against the expected torque computed directly.
-  auto mbp_context = mbp->CreateDefaultContext();
-  const VectorXd expected_torque =
-      controllers_test::ComputeTorque(*mbp, q, v, vd_d, mbp_context.get());
-  EXPECT_TRUE(CompareMatrices(torque, expected_torque, 1e-10,
-                              MatrixCompareType::absolute));
+  // Test AutoDiffXd to double.
+  auto id_double = systems::System<AutoDiffXd>::ToScalarType<double>(*id_ad);
+  // Check the multibody plant.
+  EXPECT_EQ(id_double->get_input_port_estimated_state().size(), num_states);
+  // Check the mode.
+  EXPECT_TRUE(id_double->is_pure_gravity_compensation());
+  // Check gravity torque with custom context.
+  custom_context = mbp_copy->CreateDefaultContext();
+  iiwa_link_7.SetMass(custom_context.get(), 10.0);
+  Eigen::VectorXd robot_position = Eigen::VectorXd::Zero(7);
+  robot_position << 0.01, -0.01, 0.01, 0.5, 0.01, -0.01, 0.01;
+  VectorXd state_input(14);
+  state_input << robot_position, Eigen::VectorXd::Zero(7);
+  auto id_double_context = id_double->CreateDefaultContext();
+  id_double->get_input_port_estimated_state().FixValue(id_double_context.get(),
+                                                       state_input);
+  auto output = id_double->AllocateOutput();
+  id_double->CalcOutput(*id_double_context, output.get());
+  VectorXd expected_torque;
+  expected_torque = controllers_test::ComputeTorque(
+      *mbp_copy, robot_position, Eigen::VectorXd::Zero(7),
+      Eigen::VectorXd::Zero(7), custom_context.get());
+  auto output_vector = output->get_vector_data(0);
+  EXPECT_TRUE(CompareMatrices(expected_torque, output_vector->get_value(),
+                              1e-14, MatrixCompareType::absolute));
 }
 
 }  // namespace

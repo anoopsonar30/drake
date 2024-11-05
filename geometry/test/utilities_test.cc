@@ -31,8 +31,8 @@ GTEST_TEST(GeometryUtilities, CanonicalizeGeometryName) {
 
   // Test various names -- including names with internal whitespace.
   for (const std::string& canonical : std::initializer_list<std::string>{
-        "name", "with space", "with\ttab", "with\nnewline",
-        "with\vvertical tab", "with\fformfeed"}) {
+           "name", "with space", "with\ttab", "with\nnewline",
+           "with\vvertical tab", "with\fformfeed"}) {
     // Confirms that the given name canonicalizes to the given canonical name.
     auto expect_canonical = [&canonical](const std::string& name) {
       const std::string canonicalized = CanonicalizeStringName(name);
@@ -91,20 +91,20 @@ GTEST_TEST(GeometryUtilities, MapKeyRange) {
   int count = 0;
   for (int i : range) {
     ++count;
-    EXPECT_EQ(values.count(i), 1);
+    EXPECT_TRUE(values.contains(i));
   }
   EXPECT_EQ(count, values.size());
 
   std::set<int> read_values_set(range.begin(), range.end());
   EXPECT_EQ(read_values_set.size(), values.size());
   for (int i : read_values_set) {
-    EXPECT_EQ(values.count(i), 1);
+    EXPECT_TRUE(values.contains(i));
   }
 
   std::vector<int> read_values_vector(range.begin(), range.end());
   EXPECT_EQ(read_values_vector.size(), values.size());
   for (int i : read_values_vector) {
-    EXPECT_EQ(values.count(i), 1);
+    EXPECT_TRUE(values.contains(i));
   }
 }
 
@@ -121,6 +121,22 @@ GTEST_TEST(GeometryUtilities, Vector3Conversion) {
   Vector3<AutoDiffXd> p_AB_ad(p_AB);
   Vector3<double> X_AB_ad_converted = convert_to_double(p_AB_ad);
   EXPECT_TRUE(CompareMatrices(p_AB, X_AB_ad_converted));
+}
+
+GTEST_TEST(GeometryUtilities, VectorXConversion) {
+  VectorX<double> q_WG(4);
+  q_WG << 1, 2, 3, 4;
+
+  VectorX<double> q_WG_converted = convert_to_double(q_WG);
+  EXPECT_TRUE(CompareMatrices(q_WG, q_WG_converted));
+  // Double to double conversion is just a pass through without copying, so
+  // we'll compare addresses.
+  const VectorX<double>& q_WG_converted_ref = convert_to_double(q_WG);
+  EXPECT_EQ(&q_WG, &q_WG_converted_ref);
+
+  VectorX<AutoDiffXd> q_WG_ad(q_WG);
+  VectorX<double> q_WG_ad_converted = convert_to_double(q_WG_ad);
+  EXPECT_TRUE(CompareMatrices(q_WG, q_WG_ad_converted));
 }
 
 }  // namespace

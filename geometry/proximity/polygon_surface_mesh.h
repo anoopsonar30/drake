@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -20,13 +21,16 @@ namespace geometry {
 // Forward declaration for friendship.
 template <typename T>
 class PolygonSurfaceMesh;
+// Forward declaration of PolygonSurfaceMeshTest<T> for friend access.
+template <typename T>
+class PolygonSurfaceMeshTest;
 
 /** Representation of a polygonal face in a SurfacePolygon. */
 class SurfacePolygon {
  public:
   // TODO(SeanCurtis-TRI): Consider making this copy-constructible, in which
   // case we can remove copy_to_unique() function, below.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SurfacePolygon)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SurfacePolygon);
 
   /** Returns the number of vertices in this face. */
   int num_vertices() const { return mesh_face_data_.at(index_); }
@@ -77,7 +81,7 @@ class SurfacePolygon {
 template <class T>
 class PolygonSurfaceMesh {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PolygonSurfaceMesh)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PolygonSurfaceMesh);
 
   /** @name Mesh type traits
 
@@ -187,34 +191,8 @@ class PolygonSurfaceMesh {
    initial frame M to the new frame N. */
   void TransformVertices(const math::RigidTransform<T>& X_NM);
 
-  // TODO(SeanCurtis-TRI): ContactResultsToLcm and HydroelasticContactInfo
-  //  ostensibly support symbolic::Expression. However, the ContactSurface that
-  //  they both interact with *doesn't*. Their unit tests blindly assume that
-  //  there is full scalar support. ContactSurface calls ReverseFaceWinding so,
-  //  for the offending unit tests to maintain the illusion of support, this
-  //  must be defined in the header so they can compile and link -- although,
-  //  the resulting ContactSurface<symbolic::Expression> is only a partial
-  //  implementation and can't do any interesting math, this allows the tests
-  //  to create the type they need. Ideally, the tests wouldn't be expressed
-  //  in a way that suggests non-existent support is otherwise possible.
-  //  Alternatively, there's a question about whether ContactSurface should be
-  //  calling this method *at all*. Choosing that it's not necessary would
-  //  likewise enable this implementation to move to the .cc file.
   /** (Internal use only) Reverses the ordering of all the faces' indices. */
-  void ReverseFaceWinding() {
-    for (const int f_index : poly_indices_) {
-      const int v_count = face_data_[f_index];
-      /* The indices before and after the first and last entries.  */
-      int f_0 = f_index;
-      int f_n = f_index + v_count + 1;
-      for (int i = 0; i < v_count / 2; ++i) {
-        std::swap(face_data_[++f_0], face_data_[--f_n]);
-      }
-    }
-    for (auto& n : face_normals_) {
-      n = -n;
-    }
-  }
+  void ReverseFaceWinding();
 
   /** Returns the number of polygonal elements in the mesh. */
   int num_faces() const { return static_cast<int>(poly_indices_.size()); }
@@ -300,7 +278,33 @@ class PolygonSurfaceMesh {
         "be provided at construction.");
   }
 
+  /** Like CalcGradientVectorOfLinearField above, this is a stub method,
+   provided for compatibility with MeshFieldLinear. The empty return value
+   here will cause the caller to report errors. */
+  template <typename FieldValue>
+  std::optional<Vector3<FieldValue>> MaybeCalcGradientVectorOfLinearField(
+      const std::array<FieldValue, 3>&, int) const {
+    return {};
+  }
+
+  /** Updates the position of all vertices in the mesh. Each sequential triple
+   in p_MVs (e.g., 3i, 3i + 1, 3i + 2), i ∈ ℤ, is interpreted as a position
+   vector associated with the iᵗʰ vertex. The position values are interpreted to
+   be measured and expressed in the same frame as the mesh to be deformed.
+
+   @param p_MVs  Vertex positions for the mesh's N vertices flattened into a
+                 vector (where each position vector is measured and expressed in
+                 the mesh's original frame).
+   @throws std::exception if p_MVs.size() != 3 * num_vertices() */
+  void SetAllPositions(const Eigen::Ref<const VectorX<T>>& p_MVs);
+
  private:
+  friend class PolygonSurfaceMeshTest<T>;
+
+  /* Calculates and sets the area, normal, and centroid of all polygon faces.
+   Also computes and sets the centroid of the entire surface. */
+  void ComputePositionDependentQuantities();
+
   // TODO(DamrongGuoy): Make CalcAreaNormalAndCentroid() return area, normal
   //  vector, and centroid instead of accumulating them into member
   //  variables. Therefore, the function would become publicly accessible, and
@@ -337,7 +341,8 @@ class PolygonSurfaceMesh {
    cᵢ, ..., cₘ entries for M polygons in the mesh. */
   std::vector<int> poly_indices_;
 
-  /* The vertices referenced by the mesh's polygons. */
+  /* The vertices referenced by the mesh's polygons, measured and expressed in
+   the mesh's frame M. */
   std::vector<Vector3<T>> vertices_M_;
 
   /* Derived quantities of the mesh -- computed as elements are added. */
@@ -361,7 +366,7 @@ class PolygonSurfaceMesh {
 };
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class PolygonSurfaceMesh)
+    class PolygonSurfaceMesh);
 
 }  // namespace geometry
 }  // namespace drake

@@ -1,12 +1,14 @@
 import copy
 import os
+import pickle
 import unittest
 
 import numpy as np
 
 from pydrake.autodiffutils import AutoDiffXd
 import pydrake.common as mut
-import pydrake.common._module_py._testing as mut_testing
+from pydrake.common.test_utilities.pickle_compare import assert_pickle
+import pydrake.common._testing as mut_testing
 
 
 class TestCommon(unittest.TestCase):
@@ -30,6 +32,63 @@ class TestCommon(unittest.TestCase):
 
     def test_find_resource_or_throw(self):
         mut.FindResourceOrThrow("drake/examples/acrobot/Acrobot.urdf")
+
+    def test_sha256(self):
+        empty = mut.Sha256()
+        not_empty = mut.Sha256.Checksum("Some string")
+        self.assertFalse(empty == not_empty)
+        self.assertTrue(empty != not_empty)
+        self.assertTrue(empty < not_empty)
+
+        str_value = not_empty.to_string()
+        not_empty2 = mut.Sha256.Parse(str_value)
+        self.assertTrue(not_empty == not_empty2)
+
+        assert_pickle(self, not_empty, lambda sha: sha)
+
+        copy.copy(not_empty)
+        copy.deepcopy(not_empty)
+
+    def test_memory_file(self):
+        content_bytes = b"Some string"
+        hint = "hint"
+        ext = ".bob"
+        file = mut.MemoryFile(content_bytes, ext, hint)
+
+        self.assertEqual(file.sha256(), mut.Sha256.Checksum(content_bytes))
+        self.assertEqual(file.contents(), content_bytes)
+        self.assertEqual(file.extension(), ext)
+        self.assertEqual(file.filename_hint(), hint)
+
+        assert_pickle(self, file, repr)
+
+        # Check that data pickled as MemoryFile in Drake v1.33.0 can be
+        # unpickled in newer versions. The data should produce a MemoryFile
+        # identical to `file` above.
+        legacy_data = b"\x80\x04\x95l\x00\x00\x00\x00\x00\x00\x00\x8c\x0epydrake.common\x94\x8c\nMemoryFile\x94\x93\x94)\x81\x94}\x94(\x8c\x08contents\x94\x8c\x0bSome string\x94\x8c\textension\x94\x8c\x04.bob\x94\x8c\rfilename_hint\x94\x8c\x04hint\x94ub."  # noqa
+        obj = pickle.loads(legacy_data)
+        self.assertIsInstance(obj, mut.MemoryFile)
+        self.assertEqual(obj.contents(), file.contents())
+        self.assertEqual(obj.extension(), file.extension())
+        self.assertEqual(obj.filename_hint(), file.filename_hint())
+
+        def string_regex(s):
+            """Confirm that the string is surrounded by quotes (either double
+            or single; we don't care which, just so long as they match)."""
+            return f"""(['"]){s}\\1"""
+        representation = repr(file)
+        # We know that content_bytes is easily decodable as a string.
+        self.assertRegex(representation,
+                         string_regex(content_bytes.decode("utf-8")))
+        self.assertRegex(representation, string_regex(hint))
+        self.assertRegex(representation, string_regex(ext))
+
+        copy.copy(file)
+        copy.deepcopy(file)
+
+        file = mut.MemoryFile.Make(
+            mut.FindResourceOrThrow("drake/examples/acrobot/Acrobot.urdf"))
+        self.assertEqual(file.extension(), ".urdf")
 
     def test_parallelism(self):
         # This matches the BUILD.bazel rule for this test program.
@@ -56,6 +115,12 @@ class TestCommon(unittest.TestCase):
         self.assertEqual(mut.Parallelism(1).num_threads(), 1)
         self.assertEqual(mut.Parallelism(3).num_threads(), 3)
 
+        # Round-trip repr.
+        for rep in ["Parallelism(num_threads=1)",
+                    "Parallelism(num_threads=2)"]:
+            x = eval(rep, {"Parallelism": mut.Parallelism}, {})
+            self.assertEqual(repr(x), rep)
+
         # Floats are right out.
         with self.assertRaisesRegex(Exception, "types"):
             mut.Parallelism(0.5)
@@ -80,7 +145,7 @@ class TestCommon(unittest.TestCase):
         mut.RandomDistribution.kExponential
 
     def test_logging(self):
-        self.assertTrue(mut._module_py._HAVE_SPDLOG)
+        self.assertTrue(mut._HAVE_SPDLOG)
         self.assertIsInstance(
             mut._set_log_level(level="unchanged"), str)
 

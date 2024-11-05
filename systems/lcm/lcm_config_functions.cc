@@ -23,7 +23,7 @@ namespace {
 /* A no-op implementation of lcm::DrakeSubscriptionInterface. */
 class NoopDrakeSubscription final : public DrakeSubscriptionInterface {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NoopDrakeSubscription)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NoopDrakeSubscription);
   NoopDrakeSubscription() = default;
   void set_unsubscribe_on_delete(bool) final {}
   void set_queue_capacity(int) final {}
@@ -32,7 +32,7 @@ class NoopDrakeSubscription final : public DrakeSubscriptionInterface {
 /* A no-op implementation of lcm::DrakeLcmInterface. */
 class NoopDrakeLcm final : public DrakeLcmInterface {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NoopDrakeLcm)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(NoopDrakeLcm);
   NoopDrakeLcm() = default;
   std::string get_lcm_url() const { return LcmBuses::kLcmUrlMemqNull; }
   void Publish(const std::string&, const void*, int,
@@ -81,8 +81,7 @@ LcmBuses ApplyLcmBusConfig(
     // of the eventual Diagram).
     auto* owner_system =
         builder->AddSystem<SharedPointerSystem<double>>(drake_lcm);
-    owner_system->set_name(fmt::format("DrakeLcm(bus_name={}, lcm_url={})",
-                                       bus_name, canonical_url));
+    owner_system->set_name(fmt::format("DrakeLcm(bus_name={})", bus_name));
 
     // We should not pump a null LCM, so we should return early now.
     if (is_noop) {
@@ -97,8 +96,7 @@ LcmBuses ApplyLcmBusConfig(
     auto* pumper_system =
         builder->AddSystem<LcmInterfaceSystem>(drake_lcm.get());
     pumper_system->set_name(
-        fmt::format("LcmInterfaceSystem(bus_name={}, lcm_url={})", bus_name,
-                    canonical_url));
+        fmt::format("LcmInterfaceSystem(bus_name={})", bus_name));
 
     // Display an update; provide the interface pointer to our caller.
     drake::log()->info("LCM bus '{}' created for URL {}", bus_name,

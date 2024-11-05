@@ -11,7 +11,6 @@
 #include "drake/common/autodiff.h"
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_assert.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/nice_type_name.h"
 #include "drake/common/type_safe_index.h"
 #include "drake/common/value.h"
@@ -65,7 +64,7 @@ to be determined at runtime.
 template <typename T>
 class OutputPort : public OutputPortBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(OutputPort)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(OutputPort);
 
   ~OutputPort() override = default;
 
@@ -250,4 +249,4 @@ class OutputPort : public OutputPortBase {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::OutputPort)
+    class ::drake::systems::OutputPort);

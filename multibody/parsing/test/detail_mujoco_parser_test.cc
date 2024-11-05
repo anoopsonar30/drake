@@ -6,14 +6,19 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/find_runfiles.h"
 #include "drake/common/test_utilities/diagnostic_policy_test_base.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/common/test_utilities/maybe_pause_for_user.h"
 #include "drake/common/text_logging.h"
+#include "drake/geometry/test_utilities/meshcat_environment.h"
 #include "drake/multibody/tree/ball_rpy_joint.h"
+#include "drake/multibody/tree/geometry_spatial_inertia.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/multibody/tree/weld_joint.h"
+#include "drake/visualization/visualization_config_functions.h"
 
 namespace drake {
 namespace multibody {
@@ -22,18 +27,22 @@ namespace {
 
 using ::testing::MatchesRegex;
 
+using Eigen::Vector2d;
 using Eigen::Vector3d;
 using Eigen::Vector4d;
+using Eigen::VectorXd;
 using drake::internal::DiagnosticPolicy;
 using geometry::FrameId;
 using geometry::GeometryId;
 using geometry::Role;
 using geometry::SceneGraph;
 using geometry::SceneGraphInspector;
-using geometry::ShapeName;
 using math::RigidTransformd;
 using math::RollPitchYawd;
 using math::RotationMatrixd;
+
+const double kInf = std::numeric_limits<double>::infinity();
+
 
 class MujocoParserTest : public test::DiagnosticPolicyTestBase {
  public:
@@ -104,16 +113,16 @@ class MujocoParserTest : public test::DiagnosticPolicyTestBase {
 
   std::string box_obj_{std::filesystem::canonical(FindResourceOrThrow(
       "drake/multibody/parsing/test/box_package/meshes/box.obj"))};
-  std::string non_convex_obj_{std::filesystem::canonical(FindResourceOrThrow(
-      "drake/geometry/test/non_convex_mesh.obj"))};
+  std::string non_convex_obj_{std::filesystem::canonical(
+      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.obj"))};
   std::string box_urdf_{std::filesystem::canonical(FindResourceOrThrow(
       "drake/multibody/parsing/test/box_package/urdfs/box.urdf"))};
 };
 
-class GymModelTest : public MujocoParserTest,
-                     public testing::WithParamInterface<const char*> {};
+class DeepMindControlTest : public MujocoParserTest,
+                            public testing::WithParamInterface<const char*> {};
 
-TEST_P(GymModelTest, GymModel) {
+TEST_P(DeepMindControlTest, DeepMindControl) {
   // Confirm successful parsing of the MuJoCo models in the DeepMind control
   // suite.
   std::string model{GetParam()};
@@ -127,12 +136,132 @@ TEST_P(GymModelTest, GymModel) {
   warning_records_.clear();
 }
 
-const char* gym_models[] = {
-  "acrobot", "cartpole", "cheetah", "finger", "fish", "hopper",
-  "humanoid", "humanoid_CMU", "lqr", "manipulator", "pendulum",
-  "point_mass", "reacher", "stacker", "swimmer", "walker"};
-INSTANTIATE_TEST_SUITE_P(GymModels, GymModelTest,
-                         testing::ValuesIn(gym_models));
+const char* dm_control_models[] = {
+    "acrobot",  "cartpole",   "cheetah",      "finger",  "fish",
+    "hopper",   "humanoid",   "humanoid_CMU", "lqr",     "manipulator",
+    "pendulum", "point_mass", "quadruped",    "reacher", "stacker",
+    "swimmer",  "walker"};
+INSTANTIATE_TEST_SUITE_P(DeepMindControl, DeepMindControlTest,
+                         testing::ValuesIn(dm_control_models));
+
+class MujocoMenagerieTest : public MujocoParserTest,
+                            public testing::WithParamInterface<const char*> {};
+
+TEST_P(MujocoMenagerieTest, MujocoMenagerie) {
+  // Confirm successful parsing of the MuJoCo models in the DeepMind control
+  // suite.
+  std::string model{GetParam()};
+  const RlocationOrError rlocation = FindRunfile(
+      fmt::format("mujoco_menagerie_internal/{}.xml", model));
+  ASSERT_EQ(rlocation.error, "");
+  AddModelFromFile(rlocation.abspath, model);
+
+  EXPECT_TRUE(plant_.HasModelInstanceNamed(model));
+
+  // For this test, ignore all warnings.
+  warning_records_.clear();
+}
+
+const char* mujoco_menagerie_models[] = {"google_robot/robot",
+                                         "kuka_iiwa_14/iiwa14",
+                                         "rethink_robotics_sawyer/sawyer"};
+// TODO(russt): Add the remaining models, once they can be parsed correctly, as
+// tracked in #20444.
+
+INSTANTIATE_TEST_SUITE_P(MujocoMenagerie, MujocoMenagerieTest,
+                         testing::ValuesIn(mujoco_menagerie_models));
+
+// In addition to confirming that the parser can successfully parse the model,
+// this test can be used to manually inspect the resulting visualization.
+GTEST_TEST(MujocoParserExtraTest, Visualize) {
+  systems::DiagramBuilder<double> builder;
+  std::shared_ptr<geometry::Meshcat> meshcat =
+      geometry::GetTestEnvironmentMeshcat();
+  auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.0);
+
+  ParsingOptions options;
+  PackageMap package_map;
+  MujocoParserWrapper wrapper;
+  internal::CollisionFilterGroupResolver resolver{&plant};
+  internal::DiagnosticPolicy diagnostic_policy;
+  ParsingWorkspace w{
+      options,
+      package_map,
+      diagnostic_policy,
+      &plant,
+      &resolver,
+      [](const drake::internal::DiagnosticPolicy&,
+         const std::string&) -> drake::multibody::internal::ParserInterface& {
+        DRAKE_UNREACHABLE();
+      }};
+  const std::string model_name = "quadruped";
+  const std::string filename = FindResourceOrThrow(fmt::format(
+      "drake/multibody/parsing/dm_control/suite/{}.xml", model_name));
+  wrapper.AddModel({DataSource::kFilename, &filename}, model_name, {}, w);
+  resolver.Resolve(diagnostic_policy);
+  plant.Finalize();
+  visualization::AddDefaultVisualization(&builder, meshcat);
+
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  diagram->ExecuteInitializationEvents(context.get());
+  diagram->ForcedPublish(*context);
+  common::MaybePauseForUser();
+}
+
+TEST_F(MujocoParserTest, CartPole) {
+  const std::string filename = FindResourceOrThrow(
+      "drake/multibody/parsing/dm_control/suite/cartpole.xml");
+  AddModelFromFile(filename, "cartpole");
+  // For this parse, ignore all warnings.
+  warning_records_.clear();
+
+  plant_.Finalize();
+  // Check the kinematics. Passing this test requires a correct parsing of
+  // joint defaults.
+  auto context = plant_.CreateDefaultContext();
+  const double x = 0.1;
+  const double theta = 0.2;
+  const double l = 1.0;
+  const double z_offset_from_model = 1.0;
+  plant_.SetPositions(context.get(), Vector2d(x, theta));
+  Vector3d p_WP;
+  plant_.CalcPointsPositions(*context, plant_.GetFrameByName("pole_1"),
+                             Vector3d{0, 0, l}, plant_.world_frame(),
+                             &p_WP);
+  EXPECT_TRUE(CompareMatrices(
+      p_WP,
+      Vector3d{x + l * sin(theta), 0, z_offset_from_model + l * cos(theta)},
+      1e-14));
+}
+
+TEST_F(MujocoParserTest, Acrobot) {
+  const std::string filename = FindResourceOrThrow(
+      "drake/multibody/parsing/dm_control/suite/acrobot.xml");
+  AddModelFromFile(filename, "acrobot");
+  // For this parse, ignore all warnings.
+  warning_records_.clear();
+
+  plant_.Finalize();
+  // Check the kinematics. Passing this test requires a correct parsing of the
+  // joint position being defined in the child body frame, not the parent
+  // body frame.
+  auto context = plant_.CreateDefaultContext();
+  const Vector2d q = {0.1, 0.2};
+  const double l1 = 1.0;
+  const double l2 = 0.5;
+  const double z_offset_from_model = 2.0;
+  plant_.SetPositions(context.get(), q);
+  Vector3d p_WP;
+  plant_.CalcPointsPositions(*context, plant_.GetFrameByName("lower_arm"),
+                             Vector3d{0, 0, l2}, plant_.world_frame(),
+                             &p_WP);
+  EXPECT_TRUE(CompareMatrices(
+      p_WP,
+      Vector3d{l1 * sin(q[0]) + l2 * sin(q[0] + q[1]), 0,
+               z_offset_from_model + l1 * cos(q[0]) + l2 * cos(q[0] + q[1])},
+      1e-14));
+}
 
 TEST_F(MujocoParserTest, Option) {
   std::string xml = R"""(
@@ -196,19 +325,16 @@ TEST_F(MujocoParserTest, GeometryTypes) {
   const SceneGraphInspector<double>& inspector = scene_graph_.model_inspector();
 
   auto CheckShape = [&inspector](const std::string& geometry_name,
-                                 const std::string& shape_name) {
+                                 std::string_view shape_type) {
     GeometryId geom_id = inspector.GetGeometryIdByName(
         inspector.world_frame_id(), Role::kProximity, geometry_name);
-    EXPECT_EQ(geometry::ShapeName(inspector.GetShape(geom_id)).name(),
-              shape_name);
+    EXPECT_EQ(inspector.GetShape(geom_id).type_name(), shape_type);
     geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
                                             Role::kPerception, geometry_name);
-    EXPECT_EQ(geometry::ShapeName(inspector.GetShape(geom_id)).name(),
-              shape_name);
+    EXPECT_EQ(inspector.GetShape(geom_id).type_name(), shape_type);
     geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
                                             Role::kIllustration, geometry_name);
-    EXPECT_EQ(geometry::ShapeName(inspector.GetShape(geom_id)).name(),
-              shape_name);
+    EXPECT_EQ(inspector.GetShape(geom_id).type_name(), shape_type);
   };
 
   // TODO(russt): Check the sizes of the shapes.  (It seems that none of our
@@ -226,6 +352,29 @@ TEST_F(MujocoParserTest, GeometryTypes) {
   CheckShape("box_from_default", "Box");
   CheckShape("ellipsoid_from_default", "Ellipsoid");
   CheckShape("box_from_sub", "Box");
+}
+
+// Confirm that multiple instances of the same geometry defaults get unique
+// names.
+TEST_F(MujocoParserTest, UniqueGeometryNames) {
+  std::string xml = R"""(
+<mujoco model="test">
+  <default class="default_box">
+    <geom type="box" size="0.1 0.2 0.3"/>
+  </default>
+  <worldbody>
+    <geom class="default_box"/>
+    <geom class="default_box"/>
+  </worldbody>
+</mujoco>
+)""";
+
+  AddModelFromString(xml, "test");
+  const SceneGraphInspector<double>& inspector = scene_graph_.model_inspector();
+  EXPECT_NO_THROW(inspector.GetGeometryIdByName(
+      inspector.world_frame_id(), Role::kProximity, "geom0"));
+  EXPECT_NO_THROW(inspector.GetGeometryIdByName(
+      inspector.world_frame_id(), Role::kProximity, "geom1"));
 }
 
 TEST_F(MujocoParserTest, UnrecognizedGeometryTypes) {
@@ -258,6 +407,7 @@ TEST_F(MujocoParserTest, GeometryPose) {
   // By default, angles are in degrees.
   std::string xml = R"""(
 <mujoco model="test">
+  <compiler eulerseq="XYZ"/>
   <default class="default_pose">
     <geom pos="1 2 3" quat="0 1 0 0"/>
   </default>
@@ -279,7 +429,7 @@ TEST_F(MujocoParserTest, GeometryPose) {
 </mujoco>
 )""";
 
-  // Explicitly set radians.
+  // Explicitly set radians. Eulerseq is default "xyz".
   std::string radians_xml = R"""(
 <mujoco model="test">
   <compiler angle="radian"/>
@@ -292,10 +442,10 @@ TEST_F(MujocoParserTest, GeometryPose) {
 </mujoco>
 )""";
 
-  // Explicitly set degrees.
+  // Explicitly set degrees. Eulerseq is "ZYZ".
   std::string degrees_xml = R"""(
 <mujoco model="test">
-  <compiler angle="degree"/>
+  <compiler angle="degree" eulerseq="ZYZ"/>
   <worldbody>
     <geom name="axisangle_deg" axisangle="4 5 6 30" pos="1 2 3" type="sphere"
           size="0.1" />
@@ -315,13 +465,16 @@ TEST_F(MujocoParserTest, GeometryPose) {
                                 const RigidTransformd& X_FG) {
     GeometryId geom_id = inspector.GetGeometryIdByName(
         inspector.world_frame_id(), Role::kProximity, geometry_name);
-    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14));
+    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14))
+        << geometry_name;
     geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
                                             Role::kPerception, geometry_name);
-    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14));
+    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14))
+        << geometry_name;
     geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
                                             Role::kIllustration, geometry_name);
-    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14));
+    EXPECT_TRUE(inspector.GetPoseInFrame(geom_id).IsNearlyEqualTo(X_FG, 1e-14))
+        << geometry_name;
   };
 
   const Vector3d p{1, 2, 3};
@@ -346,14 +499,22 @@ TEST_F(MujocoParserTest, GeometryPose) {
   CheckPose(
       "axisangle_rad",
       RigidTransformd(Eigen::AngleAxis<double>(0.5, Vector3d{4, 5, 6}), p));
-  CheckPose("euler_rad", RigidTransformd(RollPitchYawd{0.5, 0.7, 1.05}, p));
+  CheckPose("euler_rad",
+            RigidTransformd(RotationMatrixd::MakeXRotation(0.5) *
+                                RotationMatrixd::MakeYRotation(0.7) *
+                                RotationMatrixd::MakeZRotation(1.05),
+                            p));
   CheckPose("axisangle_deg",
             RigidTransformd(
                 Eigen::AngleAxis<double>(M_PI / 6.0, Vector3d{4, 5, 6}), p));
-  CheckPose(
-      "euler_deg",
-      RigidTransformd(RollPitchYawd{M_PI / 6.0, M_PI / 4.0, M_PI / 3.0}, p));
+  CheckPose("euler_deg",
+            RigidTransformd(RotationMatrixd::MakeZRotation(M_PI / 3.0) *
+                                RotationMatrixd::MakeYRotation(M_PI / 4.0) *
+                                RotationMatrixd::MakeZRotation(M_PI / 6.0),
+                            p));
 }
+
+
 
 TEST_F(MujocoParserTest, GeometryPoseErrors) {
   const std::string xml = R"""(
@@ -389,6 +550,8 @@ TEST_F(MujocoParserTest, GeometryProperties) {
     <geom name="red" type="sphere" size="0.1" material="Orange" rgba="1 0 0 1"/>
     <geom name="green" type="sphere" size="0.1" material="Orange"
           class="default_rgba"/>
+    <geom name="no_collision" contype="0" conaffinity="0" />
+    <geom name="no_visual" size="0.1" group="3" />
   </worldbody>
 </mujoco>
 )""";
@@ -398,35 +561,59 @@ TEST_F(MujocoParserTest, GeometryProperties) {
   const SceneGraphInspector<double>& inspector = scene_graph_.model_inspector();
 
   auto CheckProperties = [&inspector](const std::string& geometry_name,
-                                      double mu, const Vector4d& rgba) {
-    GeometryId geom_id = inspector.GetGeometryIdByName(
-        inspector.world_frame_id(), Role::kProximity, geometry_name);
-    const geometry::ProximityProperties* proximity_prop =
-        inspector.GetProximityProperties(geom_id);
-    EXPECT_TRUE(proximity_prop);
-    EXPECT_TRUE(proximity_prop->HasProperty("material", "coulomb_friction"));
-    const auto& friction = proximity_prop->GetProperty<CoulombFriction<double>>(
-        "material", "coulomb_friction");
-    EXPECT_EQ(friction.static_friction(), mu);
-    EXPECT_EQ(friction.dynamic_friction(), mu);
+                                      double mu, const Vector4d& rgba,
+                                      bool has_collision = true,
+                                      bool has_visual = true) {
+    if (has_collision) {
+      GeometryId geom_id = inspector.GetGeometryIdByName(
+          inspector.world_frame_id(), Role::kProximity, geometry_name);
+      const geometry::ProximityProperties* proximity_prop =
+          inspector.GetProximityProperties(geom_id);
+      EXPECT_TRUE(proximity_prop);
+      EXPECT_TRUE(proximity_prop->HasProperty("material", "coulomb_friction"));
+      const auto& friction =
+          proximity_prop->GetProperty<CoulombFriction<double>>(
+              "material", "coulomb_friction");
+      EXPECT_EQ(friction.static_friction(), mu);
+      EXPECT_EQ(friction.dynamic_friction(), mu);
+    } else {
+      DRAKE_EXPECT_THROWS_MESSAGE(
+          inspector.GetGeometryIdByName(inspector.world_frame_id(),
+                                        Role::kProximity, geometry_name),
+          ".*has no geometry.*");
+    }
 
-    geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
-                                            Role::kPerception, geometry_name);
-    const geometry::PerceptionProperties* perception_prop =
-        inspector.GetPerceptionProperties(geom_id);
-    EXPECT_TRUE(perception_prop);
-    EXPECT_TRUE(perception_prop->HasProperty("phong", "diffuse"));
-    EXPECT_TRUE(CompareMatrices(
-        perception_prop->GetProperty<Vector4d>("phong", "diffuse"), rgba));
+    if (has_visual) {
+      GeometryId geom_id = inspector.GetGeometryIdByName(
+          inspector.world_frame_id(), Role::kPerception, geometry_name);
+      const geometry::PerceptionProperties* perception_prop =
+          inspector.GetPerceptionProperties(geom_id);
+      EXPECT_TRUE(perception_prop);
+      EXPECT_TRUE(perception_prop->HasProperty("phong", "diffuse"));
+      EXPECT_TRUE(CompareMatrices(
+          perception_prop->GetProperty<Vector4d>("phong", "diffuse"), rgba));
+    } else {
+      DRAKE_EXPECT_THROWS_MESSAGE(
+          inspector.GetGeometryIdByName(inspector.world_frame_id(),
+                                        Role::kPerception, geometry_name),
+          ".*has no geometry.*");
+    }
 
-    geom_id = inspector.GetGeometryIdByName(inspector.world_frame_id(),
-                                            Role::kIllustration, geometry_name);
-    const geometry::IllustrationProperties* illustration_prop =
-        inspector.GetIllustrationProperties(geom_id);
-    EXPECT_TRUE(illustration_prop);
-    EXPECT_TRUE(illustration_prop->HasProperty("phong", "diffuse"));
-    EXPECT_TRUE(CompareMatrices(
-        illustration_prop->GetProperty<Vector4d>("phong", "diffuse"), rgba));
+    if (has_visual) {
+      GeometryId geom_id = inspector.GetGeometryIdByName(
+          inspector.world_frame_id(), Role::kIllustration, geometry_name);
+      const geometry::IllustrationProperties* illustration_prop =
+          inspector.GetIllustrationProperties(geom_id);
+      EXPECT_TRUE(illustration_prop);
+      EXPECT_TRUE(illustration_prop->HasProperty("phong", "diffuse"));
+      EXPECT_TRUE(CompareMatrices(
+          illustration_prop->GetProperty<Vector4d>("phong", "diffuse"), rgba));
+    } else {
+      DRAKE_EXPECT_THROWS_MESSAGE(
+          inspector.GetGeometryIdByName(inspector.world_frame_id(),
+                                        Role::kIllustration, geometry_name),
+          ".*has no geometry.*");
+    }
   };
 
   CheckProperties("default", 1.0, Vector4d{.5, .5, .5, 1});
@@ -436,6 +623,39 @@ TEST_F(MujocoParserTest, GeometryProperties) {
   // If both material and rgba are specified, rgba wins.
   CheckProperties("red", 1.0, Vector4d{1, 0, 0, 1});
   CheckProperties("green", 1.0, Vector4d{0, 1, 0, 1});
+  CheckProperties("no_collision", 1.0, Vector4d{.5, .5, .5, 1},
+                  false /* has collision */, true /* has visual */);
+  CheckProperties("no_visual", 1.0, Vector4d{.5, .5, .5, 1},
+                  true /* has collision */, false /* has visual */);
+
+  // Confirm that the default geometry is a zero-radius sphere.
+  GeometryId no_collision_id = inspector.GetGeometryIdByName(
+      inspector.world_frame_id(), Role::kIllustration, "no_collision");
+  const geometry::Sphere* no_collision_shape =
+      dynamic_cast<const geometry::Sphere*>(
+          &inspector.GetShape(no_collision_id));
+  ASSERT_NE(no_collision_shape, nullptr);
+  EXPECT_EQ(no_collision_shape->radius(), 0.0);
+}
+
+TEST_F(MujocoParserTest, Include) {
+  EXPECT_EQ(plant_.num_model_instances(), 2);
+  // This scene.xml defines a scene with two pendula, defined using <include>
+  // (and a nested <include>).
+  AddAllModelsFromFile(
+      FindResourceOrThrow(
+          "drake/multibody/parsing/test/mujoco_parser_test/scene.xml"),
+      {});
+  FlushDiagnostics();
+  plant_.Finalize();
+  EXPECT_EQ(plant_.num_model_instances(), 3);
+  EXPECT_EQ(plant_.num_positions(), 2);
+  EXPECT_EQ(plant_.num_velocities(), 2);
+
+  // In order for the total mass to be correct, the geom from the nested
+  // include inside pendulum.xml must have been processed.
+  auto context = plant_.CreateDefaultContext();
+  EXPECT_EQ(plant_.CalcTotalMass(*context), 2.0);
 }
 
 class BoxMeshTest : public MujocoParserTest {
@@ -470,7 +690,8 @@ class BoxMeshTest : public MujocoParserTest {
     auto* mesh =
         dynamic_cast<const geometry::Mesh*>(&inspector.GetShape(geom_id));
     EXPECT_NE(mesh, nullptr);
-    EXPECT_EQ(mesh->filename(), expected_filename);
+    DRAKE_DEMAND(mesh->source().is_path());
+    EXPECT_EQ(mesh->source().path(), expected_filename);
     EXPECT_EQ(mesh->scale(), expected_scale);
   }
 };
@@ -523,8 +744,19 @@ TEST_F(BoxMeshTest, MeshFileAbsolutePathCompiler) {
   // Absolute path in the meshdir compiler attribute.
   std::string mesh_asset =
       R"""(<mesh name="box" file="box.obj"/>)""";
+  // Additionally confirm that meshdir takes priority over assetdir.
   std::string compiler =
-      fmt::format(R"""(<compiler meshdir="{}"/>)""",
+      fmt::format(R"""(<compiler assetdir="invalid_name" meshdir="{}"/>)""",
+                  std::filesystem::path(box_obj_).parent_path().string());
+  TestBoxMesh(box_obj_, mesh_asset, compiler);
+}
+
+TEST_F(BoxMeshTest, MeshFileAbsolutePathCompilerUsingAssetDir) {
+  // Absolute path in the meshdir compiler attribute.
+  std::string mesh_asset =
+      R"""(<mesh name="box" file="box.obj"/>)""";
+  std::string compiler =
+      fmt::format(R"""(<compiler assetdir="{}"/>)""",
                   std::filesystem::path(box_obj_).parent_path().string());
   TestBoxMesh(box_obj_, mesh_asset, compiler);
 }
@@ -545,6 +777,50 @@ TEST_F(BoxMeshTest, MeshFileScale) {
   TestBoxMesh(box_obj_, mesh_asset, "", 2.0);
 }
 
+TEST_F(BoxMeshTest, MeshFileScaleViaDefault) {
+  // Test the scale set via mesh defaults. According to the mjcf docs, this is
+  // the only supported mesh default.
+  std::string mesh_asset =
+      fmt::format(R"""(<mesh name="box" file="{}"/>)""", box_obj_);
+  std::string defaults = R"""(<default><mesh scale="2 2 2"/></default>)""";
+  TestBoxMesh(box_obj_, mesh_asset, defaults, 2.0);
+}
+
+// CalcSpatialInertia() cannot necessarily compute a physical spatial inertia
+// for meshes which don't adhere to its requirements. The parser detects this
+// and provides a fallback so that it doesn't choke.
+TEST_F(MujocoParserTest, BadMeshSpatialInertiaFallback) {
+  // This obj is known to produce a non-physical spatial inertia in
+  // CalcSpatialInertia().
+  const RlocationOrError rlocation = FindRunfile(
+      "mujoco_menagerie_internal/hello_robot_stretch/assets/base_link_0.obj");
+  ASSERT_EQ(rlocation.error, "");
+  const geometry::Mesh bad_mesh(rlocation.abspath, 1.0);
+
+  // We know the spatial inertia is bad because CalcSpatialInertia()
+  // throws. Keep this confirmation that the mesh in question truly is "bad".
+  DRAKE_EXPECT_THROWS_MESSAGE(CalcSpatialInertia(bad_mesh, 1.0),
+          ".*IsPhysicallyValid[\\s\\S]*");
+
+  std::string xml = fmt::format(R"""(
+<mujoco model="test">
+  <asset>
+    <mesh name="box" file="{}"/>  </asset>
+  <worldbody>
+    <body name="body1">
+      <geom name="box_geom" type="mesh" mesh="box"/>
+    </body>
+  </worldbody>
+</mujoco>
+)""",  rlocation.abspath);
+
+  EXPECT_NO_THROW(AddModelFromString(xml, "test"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(".*IsPhysicallyValid.*"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(".*fallback.*"));
+  // Note: This test doesn't cover the properties of the fallback; just the fact
+  // that we're using it (and not choking).
+}
+
 TEST_F(MujocoParserTest, MeshFileRelativePathFromFile) {
   const std::string file = FindResourceOrThrow(
       "drake/multibody/parsing/test/box_package/mjcfs/box.xml");
@@ -559,7 +835,8 @@ TEST_F(MujocoParserTest, MeshFileRelativePathFromFile) {
       dynamic_cast<const geometry::Mesh*>(&inspector.GetShape(geom_id));
 
   EXPECT_NE(mesh, nullptr);
-  EXPECT_EQ(mesh->filename(), box_obj_);
+  ASSERT_TRUE(mesh->source().is_path());
+  EXPECT_EQ(mesh->source().path(), box_obj_);
   EXPECT_EQ(mesh->scale(), 1.0);
 }
 
@@ -711,7 +988,7 @@ TEST_F(MujocoParserTest, InertiaFromGeometry) {
                         const std::string& body_name,
                         const UnitInertia<double>& unit_M_BBo_B) {
     SCOPED_TRACE(fmt::format("checking body {}", body_name));
-    const Body<double>& body = plant_.GetBodyByName(body_name);
+    const RigidBody<double>& body = plant_.GetBodyByName(body_name);
     EXPECT_TRUE(CompareMatrices(
         body.CalcSpatialInertiaInBodyFrame(*context).CopyToFullMatrix6(),
         SpatialInertia<double>(2.53, Vector3d::Zero(), unit_M_BBo_B)
@@ -724,7 +1001,7 @@ TEST_F(MujocoParserTest, InertiaFromGeometry) {
                                 const SpatialInertia<double>& M_BBo_B,
                                 double tol = 1e-14) {
     SCOPED_TRACE(fmt::format("checking body {} (spatial)", body_name));
-    const Body<double>& body = plant_.GetBodyByName(body_name);
+    const RigidBody<double>& body = plant_.GetBodyByName(body_name);
     EXPECT_TRUE(CompareMatrices(
         body.CalcSpatialInertiaInBodyFrame(*context).CopyToFullMatrix6(),
         M_BBo_B.CopyToFullMatrix6(), tol));
@@ -808,7 +1085,10 @@ TEST_F(MujocoParserTest, InertiaFromGeometry) {
 TEST_F(MujocoParserTest, CompilerErrors) {
   std::string xml = R"""(
 <mujoco model="test">
-  <compiler coordinate="global" angle="grad" inertiafromgeom="QQQ"/>
+  <compiler coordinate="global" angle="grad" inertiafromgeom="QQQ" eulerseq="abc"/>
+  <worldbody>
+    <body name="trigger_bad_euler_seq" euler="30 45 60"/>
+  </worldbody>
 </mujoco>
 )""";
 
@@ -817,6 +1097,26 @@ TEST_F(MujocoParserTest, CompilerErrors) {
   EXPECT_THAT(TakeWarning(),
               MatchesRegex(".*inertiafromgeom.*interpret.*ignored.*"));
   EXPECT_THAT(TakeError(), MatchesRegex(".*coordinate.*not supported.*"));
+  EXPECT_THAT(
+      TakeError(),
+      MatchesRegex(".*Illegal value 'abc' for the eulerseq in compiler.*"));
+}
+
+TEST_F(MujocoParserTest, CompilerErrorsShortEulerSeq) {
+  // Eulerseq is 1 character instead of 3.
+  std::string xml = R"""(
+<mujoco model="test">
+  <compiler eulerseq="a"/>
+  <worldbody>
+    <body name="trigger_bad_euler_seq" euler="30 45 60"/>
+  </worldbody>
+</mujoco>
+)""";
+
+  AddModelFromString(xml, "test");
+  EXPECT_THAT(
+      TakeError(),
+      MatchesRegex(".*Illegal value 'a' for the eulerseq in compiler.*"));
 }
 
 TEST_F(MujocoParserTest, AssetErrors) {
@@ -838,6 +1138,25 @@ TEST_F(MujocoParserTest, AssetErrors) {
   EXPECT_THAT(TakeError(), MatchesRegex(".*non-uniform scale.*"));
 }
 
+TEST_F(MujocoParserTest, AssetDirErrors) {
+  std::string xml = R"""(
+<mujoco model="test">
+  <compiler assetdir="invalid_dir"/>
+  <asset>
+    <mesh name="box_mesh" file="box.obj" />
+  </asset>
+  <worldbody>
+    <geom name="box_geom" type="mesh" mesh="box_mesh"/>
+  </worldbody>
+</mujoco>
+)""";
+
+  AddModelFromString(xml, "test");
+  EXPECT_THAT(TakeWarning(),
+              MatchesRegex(".*mesh asset.*could not be found.*"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(".*specified unknown mesh.*"));
+}
+
 TEST_F(MujocoParserTest, BodyError) {
   std::string xml = R"""(
 <mujoco model="test">
@@ -855,8 +1174,13 @@ TEST_F(MujocoParserTest, BodyError) {
 TEST_F(MujocoParserTest, Joint) {
   std::string xml = R"""(
 <mujoco model="test">
+  <compiler eulerseq="XYZ"/>
   <default>
     <geom type="sphere" size="1"/>
+    <default class="default_joint">
+      <joint type="hinge" damping="0.24" pos="-.1 -.2 -.3"
+             axis="1 0 0" limited="true" range="-30 60" />
+    </default>
   </default>
   <worldbody>
     <body name="freejoint" pos="1 2 3" euler="30 45 60">
@@ -875,6 +1199,9 @@ TEST_F(MujocoParserTest, Joint) {
     <body name="hinge" pos="1 2 3" euler="30 45 60">
       <joint type="hinge" name="hinge" damping="0.3" pos=".1 .2 .3"
              axis="0 1 0" limited="true" range="-30 60"/>
+    </body>
+    <body name="hinge_w_joint_defaults" pos="1 2 3" euler="30 45 60">
+      <joint type="hinge" name="hinge_w_joint_defaults" class="default_joint" />
     </body>
     <body name="default" pos="1 2 3" euler="30 45 60">
       <!-- without the limited=true tag -->
@@ -906,14 +1233,14 @@ TEST_F(MujocoParserTest, Joint) {
 
   // Note: for free bodies Drake ignores the given Mujoco joint name and makes
   // its own floating joint named like the body.
-  const Body<double>& freejoint_body = plant_.GetBodyByName("freejoint");
+  const RigidBody<double>& freejoint_body = plant_.GetBodyByName("freejoint");
   EXPECT_FALSE(plant_.HasJointNamed("xfreejoint"));
   EXPECT_TRUE(plant_.HasJointNamed("freejoint"));
   EXPECT_TRUE(freejoint_body.is_floating());
   EXPECT_TRUE(plant_.GetFreeBodyPose(*context, freejoint_body)
                   .IsNearlyEqualTo(X_WB, 1e-14));
 
-  const Body<double>& free_body = plant_.GetBodyByName("free");
+  const RigidBody<double>& free_body = plant_.GetBodyByName("free");
   EXPECT_FALSE(plant_.HasJointNamed("xfree"));
   EXPECT_TRUE(plant_.HasJointNamed("free"));
   EXPECT_TRUE(free_body.is_floating());
@@ -922,8 +1249,8 @@ TEST_F(MujocoParserTest, Joint) {
 
   const BallRpyJoint<double>& ball_joint =
       plant_.GetJointByName<BallRpyJoint>("ball");
-  EXPECT_EQ(ball_joint.damping(), 0.1);
-  EXPECT_TRUE(ball_joint.frame_on_parent()
+  EXPECT_EQ(ball_joint.default_damping(), 0.1);
+  EXPECT_TRUE(ball_joint.frame_on_child()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyEqualTo(RigidTransformd(pos), 1e-14));
   EXPECT_TRUE(
@@ -932,8 +1259,8 @@ TEST_F(MujocoParserTest, Joint) {
 
   const PrismaticJoint<double>& slide_joint =
       plant_.GetJointByName<PrismaticJoint>("slide");
-  EXPECT_EQ(slide_joint.damping(), 0.2);
-  EXPECT_TRUE(slide_joint.frame_on_parent()
+  EXPECT_EQ(slide_joint.default_damping(), 0.2);
+  EXPECT_TRUE(slide_joint.frame_on_child()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyEqualTo(RigidTransformd(pos), 1e-14));
   EXPECT_TRUE(
@@ -948,8 +1275,8 @@ TEST_F(MujocoParserTest, Joint) {
 
   const RevoluteJoint<double>& hinge_joint =
       plant_.GetJointByName<RevoluteJoint>("hinge");
-  EXPECT_EQ(hinge_joint.damping(), 0.3);
-  EXPECT_TRUE(hinge_joint.frame_on_parent()
+  EXPECT_EQ(hinge_joint.default_damping(), 0.3);
+  EXPECT_TRUE(hinge_joint.frame_on_child()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyEqualTo(RigidTransformd(pos), 1e-14));
   EXPECT_TRUE(CompareMatrices(hinge_joint.revolute_axis(), Vector3d{0, 1, 0}));
@@ -963,10 +1290,29 @@ TEST_F(MujocoParserTest, Joint) {
       CompareMatrices(plant_.GetJointByName("hinge").position_upper_limits(),
                       Vector1d{M_PI / 3.0}, 1e-14));
 
+  const RevoluteJoint<double>& hinge_w_joint_defaults_joint =
+      plant_.GetJointByName<RevoluteJoint>("hinge_w_joint_defaults");
+  EXPECT_EQ(hinge_w_joint_defaults_joint.default_damping(), 0.24);
+  EXPECT_TRUE(
+      hinge_w_joint_defaults_joint.frame_on_child()
+          .CalcPoseInBodyFrame(*context)
+          .IsNearlyEqualTo(RigidTransformd(Vector3d{-0.1, -0.2, -0.3}), 1e-14));
+  EXPECT_TRUE(CompareMatrices(hinge_w_joint_defaults_joint.revolute_axis(),
+                              Vector3d{1, 0, 0}));
+  EXPECT_TRUE(plant_.GetBodyByName("hinge_w_joint_defaults")
+                  .EvalPoseInWorld(*context)
+                  .IsNearlyEqualTo(X_WB, 1e-14));
+  EXPECT_TRUE(CompareMatrices(
+      plant_.GetJointByName("hinge_w_joint_defaults").position_lower_limits(),
+      Vector1d{-M_PI / 6.0}, 1e-14));
+  EXPECT_TRUE(CompareMatrices(
+      plant_.GetJointByName("hinge_w_joint_defaults").position_upper_limits(),
+      Vector1d{M_PI / 3.0}, 1e-14));
+
   const RevoluteJoint<double>& default_joint =
       plant_.GetJointByName<RevoluteJoint>("default");
-  EXPECT_EQ(default_joint.damping(), 0.4);
-  EXPECT_TRUE(default_joint.frame_on_parent()
+  EXPECT_EQ(default_joint.default_damping(), 0.4);
+  EXPECT_TRUE(default_joint.frame_on_child()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyIdentity(1e-14));
   EXPECT_TRUE(
@@ -976,23 +1322,23 @@ TEST_F(MujocoParserTest, Joint) {
           X_WB, 1e-14));
   EXPECT_TRUE(
       CompareMatrices(plant_.GetJointByName("default").position_lower_limits(),
-                      Vector1d{-std::numeric_limits<double>::infinity()}));
+                      Vector1d{-M_PI / 9.0}));
   EXPECT_TRUE(
       CompareMatrices(plant_.GetJointByName("default").position_upper_limits(),
-                      Vector1d{std::numeric_limits<double>::infinity()}));
+                      Vector1d{M_PI / 12.0}));
 
   const RevoluteJoint<double>& hinge1_joint =
       plant_.GetJointByName<RevoluteJoint>("hinge1");
-  EXPECT_EQ(hinge1_joint.damping(), 0.5);
+  EXPECT_EQ(hinge1_joint.default_damping(), 0.5);
   EXPECT_TRUE(CompareMatrices(hinge1_joint.revolute_axis(), Vector3d{1, 0, 0}));
   EXPECT_TRUE(hinge1_joint.frame_on_parent()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyEqualTo(RigidTransformd(pos), 1e-14));
   const RevoluteJoint<double>& hinge2_joint =
       plant_.GetJointByName<RevoluteJoint>("hinge2");
-  EXPECT_EQ(hinge2_joint.damping(), 0.6);
+  EXPECT_EQ(hinge2_joint.default_damping(), 0.6);
   EXPECT_TRUE(CompareMatrices(hinge2_joint.revolute_axis(), Vector3d{0, 1, 0}));
-  EXPECT_TRUE(hinge2_joint.frame_on_parent()
+  EXPECT_TRUE(hinge2_joint.frame_on_child()
                   .CalcPoseInBodyFrame(*context)
                   .IsNearlyEqualTo(RigidTransformd(pos), 1e-14));
   EXPECT_TRUE(plant_.GetBodyByName("two_hinges")
@@ -1034,6 +1380,88 @@ TEST_F(MujocoParserTest, JointErrors) {
       ".*a free joint is defined.*"));
   EXPECT_THAT(TakeError(), MatchesRegex(
       ".*Unknown joint type.*"));
+}
+
+std::string MakeAutoLimitsXML(
+  bool auto_limits, const std::string& motor_limit_prefix) {
+    return fmt::format(R"""(
+  <mujoco model="test">
+    <compiler autolimits="{0}" angle="radian"/>
+    <worldbody>
+      <body>
+        <joint type="hinge" name="hinge0" limited="true"/>
+        <joint type="hinge" name="hinge1" range="-1 1"/>
+        <joint type="hinge" name="hinge2" range="-2 2" limited="auto"/>
+        <joint type="hinge" name="hinge3" range="-3 3" limited="true"/>
+        <joint type="hinge" name="hinge4" range="-4 4" limited="false"/>
+        <joint type="hinge" name="hinge6" range="-5 5" limited="bad"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <!-- Drake does not allow effort limits to be zero. -->
+      <!-- <motor joint="hinge0" {1}limited="true"/> -->
+      <motor joint="hinge1" {1}range="-1 1"/>
+      <motor joint="hinge2" {1}range="-2 2" {1}limited="auto"/>
+      <motor joint="hinge3" {1}range="-3 3" {1}limited="true"/>
+      <motor joint="hinge4" {1}range="-4 4" {1}limited="false"/>
+      <motor joint="hinge6" {1}range="-5 5" {1}limited="bad"/>
+    </actuator>
+  </mujoco>
+  )""", auto_limits, motor_limit_prefix);
+}
+
+TEST_F(MujocoParserTest, AutoLimitsTrue) {
+  const std::string kXml = MakeAutoLimitsXML(true, "ctrl");
+  AddModelFromString(kXml, "test");
+  plant_.Finalize();
+  EXPECT_EQ(plant_.num_positions(), 6);
+  VectorXd expected_limits(6);
+  expected_limits << 0.0, 1.0, 2.0, 3.0, kInf, kInf;
+  EXPECT_TRUE(
+      CompareMatrices(plant_.GetPositionLowerLimits(), -expected_limits));
+  EXPECT_TRUE(
+      CompareMatrices(plant_.GetPositionUpperLimits(), expected_limits));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'limited' attribute must be one of.*"));
+  EXPECT_TRUE(CompareMatrices(
+    plant_.GetEffortLowerLimits(), -expected_limits.tail<5>()));
+  EXPECT_TRUE(CompareMatrices(
+    plant_.GetEffortUpperLimits(), expected_limits.tail<5>()));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'ctrllimited' attribute must be one of.*"));
+}
+
+TEST_F(MujocoParserTest, AutoLimitsFalse) {
+  const std::string kXml = MakeAutoLimitsXML(false, "force");
+  AddModelFromString(kXml, "test");
+  plant_.Finalize();
+  EXPECT_EQ(plant_.num_positions(), 6);
+  VectorXd expected_limits(6);
+  expected_limits << 0.0, kInf, kInf, 3.0, kInf, kInf;
+  EXPECT_TRUE(
+      CompareMatrices(plant_.GetPositionLowerLimits(), -expected_limits));
+  EXPECT_TRUE(
+      CompareMatrices(plant_.GetPositionUpperLimits(), expected_limits));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'range' attribute was specified.*but "
+                           "'autolimits' is disabled."));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'range' attribute was specified.*but "
+                           "'autolimits' is disabled."));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'limited' attribute must be one of.*"));
+  EXPECT_TRUE(CompareMatrices(
+    plant_.GetEffortLowerLimits(), -expected_limits.tail<5>()));
+  EXPECT_TRUE(CompareMatrices(
+    plant_.GetEffortUpperLimits(), expected_limits.tail<5>()));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'forcerange' attribute was specified.*but "
+                           "'autolimits' is disabled."));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'forcerange' attribute was specified.*but "
+                           "'autolimits' is disabled."));
+  EXPECT_THAT(TakeError(),
+              MatchesRegex(".*The 'forcelimited' attribute must be one of.*"));
 }
 
 TEST_F(MujocoParserTest, InertialErrors) {
@@ -1102,6 +1530,8 @@ TEST_F(MujocoParserTest, GeomErrors) {
   AddModelFromString(xml, "test");
 
   EXPECT_THAT(TakeWarning(), MatchesRegex(
+      ".*zero-radius spheres.*"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(
       ".*fromto.*ellipsoid.*unsupported.*ignored.*"));
   EXPECT_THAT(TakeWarning(), MatchesRegex(
       ".*fromto.*box.*unsupported.*ignored.*"));
@@ -1110,8 +1540,6 @@ TEST_F(MujocoParserTest, GeomErrors) {
   EXPECT_THAT(TakeWarning(), MatchesRegex(
       ".*hfield.*unsupported.*ignored.*"));
 
-  EXPECT_THAT(TakeError(), MatchesRegex(
-      ".*size.*sphere.*must have.*element.*"));
   EXPECT_THAT(TakeError(), MatchesRegex(
       ".*size.*capsule.*must have.*two elements.*"));
   EXPECT_THAT(TakeError(), MatchesRegex(
@@ -1147,16 +1575,35 @@ TEST_F(MujocoParserTest, Motor) {
     <body>
       <joint type="hinge" name="hinge3" axis="0 1 0"/>
     </body>
+    <body>
+      <joint type="hinge" name="hinge4" axis="0 1 0" armature="12"/>
+    </body>
+    <body>
+      <joint type="hinge" name="hinge5" axis="0 1 0"/>
+    </body>
+    <body>
+      <joint type="hinge" name="hinge6" axis="0 1 0"/>
+    </body>
+    <body>
+      <joint type="hinge" name="hinge7" axis="0 1 0"/>
+    </body>
   </worldbody>
   <actuator>
     <motor joint="hinge0"/>
     <!-- intentionally asymmetric effort limits to cover the warning code -->
     <motor name="motor1" joint="hinge1" ctrllimited="true" ctrlrange="-1 2"/>
-    <motor name="motor2" joint="hinge2" ctrllimited="true" ctrlrange="-2 2"
+    <motor name="motor2" joint="hinge2" ctrllimited="true" ctrlrange="-3 2"
            forcelimited="true" forcerange="-.5 .4"/>
     <!-- malformed limits will be ignored -->
     <motor name="motor3" joint="hinge3" ctrllimited="true" ctrlrange="2 1"
            forcelimited="true" forcerange="2 1"/>
+    <!-- gear ratio -->
+    <motor joint="hinge4" gear="2 0 0 0 0 0"/>
+    <!-- gear ratios with the wrong number of entries still work, but emit a warning -->
+    <motor joint="hinge5" gear="3 0 0"/>
+    <position name="position0" joint="hinge6"/>
+    <position name="position1" joint="hinge7" ctrllimited="true" ctrlrange="-2 2"
+           forcelimited="true" forcerange="-.4 .4" kp="4" kd="1"/>
   </actuator>
 </mujoco>
 )""";
@@ -1167,16 +1614,20 @@ TEST_F(MujocoParserTest, Motor) {
   EXPECT_THAT(TakeWarning(), MatchesRegex(".*motor2.*forcerange.*"));
   EXPECT_THAT(TakeWarning(), MatchesRegex(".*motor3.*ctrlrange.*"));
   EXPECT_THAT(TakeWarning(), MatchesRegex(".*motor3.*forcerange.*"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(".*1 value or 6 values.*gear.*"));
 
   plant_.Finalize();
 
-  EXPECT_EQ(plant_.get_actuation_input_port().size(), 4);
+  EXPECT_EQ(plant_.get_actuation_input_port().size(), 8);
 
   const JointActuator<double>& motor0 =
       plant_.get_joint_actuator(JointActuatorIndex(0));
   EXPECT_EQ(motor0.name(), "motor0");
   EXPECT_EQ(motor0.joint().name(), "hinge0");
   EXPECT_EQ(motor0.effort_limit(), std::numeric_limits<double>::infinity());
+  EXPECT_EQ(motor0.default_gear_ratio(), 1);
+  EXPECT_EQ(motor0.default_rotor_inertia(), 0);
+  EXPECT_FALSE(motor0.has_controller());
 
   const JointActuator<double>& motor1 =
       plant_.get_joint_actuator(JointActuatorIndex(1));
@@ -1195,6 +1646,43 @@ TEST_F(MujocoParserTest, Motor) {
   EXPECT_EQ(motor3.name(), "motor3");
   EXPECT_EQ(motor3.joint().name(), "hinge3");
   EXPECT_EQ(motor3.effort_limit(), std::numeric_limits<double>::infinity());
+
+  const JointActuator<double>& motor4 =
+      plant_.get_joint_actuator(JointActuatorIndex(4));
+  EXPECT_EQ(motor4.name(), "motor4");
+  EXPECT_EQ(motor4.joint().name(), "hinge4");
+  EXPECT_EQ(motor4.effort_limit(), std::numeric_limits<double>::infinity());
+  EXPECT_EQ(motor4.default_gear_ratio(), 2);
+  EXPECT_NEAR(motor4.default_reflected_inertia(), 12, 1e-14);
+
+  const JointActuator<double>& motor5 =
+      plant_.get_joint_actuator(JointActuatorIndex(5));
+  EXPECT_EQ(motor5.name(), "motor5");
+  EXPECT_EQ(motor5.joint().name(), "hinge5");
+  EXPECT_EQ(motor5.effort_limit(), std::numeric_limits<double>::infinity());
+  EXPECT_EQ(motor5.default_gear_ratio(), 3);
+  EXPECT_EQ(motor5.default_rotor_inertia(), 0);
+
+  // Verify that omiting kp and kd for position tag results in the MuJoCo
+  // default controller gains.
+  const JointActuator<double>& position0 =
+      plant_.get_joint_actuator(JointActuatorIndex(6));
+  EXPECT_EQ(position0.name(), "position0");
+  EXPECT_EQ(position0.joint().name(), "hinge6");
+  EXPECT_EQ(position0.effort_limit(), std::numeric_limits<double>::infinity());
+  EXPECT_EQ(position0.get_controller_gains().p, 1);
+  EXPECT_EQ(position0.get_controller_gains().d, 0);
+
+  // Verify that the supported tags are parsed correctly (the effort limit is
+  // the mininum of the absolute value of the control range and the force
+  // range).
+  const JointActuator<double>& position1 =
+      plant_.get_joint_actuator(JointActuatorIndex(7));
+  EXPECT_EQ(position1.name(), "position1");
+  EXPECT_EQ(position1.joint().name(), "hinge7");
+  EXPECT_EQ(position1.effort_limit(), 0.4);
+  EXPECT_EQ(position1.get_controller_gains().p, 4);
+  EXPECT_EQ(position1.get_controller_gains().d, 1);
 }
 
 class ContactTest : public MujocoParserTest,
@@ -1340,10 +1828,96 @@ TEST_F(MujocoParserTest, ContactThrows) {
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       AddModelFromString(fmt::format(xml_base, "QQQ", "body2"), "bad_body1"),
-      ".*no Body named 'QQQ' anywhere.*");
+      ".*no RigidBody named 'QQQ' anywhere.*");
   DRAKE_EXPECT_THROWS_MESSAGE(
       AddModelFromString(fmt::format(xml_base, "body1", "QQQ"), "bad_body2"),
-      ".*no Body named 'QQQ' anywhere.*");
+      ".*no RigidBody named 'QQQ' anywhere.*");
+}
+
+TEST_F(MujocoParserTest, EqualityTest) {
+  std::string xml = R"""(
+<mujoco model="test">
+  <worldbody>
+    <body name="body1" pos="-1 0 0">
+      <geom type="box" size="0.1 0.2 0.3"/>
+      <joint type="hinge"/>
+    </body>
+    <body name="body2" pos="1 0 0">
+      <geom type="box" size="0.1 0.2 0.3"/>
+      <joint type="hinge"/>
+    </body>
+  </worldbody>
+  <equality>
+    <connect body1="body1" anchor="1 2 3" body2="body2"/>
+    <connect body1="body1" anchor="4 5 6"/>
+  </equality>
+</mujoco>
+)""";
+
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
+  AddModelFromString(xml, "test");
+  const auto constraint_ids = plant_.GetConstraintIds();
+  const auto& spec1 = plant_.get_ball_constraint_specs(constraint_ids[0]);
+  const auto& spec2 = plant_.get_ball_constraint_specs(constraint_ids[1]);
+  EXPECT_EQ(constraint_ids.size(), 2);
+  EXPECT_FALSE(spec1.p_BQ.has_value());
+  EXPECT_FALSE(spec2.p_BQ.has_value());
+
+  plant_.Finalize();
+
+  EXPECT_EQ(spec1.body_A, plant_.GetBodyByName("body1").index());
+  EXPECT_EQ(spec1.body_B, plant_.GetBodyByName("body2").index());
+  Vector3d p_AP(1, 2, 3);
+  EXPECT_TRUE(CompareMatrices(spec1.p_AP, p_AP));
+  RigidTransformd X_WA(Vector3d(-1, 0, 0)), X_WB(Vector3d(1, 0, 0));
+  Vector3d p_BQ = X_WB.inverse() * X_WA * p_AP;  // since Q == P.
+  ASSERT_TRUE(spec1.p_BQ.has_value());
+  EXPECT_TRUE(CompareMatrices(spec1.p_BQ.value(), p_BQ, 1e-14));
+
+  auto context = plant_.CreateDefaultContext();
+  EXPECT_EQ(spec2.body_A, plant_.GetBodyByName("body1").index());
+  EXPECT_EQ(spec2.body_B, plant_.world_body().index());
+  p_AP = Vector3d(4, 5, 6);
+  EXPECT_TRUE(CompareMatrices(spec2.p_AP, p_AP));
+  Vector3d p_WQ = X_WA * p_AP;
+  ASSERT_TRUE(spec2.p_BQ.has_value());
+  EXPECT_TRUE(CompareMatrices(spec2.p_BQ.value(), p_WQ, 1e-14));
+}
+
+TEST_F(MujocoParserTest, BadEqualityTest) {
+  std::string xml = R"""(
+<mujoco model="test">
+  <worldbody>
+    <body name="body1">
+      <geom type="box" size="0.1 0.2 0.3"/>
+      <joint type="hinge" pos="-1 0 0"/>
+    </body>
+    <body name="body2">
+      <geom type="box" size="0.1 0.2 0.3"/>
+      <joint type="hinge" pos="1 0 0"/>
+    </body>
+  </worldbody>
+  <equality>
+    <connect body1="body1" body2="body2"/>
+    <connect/>
+    <connect site1="site1" site2="site2"/>
+    <connect body1="body1" site1="site1"/>
+    <connect body1="nonsense" anchor="1 2 3"/>
+    <connect body1="body1" anchor="1 2 3" body2="nonsense"/>
+  </equality>
+</mujoco>
+)""";
+
+  plant_.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
+  AddModelFromString(xml, "test");
+  EXPECT_THAT(TakeError(), MatchesRegex(".*anchor.*"));
+  EXPECT_THAT(TakeError(), MatchesRegex(".*body1.*anchor.*site1.*site2.*"));
+  EXPECT_THAT(TakeWarning(), MatchesRegex(".*site1.*site2.*"));
+  EXPECT_THAT(TakeError(), MatchesRegex(".*body1.*site1.*"));
+  EXPECT_THAT(TakeError(), MatchesRegex(".*body1.*nonsense.*"));
+  EXPECT_THAT(TakeError(), MatchesRegex(".*body2.*nonsense.*"));
+  const auto constraint_ids = plant_.GetConstraintIds();
+  EXPECT_EQ(constraint_ids.size(), 0);
 }
 
 }  // namespace

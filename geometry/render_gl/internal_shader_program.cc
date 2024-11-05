@@ -4,9 +4,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
+
+#include "drake/common/find_resource.h"
 
 namespace drake {
 namespace geometry {
@@ -90,15 +93,14 @@ void ShaderProgram::LoadFromSources(const std::string& vertex_shader_source,
 
 namespace {
 std::string LoadFile(const std::string& filename) {
-  std::ifstream file(filename.c_str(), std::ios::in);
-  if (!file.is_open())
+  std::optional<std::string> content = ReadFile(filename);
+  if (!content)
     throw std::runtime_error("Error opening shader file: " + filename);
-  std::stringstream content;
-  content << file.rdbuf();
-  file.close();
-  return content.str();
+  return std::move(*content);
 }
 }  // namespace
+
+ShaderProgram::~ShaderProgram() = default;
 
 void ShaderProgram::LoadFromFiles(const std::string& vertex_shader_file,
                                   const std::string& fragment_shader_file) {
@@ -110,12 +112,8 @@ void ShaderProgram::SetProjectionMatrix(const Eigen::Matrix4f& T_DC) const {
 }
 
 void ShaderProgram::SetModelViewMatrix(const Eigen::Matrix4f& X_CW,
-                                       const RigidTransformd& X_WG,
-                                       const Vector3d& scale) const {
-  const Eigen::DiagonalMatrix<float, 4, 4> S_GM(
-      Vector4<float>(scale(0), scale(1), scale(2), 1.0));
-  const Eigen::Matrix4f X_WG_f = X_WG.GetAsMatrix4().cast<float>();
-  const Eigen::Matrix4f T_WM = X_WG_f * S_GM;
+                                       const Eigen::Matrix4f& T_WM,
+                                       const Eigen::Matrix3f& N_WM) const {
   const Eigen::Matrix4f T_CM = X_CW * T_WM;
   // Our camera frame C wrt the OpenGL's camera frame Cgl.
   // clang-format off
@@ -128,7 +126,7 @@ void ShaderProgram::SetModelViewMatrix(const Eigen::Matrix4f& X_CW,
   // clang-format on
   const Eigen::Matrix4f T_CglM = kT_CglC * T_CM;
   glUniformMatrix4fv(model_view_loc_, 1, GL_FALSE, T_CglM.data());
-  DoSetModelViewMatrix(X_CW, T_WM, X_WG_f, scale);
+  DoSetModelViewMatrix(X_CW, T_WM, N_WM);
 }
 
 GLint ShaderProgram::GetUniformLocation(const std::string& uniform_name) const {

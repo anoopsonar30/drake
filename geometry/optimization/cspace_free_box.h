@@ -22,7 +22,7 @@ namespace optimization {
 // control (public/protected/private) in CspaceFreePolytopeBase.
 class CspaceFreeBox : public CspaceFreePolytopeBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CspaceFreeBox)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CspaceFreeBox);
 
   using CspaceFreePolytopeBase::IgnoredCollisionPairs;
 
@@ -39,8 +39,12 @@ class CspaceFreeBox : public CspaceFreePolytopeBase {
    */
   class SeparatingPlaneLagrangians {
    public:
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparatingPlaneLagrangians);
+
     explicit SeparatingPlaneLagrangians(int s_size)
         : s_box_lower_(s_size), s_box_upper_(s_size) {}
+
+    ~SeparatingPlaneLagrangians();
 
     /** Substitutes the decision variables in each Lagrangians with its value in
      * result, returns the substitution result.
@@ -83,9 +87,9 @@ class CspaceFreeBox : public CspaceFreePolytopeBase {
    separating_planes()[plane_index] in the C-space box.
    */
   struct SeparationCertificateResult final : SeparationCertificateResultBase {
-    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResult)
-    SeparationCertificateResult() {}
-    ~SeparationCertificateResult() override = default;
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResult);
+    SeparationCertificateResult() = default;
+    ~SeparationCertificateResult() final;
 
     const std::vector<SeparatingPlaneLagrangians>& lagrangians(
         PlaneSide plane_side) const {
@@ -110,7 +114,9 @@ class CspaceFreeBox : public CspaceFreePolytopeBase {
    λ_lower(s) are sos, λ_upper(s) are sos.
    */
   struct SeparationCertificate {
-    SeparationCertificate() {}
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificate);
+    SeparationCertificate() = default;
+    ~SeparationCertificate();
 
     [[nodiscard]] SeparationCertificateResult GetSolution(
         int plane_index, const Vector3<symbolic::Polynomial>& a,
@@ -133,9 +139,9 @@ class CspaceFreeBox : public CspaceFreePolytopeBase {
   };
 
   struct SeparationCertificateProgram final : SeparationCertificateProgramBase {
-    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgram)
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgram);
     SeparationCertificateProgram() = default;
-    ~SeparationCertificateProgram() = default;
+    ~SeparationCertificateProgram() final;
 
     SeparationCertificate certificate;
   };

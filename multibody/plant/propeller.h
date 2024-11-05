@@ -5,7 +5,7 @@
 #include "drake/common/default_scalars.h"
 #include "drake/common/eigen_types.h"
 #include "drake/multibody/plant/externally_applied_spatial_force.h"
-#include "drake/multibody/tree/body.h"
+#include "drake/multibody/tree/rigid_body.h"
 #include "drake/systems/framework/leaf_system.h"
 
 namespace drake {
@@ -25,8 +25,8 @@ struct PropellerInfo {
         thrust_ratio(thrust_ratio_),
         moment_ratio(moment_ratio_) {}
 
-  /** The BodyIndex of a Body in the MultibodyPlant to which the propeller is
-  attached.  The spatial forces will be applied to this body. */
+  /** The BodyIndex of a RigidBody in the MultibodyPlant to which the propeller
+  is attached.  The spatial forces will be applied to this body. */
   BodyIndex body_index;
 
   /** Pose of the propeller frame P measured in the body frame B. @default is
@@ -100,6 +100,8 @@ class Propeller final : public systems::LeafSystem<T> {
       : Propeller<T>(std::vector<PropellerInfo>(other.info_.begin(),
                                                 other.info_.end())) {}
 
+  ~Propeller() final;
+
   /** Returns the number of propellers modeled by this system. */
   int num_propellers() const { return info_.size(); }
 
@@ -142,4 +144,4 @@ class Propeller final : public systems::LeafSystem<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::Propeller)
+    class drake::multibody::Propeller);

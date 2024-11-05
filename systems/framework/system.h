@@ -17,7 +17,6 @@
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_bool.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/drake_throw.h"
 #include "drake/common/nice_type_name.h"
 #include "drake/common/pointer_cast.h"
@@ -33,9 +32,6 @@
 #include "drake/systems/framework/system_visitor.h"
 #include "drake/systems/framework/witness_function.h"
 
-// TODO(jwnimmer-tri) Remove on 2024-01-01 upon completion of deprecation.
-#include <sstream>
-
 namespace drake {
 namespace systems {
 
@@ -47,7 +43,7 @@ template <typename T>
 class System : public SystemBase {
  public:
   // System objects are neither copyable nor moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(System)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(System);
 
   /// The scalar type with which this %System was instantiated.
   using Scalar = T;
@@ -167,15 +163,22 @@ class System : public SystemBase {
   sets its default values using SetDefaultContext(). */
   std::unique_ptr<Context<T>> CreateDefaultContext() const;
 
-  /** Assigns default values to all elements of the state. Overrides must not
-  change the number of state variables. */
-  virtual void SetDefaultState(const Context<T>& context,
-                               State<T>* state) const = 0;
-
   /** Assigns default values to all parameters. Overrides must not
-  change the number of parameters. */
+  change the number of parameters.
+
+  @warning `parameters` *may be* a mutable view into `context`. Don't assume
+  that evaluating `context` will be independent of writing to `parameters`. */
   virtual void SetDefaultParameters(const Context<T>& context,
                                     Parameters<T>* parameters) const = 0;
+
+  /** Assigns default values to all elements of the state. Overrides must not
+  change the number of state variables. The context's default parameters will
+  have already been set.
+
+  @warning `state` *may be* a mutable view into `context`. Don't assume that
+  evaluating `context` will be independent of writing to `state`. */
+  virtual void SetDefaultState(const Context<T>& context,
+                               State<T>* state) const = 0;
 
   /** Sets Context fields to their default values.  User code should not
   override. */
@@ -267,9 +270,7 @@ class System : public SystemBase {
   force-triggered event.
 
   @note There will always be at least one force-triggered event, though with no
-  associated handler. By default that will do nothing when triggered, but that
-  behavior can be changed by overriding the dispatcher DoPublish()
-  (not recommended).
+  associated handler (so will do nothing when triggered).
 
   The Simulator can be configured to call this in Simulator::Initialize() and at
   the start of each continuous integration step. See the Simulator API for more
@@ -319,6 +320,8 @@ class System : public SystemBase {
 
   @retval xcdot Time derivatives ẋ꜀ of x꜀ returned as a reference to an object
                 of the same type and size as `context`'s continuous state.
+
+  @see BatchEvalTimeDerivatives() for a batch version of this method.
   @see CalcTimeDerivatives(), CalcImplicitTimeDerivativesResidual(),
        get_time_derivatives_cache_entry() */
   const ContinuousState<T>& EvalTimeDerivatives(
@@ -753,9 +756,29 @@ class System : public SystemBase {
   also processes other events associated with time zero. Also, "reached
   termination" returns are ignored here.
 
+  @param[in,out] context The Context supplied to the handlers and modified
+                         in place on return.
+
   @throws std::exception if it invokes an event handler that returns status
                          indicating failure. */
   void ExecuteInitializationEvents(Context<T>* context) const;
+
+  /** This method triggers all of the forced events registered with this
+  %System (which might be a Diagram). Ordering and status return handling
+  mimic the Simulator: unrestricted events are processed first, then
+  discrete update events, then publish events. "Reached termination" status
+  returns are ignored.
+
+  An option is provided to suppress publish events. This can be useful, for
+  example, to update state in a Diagram without triggering a visualization.
+
+  @param[in,out] context The Context supplied to the handlers and modified
+                         in place on return.
+
+  @throws std::exception if it invokes an event handler that returns status
+                         indicating failure. */
+  void ExecuteForcedEvents(Context<T>* context,
+                           bool publish = true) const;
 
   /** Determines whether there exists a unique periodic timing (offset and
   period) that triggers one or more discrete update events (and, if so, returns
@@ -790,14 +813,14 @@ class System : public SystemBase {
   Note that this function _does not_ change the value of the discrete variables
   in the supplied Context. However, you can apply the result to the %Context
   like this: @code
-    const DiscreteValue<T>& updated =
+    const DiscreteValues<T>& updated =
         system.EvalUniquePeriodicDiscreteUpdate(context);
     context.SetDiscreteState(updated);
   @endcode
   You can write the updated values to a different %Context than the one you
-  used to calculate the update; the requirement is only that the discrete
-  state in the destination has the same structure (number of groups and size of
-  each group).
+  used to calculate the update; the requirement is only that the discrete state
+  in the destination has the same structure (number of groups and size of each
+  group).
 
   You can use GetUniquePeriodicDiscreteUpdateAttribute() to check whether you
   can call %EvalUniquePeriodicDiscreteUpdate() safely, and to find the unique
@@ -806,24 +829,24 @@ class System : public SystemBase {
   @warning Even if we find a unique discrete update timing as described above,
   there may also be unrestricted updates performed with that timing or other
   timings. (Unrestricted updates can modify any state variables _including_
-  discrete variables.) Also, there may be trigger types other than periodic that
-  can modify discrete variables. This function does not attempt to look for any
-  of those; they are simply ignored. If you are concerned with those, you can
-  use GetPerStepEvents(), GetInitializationEvents(), and GetPeriodicEvents() to
-  get a more comprehensive picture of the event landscape.
+  discrete variables.) Also, there may be trigger types other than periodic
+  that can modify discrete variables. This function does not attempt to look
+  for any of those; they are simply ignored. If you are concerned with those,
+  you can use GetPerStepEvents(), GetInitializationEvents(), and
+  GetPeriodicEvents() to get a more comprehensive picture of the event
+  landscape.
 
-  @param[in] context
-      The Context containing the current %System state and the mutable cache
-      space into which the result is written. The current state is _not_
-      modified, though the cache entry may be updated.
+  @param[in] context The Context containing the current %System state and the
+      mutable cache space into which the result is written. The current state
+      is _not_ modified, though the cache entry may be updated.
   @returns
       A reference to the DiscreteValues cache space in `context` containing
       the result of applying the discrete update event handlers to the current
       discrete variable values.
 
-  @note The referenced cache entry is recalculated if anything in the
-      given Context has changed since last calculation. Subsequent calls just
-      return the already-calculated value.
+  @note The referenced cache entry is recalculated if anything in the given
+      Context has changed since last calculation. Subsequent calls just return
+      the already-calculated value.
 
   @throws std::exception if there is not exactly one periodic timing in this
   %System (which may be a Diagram) that triggers discrete update events.
@@ -831,42 +854,59 @@ class System : public SystemBase {
   @throws std::exception if it invokes an event handler that returns status
   indicating failure.
 
-  @par Implementation
-  If recalculation is needed, copies the current discrete state values into
-  preallocated `context` cache space. Applies the discrete update event handlers
-  (in an unspecified order) to the cache copy, possibly updating it. Returns a
-  reference to the possibly-updated cache space.
+  @par Implementation If recalculation is needed, copies the current discrete
+  state values into preallocated `context` cache space. Applies the discrete
+  update event handlers (in an unspecified order) to the cache copy, possibly
+  updating it. Returns a reference to the possibly-updated cache space.
 
+  @see BatchEvalUniquePeriodicDiscreteUpdate() for a batch version of this
+  method.
   @see GetUniquePeriodicDiscreteUpdateAttribute(), GetPeriodicEvents() */
   const DiscreteValues<T>& EvalUniquePeriodicDiscreteUpdate(
       const Context<T>& context) const;
 
   /** Returns true iff the state dynamics of this system are governed
-  exclusively by a difference equation on a single discrete state group
-  and with a unique periodic update (having zero offset).  E.g., it is
-  amenable to analysis of the form:
+  exclusively by a difference equation on a single discrete state group and
+  with a unique periodic update (having zero offset).  E.g., it is amenable to
+  analysis of the form:
 
-      x[n+1] = f(x[n], u[n])
+      x[n+1] = f(n, x[n], u[n], w[n]; p)
 
-  Note that we do NOT consider the number of input ports here, because
-  in practice many systems of interest (e.g. MultibodyPlant) have input
-  ports that are safely treated as constant during the analysis.
-  Consider using get_input_port_selection() to choose one.
+  where t is time, x is (discrete) state, u is a vector input, w is random
+  (disturbance) input, and p are parameters. Note that we do NOT consider the
+  number of input ports here, because in practice many systems of interest (e.g.
+  MultibodyPlant) have input ports that are safely treated as constant during
+  the analysis. Consider using get_input_port_selection() to choose one.
 
   @warning In determining whether this system is governed as above, we do not
-  consider unrestricted updates or any update events that have trigger types
+  consider unrestricted updates nor any update events that have trigger types
   other than periodic. See GetUniquePeriodicDiscreteUpdateAttribute() for more
   information.
 
-  @param[out] time_period if non-null, then iff the function
-  returns `true`, then time_period is set to the period data
-  returned from GetUniquePeriodicDiscreteUpdateAttribute().  If the
-  function returns `false` (the system is not a difference equation
-  system), then `time_period` does not receive a value.
+  @param[out] time_period if non-null, then iff the function returns `true`,
+  then time_period is set to the period data returned from
+  GetUniquePeriodicDiscreteUpdateAttribute().  If the function returns `false`
+  (the system is not a difference equation system), then `time_period` does not
+  receive a value.
 
   @see GetUniquePeriodicDiscreteUpdateAttribute()
   @see EvalUniquePeriodicDiscreteUpdate() */
   bool IsDifferenceEquationSystem(double* time_period = nullptr) const;
+
+  /** Returns true iff the state dynamics of this system are governed
+  exclusively by a differential equation. E.g., it is amenable to analysis of
+  the form:
+
+      ẋ = f(t, x(t), u(t), w(t); p),
+
+  where t is time, x is (continuous) state, u is a vector input, w is random
+  (disturbance) input, and p are parameters. This requires that it has no
+  discrete nor abstract states, and no abstract input ports.
+
+  @warning In determining whether this system is governed as above, we do not
+  consider unrestricted updates which could potentially update the state.
+  */
+  bool IsDifferentialEquationSystem() const;
 
   /** Maps all periodic triggered events for a %System, organized by timing.
   Each unique periodic timing attribute (offset and period) is
@@ -1096,8 +1136,11 @@ class System : public SystemBase {
   using SystemBase::num_output_ports;
 
   // TODO(sherm1) Make this an InputPortIndex.
-  /** Returns the typed input port at index @p port_index. */
-  const InputPort<T>& get_input_port(int port_index) const {
+  /** Returns the typed input port at index `port_index`.
+  @param warn_deprecated Whether or not to print a warning in case the port was
+  marked as deprecated. */
+  const InputPort<T>& get_input_port(int port_index,
+                                     bool warn_deprecated = true) const {
     // Profiling revealed that it is too expensive to do a dynamic_cast here.
     // A static_cast is safe as long as GetInputPortBaseOrThrow always returns
     // a satisfactory type. As of this writing, it only ever returns values
@@ -1105,8 +1148,7 @@ class System : public SystemBase {
     // has a check that port.get_system_interface() matches `this` which is a
     // System<T>, so we are safe.
     return static_cast<const InputPort<T>&>(
-        this->GetInputPortBaseOrThrow(__func__, port_index,
-                                      /* warn_deprecated = */ true));
+        this->GetInputPortBaseOrThrow(__func__, port_index, warn_deprecated));
   }
 
   /** Convenience method for the case of exactly one input port.
@@ -1139,8 +1181,11 @@ class System : public SystemBase {
   bool HasInputPort(const std::string& port_name) const;
 
   // TODO(sherm1) Make this an OutputPortIndex.
-  /** Returns the typed output port at index @p port_index. */
-  const OutputPort<T>& get_output_port(int port_index) const {
+  /** Returns the typed output port at index `port_index`.
+  @param warn_deprecated Whether or not to print a warning in case the port was
+  marked as deprecated. */
+  const OutputPort<T>& get_output_port(int port_index,
+                                       bool warn_deprecated = true) const {
     // Profiling revealed that it is too expensive to do a dynamic_cast here.
     // A static_cast is safe as long as GetInputPortBaseOrThrow always returns
     // a satisfactory type. As of this writing, it only ever returns values
@@ -1148,8 +1193,7 @@ class System : public SystemBase {
     // has a check that port.get_system_interface() matches `this` which is a
     // System<T>, so we are safe.
     return static_cast<const OutputPort<T>&>(
-        this->GetOutputPortBaseOrThrow(__func__, port_index,
-                                       /* warn_deprecated = */ true));
+        this->GetOutputPortBaseOrThrow(__func__, port_index, warn_deprecated));
   }
 
   /** Convenience method for the case of exactly one output port.
@@ -1207,31 +1251,6 @@ class System : public SystemBase {
   // Add this base class function into this Doxygen section.
   using SystemBase::GetGraphvizString;
 
-  DRAKE_DEPRECATED(
-      "2024-01-01",
-      "Instead of calling or overriding this function, either "
-      "call GetGraphvizFragment() or override DoGetGraphvizFragment()")
-  virtual void GetGraphvizFragment(int max_depth, std::stringstream* dot) const;
-  using SystemBase::GetGraphvizFragment;  // Don't shadow.
-
-  DRAKE_DEPRECATED(
-      "2024-01-01",
-      "Instead of calling or overriding this function, either "
-      "call GetGraphvizFragment() or override DoGetGraphvizFragment()")
-  virtual void GetGraphvizInputPortToken(const InputPort<T>& port,
-                                         int max_depth,
-                                         std::stringstream* dot) const;
-
-  DRAKE_DEPRECATED(
-      "2024-01-01",
-      "Instead of calling or overriding this function, either "
-      "call GetGraphvizFragment() or override DoGetGraphvizFragment()")
-  virtual void GetGraphvizOutputPortToken(const OutputPort<T>& port,
-                                          int max_depth,
-                                          std::stringstream* dot) const;
-
-  DRAKE_DEPRECATED("2024-01-01", "Call GetGraphvizFragment() instead")
-  int64_t GetGraphvizId() const;
   //@}
 
   //----------------------------------------------------------------------------
@@ -1523,19 +1542,15 @@ class System : public SystemBase {
   Drake's LeafSystem and Diagram (plus a few unit tests) and those
   implementations must be `final`.
 
-  For a LeafSystem, these functions need to call the appropriate LeafSystem::DoX
-  event dispatcher. E.g. LeafSystem::DispatchPublishHandler() calls
-  LeafSystem::DoPublish(). User supplied custom event callbacks embedded in each
-  individual event need to be invoked in the LeafSystem::DoX handlers if
-  desired. For a LeafSystem, the pseudo code of the complete default publish
-  event handler dispatching is roughly:
+  For a LeafSystem, these functions need to call each event's handler callback,
+  For a LeafSystem, the pseudo code of the complete default publish event
+  handler dispatching is roughly:
   <pre>
     leaf_sys.Publish(context, event_collection)
     -> leaf_sys.DispatchPublishHandler(context, event_collection)
-       -> leaf_sys.DoPublish(context, event_collection.get_events())
-          -> for (event : event_collection_events):
-               if (event.has_handler)
-                 event.handler(context)
+        for (event : event_collection_events):
+          if (event.has_handler)
+            event.handler(context)
   </pre>
   Discrete update events and unrestricted update events are dispatched
   similarly for a LeafSystem. EventStatus is propagated upwards from the
@@ -1924,15 +1939,6 @@ class System : public SystemBase {
     return system_scalar_converter_;
   }
 
-  // TODO(jwnimmer-tri) On 2024-01-01 upon completion of deprecation, there will
-  // no longer be any reason for System<T> to override this SystemBase function.
-  // At that point, we should remove this particular override.
-  /** The NVI implementation of SystemBase::GetGraphvizFragment() for subclasses
-  to override if desired. The default behavior should be sufficient in most
-  cases. */
-  GraphvizFragment DoGetGraphvizFragment(
-      const GraphvizFragmentParams& params) const override;
-
  private:
   // For any T1 & T2, System<T1> considers System<T2> a friend, so that System
   // can safely and efficiently convert scalar types. See for example
@@ -2063,4 +2069,4 @@ class System : public SystemBase {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::System)
+    class ::drake::systems::System);

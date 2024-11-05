@@ -1,15 +1,15 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
+load(
+    "//tools/skylark:drake_py.bzl",
+    "drake_py_unittest",
+)
 load(
     "//tools/skylark:pybind.bzl",
     "drake_pybind_library",
     "get_drake_py_installs",
     "get_pybind_package_info",
 )
-load(
-    "//tools/skylark:drake_py.bzl",
-    "drake_py_unittest",
-)
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
@@ -36,13 +36,15 @@ drake_pybind_library(
         "planning_py.cc",
         "planning_py_collision_checker.cc",
         "planning_py_collision_checker_interface_types.cc",
+        "planning_py_graph_algorithms.cc",
         "planning_py_robot_diagram.cc",
         "planning_py_trajectory_optimization.cc",
         "planning_py_visibility_graph.cc",
+        "planning_py_iris_from_clique_cover.cc",
+        "planning_py_zmp_planner.cc",
     ],
     package_info = PACKAGE_INFO,
     py_deps = [
-        "//bindings/pydrake/common:cpp_template_py",
         "//bindings/pydrake/geometry",
         "//bindings/pydrake/multibody:parsing_py",
         "//bindings/pydrake/multibody:plant_py",
@@ -75,9 +77,21 @@ drake_py_unittest(
 )
 
 drake_py_unittest(
+    name = "collision_checker_trace_test",
+    data = [
+        "//multibody:models",
+        "//planning/test_utilities:collision_ground_plane.sdf",
+    ],
+    num_threads = 2,
+    deps = [
+        ":planning",
+    ],
+)
+
+drake_py_unittest(
     name = "robot_diagram_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":planning",
@@ -90,6 +104,37 @@ drake_py_unittest(
     deps = [
         ":planning",
         "//bindings/pydrake/examples",
+    ],
+)
+
+drake_py_unittest(
+    name = "graph_algorithms_test",
+    deps = [
+        ":planning",
+        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
+        "//bindings/pydrake/common/test_utilities:scipy_stub_py",
+    ],
+)
+
+drake_py_unittest(
+    name = "iris_from_clique_cover_test",
+    data = [
+        "//multibody:models",
+        "//planning/test_utilities:collision_ground_plane.sdf",
+    ],
+    num_threads = 2,
+    deps = [
+        ":planning",
+        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
+        "//bindings/pydrake/common/test_utilities:scipy_stub_py",
+    ],
+)
+
+drake_py_unittest(
+    name = "zmp_planner_test",
+    deps = [
+        ":planning",
+        "//bindings/pydrake/common/test_utilities:numpy_compare_py",
     ],
 )
 

@@ -24,11 +24,14 @@
 #include "gurobi_c.h"
 
 #include "drake/common/drake_assert.h"
+#include "drake/common/find_resource.h"
+#include "drake/common/parallelism.h"
 #include "drake/common/scope_exit.h"
 #include "drake/common/scoped_singleton.h"
 #include "drake/common/text_logging.h"
 #include "drake/math/eigen_sparse_triplet.h"
 #include "drake/solvers/aggregate_costs_constraints.h"
+#include "drake/solvers/gurobi_solver_internal.h"
 #include "drake/solvers/mathematical_program.h"
 
 // TODO(hongkai.dai): GurobiSolver class should store data member such as
@@ -322,289 +325,11 @@ __attribute__((unused)) bool HasCorrectNumberOfVariables(
   return (num_vars == num_vars_expected);
 }
 
-// Adds a constraint of one of the following forms :
-// lb ≤ A*x ≤ ub
-// or
-// A*x == lb
-//
-// @param is_equality True if the imposed constraint is
-// A*x == lb, false otherwise.
-// @param[in, out] num_gurobi_linear_constraints The number of linear
-// constraints stored in the gurobi model.
-// @return error as an integer. The full set of error values are
-// described here :
-// https://www.gurobi.com/documentation/10.0/refman/error_codes.html
-// This function assumes `vars` doesn't contain duplicate variables.
-int AddLinearConstraintNoDuplication(
-    const MathematicalProgram& prog, GRBmodel* model,
-    const Eigen::SparseMatrix<double>& A, const Eigen::VectorXd& lb,
-    const Eigen::VectorXd& ub, const VectorXDecisionVariable& vars,
-    bool is_equality, int* num_gurobi_linear_constraints) {
-  Eigen::SparseMatrix<double, Eigen::RowMajor> A_row_major = A;
-
-  const std::vector<int> var_index = prog.FindDecisionVariableIndices(vars);
-
-  // If this linear constraint is an equality constraint, we know that we can
-  // pass in A * vars = lb directly to Gurobi.
-  if (is_equality) {
-    std::vector<int> nonzero_col_index;
-    nonzero_col_index.reserve(A_row_major.nonZeros());
-    std::vector<char> sense(A.rows(), GRB_EQUAL);
-    for (int i = 0; i < A.nonZeros(); ++i) {
-      nonzero_col_index.push_back(
-          var_index[*(A_row_major.innerIndexPtr() + i)]);
-    }
-    *num_gurobi_linear_constraints += A.rows();
-    int error =
-        GRBaddconstrs(model, A_row_major.rows(), A_row_major.nonZeros(),
-                      A_row_major.outerIndexPtr(), nonzero_col_index.data(),
-                      A_row_major.valuePtr(), sense.data(),
-                      const_cast<double*>(lb.data()), nullptr);
-    return error;
-  }
-
-  // Now handle the inequality constraints.
-  // Each row of linear constraint in Gurobi is in the form
-  // aᵀx ≤ b or aᵀx ≥ b or aᵀx=b, namely it doesn't accept imposing both the
-  // lower and the upper bound for a linear expression in one row. So for
-  // the constraint lb(i) <= A.row(i).dot(vars) <= ub(i), there are 4 situations
-  // 1. If both lb(i) and ub(i) are infinity, then we don't add any constraints
-  // to Gurobi.
-  // 2. If lb(i) is finite and ub(i) is infinity, then we add one constraint
-  // A.row(i).dot(vars) >= lb(i) to Gurobi.
-  // 3. If ub(i) is finite but lb(i) is -infinity, then we add one constraint
-  // A.row(i).dot(vars) <= ub(i) to Gurobi.
-  // 4. If both lb(i) and ub(i) are finite, then we add two constraints
-  // A.row(i).dot(vars) >= lb(i) and A.row(i).dot(vars) <= ub(i) to Gurobi.
-  // As a result, we add the constraint A_gurobi * vars <= rhs to Gurobi.
-
-  // Each row of A introduces at most two constraints in Gurobi, so we reserve 2
-  // * A.rows().
-  std::vector<double> rhs;
-  rhs.reserve(A.rows() * 2);
-  std::vector<char> sense;
-  sense.reserve(A.rows() * 2);
-
-  // The matrix A_gurobi is stored in Compressed Sparse Row (CSR) format, using
-  // three vectors cbeg, cind and cval. Please refer to
-  // https://www.gurobi.com/documentation/10.0/refman/c_addconstrs.html for the
-  // meaning of these three vectors. The non-zero entries in the i'th row of
-  // A_gurobi is stored in the chunk cind[cbeg[i]:cbeg[i+1]] and
-  // cval[cbeg[i]:cbeg[i+1]]
-  std::vector<int> cbeg;
-  cbeg.reserve(A.rows() * 2 + 1);
-  cbeg.push_back(0);
-  std::vector<int> cind;
-  cind.reserve(A.nonZeros() * 2);
-  std::vector<double> cval;
-  cval.reserve(A.nonZeros() * 2);
-
-  int A_gurobi_rows = 0;
-
-  // Add A_row_major.row(i) * vars ≥ bound (or ≤ bound) to the CSR format cbeg,
-  // cind, cva, also update rhs, sense and A_gurobi_rows.
-  auto add_gurobi_row = [&A_row_major, &var_index, &cbeg, &rhs, &sense, &cind,
-                         &cval,
-                         &A_gurobi_rows](int i, double bound, char row_sense) {
-    cbeg.push_back(cbeg.back() + *(A_row_major.outerIndexPtr() + i + 1) -
-                   *(A_row_major.outerIndexPtr() + i));
-    rhs.push_back(bound);
-    sense.push_back(row_sense);
-    for (int j = *(A_row_major.outerIndexPtr() + i);
-         j < *(A_row_major.outerIndexPtr() + i + 1); ++j) {
-      cind.push_back(var_index[*(A_row_major.innerIndexPtr() + j)]);
-      cval.push_back(*(A_row_major.valuePtr() + j));
-    }
-    A_gurobi_rows++;
-  };
-
-  for (int i = 0; i < A_row_major.rows(); ++i) {
-    if (!std::isinf(lb(i))) {
-      // Add A_row_major.row(i) * vars >= lb(i)
-      add_gurobi_row(i, lb(i), GRB_GREATER_EQUAL);
-    }
-    if (!std::isinf(ub(i))) {
-      // Add A_row_major.row(i) * vars <= ub(i)
-      add_gurobi_row(i, ub(i), GRB_LESS_EQUAL);
-    }
-  }
-  *num_gurobi_linear_constraints += A_gurobi_rows;
-  int error =
-      GRBaddconstrs(model, A_gurobi_rows, cbeg.back(), cbeg.data(), cind.data(),
-                    cval.data(), sense.data(), rhs.data(), nullptr);
-
-  return error;
-}
-
-int AddLinearConstraint(const MathematicalProgram& prog, GRBmodel* model,
-                        const Eigen::SparseMatrix<double>& A,
-                        const Eigen::VectorXd& lb, const Eigen::VectorXd& ub,
-                        const VectorXDecisionVariable& vars, bool is_equality,
-                        int* num_gurobi_linear_constraints) {
-  const symbolic::Variables vars_set(vars);
-  if (static_cast<int>(vars_set.size()) == vars.rows()) {
-    return AddLinearConstraintNoDuplication(prog, model, A, lb, ub, vars,
-                                            is_equality,
-                                            num_gurobi_linear_constraints);
-  } else {
-    Eigen::SparseMatrix<double> A_new;
-    VectorX<symbolic::Variable> vars_new;
-    AggregateDuplicateVariables(A, vars, &A_new, &vars_new);
-    return AddLinearConstraintNoDuplication(prog, model, A_new, lb, ub,
-                                            vars_new, is_equality,
-                                            num_gurobi_linear_constraints);
-  }
-}
-
-/*
- * Add (rotated) Lorentz cone constraints, that z = A*x+b is in the (rotated)
- * Lorentz cone.
- * A vector z is in the Lorentz cone, if
- * z(0) >= sqrt(z(1)^2 + ... + z(N-1)^2)
- * A vector z is in the rotated Lorentz cone, if
- * z(0)*z(1) >= z(2)^2 + ... + z(N-1)^2
- * z(0) >= 0, z(1) >= 0
- * @tparam C  A constraint type, either LorentzConeConstraint or
- * RotatedLorentzConeConstraint.
- * @param second_order_cone_constraints  A vector of Binding objects, containing
- * either Lorentz cone constraints, or rotated Lorentz cone constraints.
- * @param second_order_cone_new_variable_indices. The indices of variable z in
- * the Gurobi model.
- * @param model The Gurobi model.
- * @param[in, out] num_gurobi_linear_constraints The number of linear
- * constraints stored in the gurobi model.
- */
-template <typename C>
-int AddSecondOrderConeConstraints(
-    const MathematicalProgram& prog,
-    const std::vector<Binding<C>>& second_order_cone_constraints,
-    const std::vector<std::vector<int>>& second_order_cone_new_variable_indices,
-    GRBmodel* model, int* num_gurobi_linear_constraints) {
-  static_assert(
-      std::is_same_v<C, LorentzConeConstraint> ||
-          std::is_same_v<C, RotatedLorentzConeConstraint>,
-      "Expects either LorentzConeConstraint or RotatedLorentzConeConstraint");
-  bool is_rotated_cone = std::is_same_v<C, RotatedLorentzConeConstraint>;
-
-  DRAKE_ASSERT(second_order_cone_constraints.size() ==
-               second_order_cone_new_variable_indices.size());
-  int second_order_cone_count = 0;
-  int num_gurobi_vars;
-  int error = GRBgetintattr(model, "NumVars", &num_gurobi_vars);
-  DRAKE_ASSERT(!error);
-  for (const auto& binding : second_order_cone_constraints) {
-    const auto& A = binding.evaluator()->A();
-    const auto& b = binding.evaluator()->b();
-
-    int num_x = A.cols();
-    int num_z = A.rows();
-
-    // Add the constraint z - A*x = b
-    // xz_indices records the indices of [x; z] in Gurobi.
-    std::vector<int> xz_indices(num_x + num_z, 0);
-
-    for (int i = 0; i < num_x; ++i) {
-      xz_indices[i] = prog.FindDecisionVariableIndex(binding.variables()(i));
-    }
-    for (int i = 0; i < num_z; ++i) {
-      xz_indices[num_x + i] =
-          second_order_cone_new_variable_indices[second_order_cone_count][i];
-    }
-    // z - A*x will be written as M * [x; z], where M = [-A I].
-    // Gurobi expects M in compressed sparse row format, so we will first find
-    // out the non-zero entries in each row of M.
-    std::vector<Eigen::Triplet<double>> M_triplets;
-    M_triplets.reserve(A.nonZeros() + num_z);
-    for (int i = 0; i < A.outerSize(); ++i) {
-      for (Eigen::SparseMatrix<double>::InnerIterator it(A, i); it; ++it) {
-        M_triplets.emplace_back(it.row(), xz_indices[it.col()], -it.value());
-      }
-    }
-    for (int i = 0; i < num_z; ++i) {
-      M_triplets.emplace_back(i, xz_indices[num_x + i], 1);
-    }
-
-    Eigen::SparseMatrix<double, Eigen::RowMajor> M(num_z, num_gurobi_vars);
-    // Eigen::SparseMatrix::setFromTriplets will automatically group the sum of
-    // the values in M_triplets that correspond to the same entry in the sparse
-    // matrix.
-    M.setFromTriplets(M_triplets.begin(), M_triplets.end());
-
-    std::vector<char> sense(num_z, GRB_EQUAL);
-
-    error = GRBaddconstrs(model, num_z, M.nonZeros(), M.outerIndexPtr(),
-                          M.innerIndexPtr(), M.valuePtr(), sense.data(),
-                          const_cast<double*>(b.data()), nullptr);
-    DRAKE_ASSERT(!error);
-    *num_gurobi_linear_constraints += num_z;
-
-    // Gurobi uses a matrix Q to differentiate Lorentz cone and rotated Lorentz
-    // cone constraint.
-    // https://www.gurobi.com/documentation/10.0/refman/c_addqconstr.html
-    // For Lorentz cone constraint,
-    // Q = [-1 0 0 ... 0]
-    //     [ 0 1 0 ... 0]
-    //     [ 0 0 1 ... 0]
-    //          ...
-    //     [ 0 0 0 ... 1]
-    // namely Q = diag([-1; 1; 1; ...; 1], so
-    // z' * Q * z = z(1)^2 + ... + z(n-1)^2 - z(0)^2.
-    // For rotated Lorentz cone constraint
-    // Q = [0 -1 0 0 ... 0]
-    //     [0  0 0 0 ... 0]
-    //     [0  0 1 0 ... 0]
-    //     [0  0 0 1 ... 0]
-    //           ...
-    //     [0  0 0 0 ... 1]
-    // so z' * Q * z = z(2)^2 + ... + z(n-1)^2 - z(0) * z(1).
-    // We will store Q in a sparse format.
-    // qrow stores the row    indices of the non-zero entries of Q.
-    // qcol stores the column indices of the non-zero entries of Q.
-    // qval stores the value          of the non-zero entries of Q.
-    size_t num_Q_nonzero = is_rotated_cone ? num_z - 1 : num_z;
-    std::vector<int> qrow(num_Q_nonzero);
-    std::vector<int> qcol(num_Q_nonzero);
-    std::vector<double> qval(num_Q_nonzero);
-    for (int i = 0; i < num_z - 2; ++i) {
-      int zi_index =
-          second_order_cone_new_variable_indices[second_order_cone_count]
-                                                [i + 2];
-      qrow[i] = zi_index;
-      qcol[i] = zi_index;
-      qval[i] = 1.0;
-    }
-    int z0_index =
-        second_order_cone_new_variable_indices[second_order_cone_count][0];
-    int z1_index =
-        second_order_cone_new_variable_indices[second_order_cone_count][1];
-    if (is_rotated_cone) {
-      qrow[num_z - 2] = z0_index;
-      qcol[num_z - 2] = z1_index;
-      qval[num_z - 2] = -1;
-    } else {
-      qrow[num_z - 2] = z0_index;
-      qcol[num_z - 2] = z0_index;
-      qval[num_z - 2] = -1;
-      qrow[num_z - 1] = z1_index;
-      qcol[num_z - 1] = z1_index;
-      qval[num_z - 1] = 1;
-    }
-    error =
-        GRBaddqconstr(model, 0, nullptr, nullptr, num_Q_nonzero, qrow.data(),
-                      qcol.data(), qval.data(), GRB_LESS_EQUAL, 0.0, NULL);
-    if (error) {
-      return error;
-    }
-    ++second_order_cone_count;
-  }
-  return 0;
-}
-
 /*
  * Add quadratic or linear costs to the optimization problem.
  */
-int AddCosts(GRBmodel* model, double* pconstant_cost,
-             const MathematicalProgram& prog) {
+int AddLinearAndQuadraticCosts(GRBmodel* model, double* pconstant_cost,
+                               const MathematicalProgram& prog) {
   // Aggregates the quadratic costs and linear costs in the form
   // 0.5 * x' * Q_all * x + linear_term' * x.
   using std::abs;
@@ -723,7 +448,7 @@ int ProcessLinearConstraints(
 
     constraint_dual_start_row->emplace(binding, *num_gurobi_linear_constraints);
 
-    const int error = AddLinearConstraint(
+    const int error = internal::AddLinearConstraint(
         prog, model, constraint->get_sparse_A(), constraint->lower_bound(),
         constraint->upper_bound(), binding.variables(), true,
         num_gurobi_linear_constraints);
@@ -737,7 +462,7 @@ int ProcessLinearConstraints(
 
     constraint_dual_start_row->emplace(binding, *num_gurobi_linear_constraints);
 
-    const int error = AddLinearConstraint(
+    const int error = internal::AddLinearConstraint(
         prog, model, constraint->get_sparse_A(), constraint->lower_bound(),
         constraint->upper_bound(), binding.variables(), false,
         num_gurobi_linear_constraints);
@@ -748,81 +473,6 @@ int ProcessLinearConstraints(
 
   // If loop completes, no errors exist so the value '0' must be returned.
   return 0;
-}
-
-// For Lorentz and rotated Lorentz cone constraints
-// Ax + b in (rotated) Lorentz cone, we will introduce new variables z as
-// z = Ax+b
-// z in (rotated) Lorentz cone.
-// So add the new variable z before constructing the Gurobi model, as
-// recommended by the Gurobi manual, to add all decision variables at once
-// when constructing the problem.
-// @param second_order_cone_variable_indices
-// second_order_cone_variable_indices[i]
-// contains the indices of the newly added variable z for the i'th second order
-// cone in @p second_order_cones[i].
-// @p tparam C Either LorentzConeConstraint or RotatedLorentzConeConstraint.
-// TODO(hongkai.dai): rewrite this function not templated on Binding, when
-// Binding class is moved out from MathematicalProgram as a public class.
-// @param second_order_cones A vector of bindings, containing either Lorentz
-// cone constraint, or rotated Lorentz cone constraint.
-// @param is_new_variable is_new_variable[i] is true if the i'th variable in
-// Gurobi model is not included in MathematicalProgram.
-// @param num_gurobi_vars Number of variables in Gurobi model.
-// @param second_order_cone_variable_indices
-// second_order_cone_variable_indices[i]
-// contains the indices of variable z stored in Gurobi model, in \p
-// second_order_cones[i].
-// @param gurobi_var_type. The type of the Gurobi variables.
-// @param xlow The lower bound of the Gurobi variables.
-// @param xupp The upper bound of the Gurobi variables.
-template <typename C>
-void AddSecondOrderConeVariables(
-    const std::vector<Binding<C>>& second_order_cones,
-    std::vector<bool>* is_new_variable, int* num_gurobi_vars,
-    std::vector<std::vector<int>>* second_order_cone_variable_indices,
-    std::vector<char>* gurobi_var_type, std::vector<double>* xlow,
-    std::vector<double>* xupp) {
-  static_assert(
-      std::is_same_v<C, LorentzConeConstraint> ||
-          std::is_same_v<C, RotatedLorentzConeConstraint>,
-      "Expects LorentzConeConstraint and RotatedLorentzConeConstraint.");
-  bool is_rotated_cone = std::is_same_v<C, RotatedLorentzConeConstraint>;
-
-  int num_new_second_order_cone_var = 0;
-  second_order_cone_variable_indices->resize(second_order_cones.size());
-
-  // The newly added variable z for the Lorentz cone constraint is appended
-  // to the existing variables. So increment the variable indices
-  // accordingly.
-  int lorentz_cone_count = 0;
-  for (const auto& binding : second_order_cones) {
-    int num_new_lorentz_cone_var_i = binding.evaluator()->A().rows();
-    (*second_order_cone_variable_indices)[lorentz_cone_count].resize(
-        num_new_lorentz_cone_var_i);
-    for (int i = 0; i < num_new_lorentz_cone_var_i; ++i) {
-      (*second_order_cone_variable_indices)[lorentz_cone_count][i] =
-          *num_gurobi_vars + num_new_second_order_cone_var + i;
-    }
-    num_new_second_order_cone_var += num_new_lorentz_cone_var_i;
-    ++lorentz_cone_count;
-  }
-  *num_gurobi_vars += num_new_second_order_cone_var;
-  is_new_variable->resize(*num_gurobi_vars, true);
-
-  // Newly added variable z is continuous variable.
-  gurobi_var_type->resize(*num_gurobi_vars, GRB_CONTINUOUS);
-
-  // For Lorentz cone constraint, z(0) >= 0.
-  // For rotated Lorentz cone constraint, z(0) >= 0, z(1) >= 0.
-  xlow->resize(*num_gurobi_vars, -std::numeric_limits<double>::infinity());
-  xupp->resize(*num_gurobi_vars, std::numeric_limits<double>::infinity());
-  for (int i = 0; i < static_cast<int>(second_order_cones.size()); ++i) {
-    xlow->at((*second_order_cone_variable_indices)[i][0]) = 0;
-    if (is_rotated_cone) {
-      xlow->at((*second_order_cone_variable_indices)[i][1]) = 0;
-    }
-  }
 }
 
 template <typename T>
@@ -1084,13 +734,11 @@ bool IsGrbLicenseFileLocalHost() {
   if (grb_license_file == nullptr) {
     return false;
   }
-  std::ifstream stream{grb_license_file};
-  const std::string contents{std::istreambuf_iterator<char>{stream},
-                             std::istreambuf_iterator<char>{}};
-  if (stream.fail()) {
+  const std::optional<std::string> contents = ReadFile(grb_license_file);
+  if (!contents) {
     return false;
   }
-  return contents.find("HOSTID") != std::string::npos;
+  return contents->find("HOSTID") != std::string::npos;
 }
 }  // namespace
 
@@ -1108,18 +756,17 @@ std::shared_ptr<GurobiSolver::License> GurobiSolver::AcquireLicense() {
   // license's use_count lower bounded to 1. If no, the local_hold_holder is
   // null and the usual GetScopedSingleton workflow applies.
   static never_destroyed<std::shared_ptr<void>> local_host_holder{
-     IsGrbLicenseFileLocalHost()
-           ? GetScopedSingleton<GurobiSolver::License>()
-           : nullptr};
+      IsGrbLicenseFileLocalHost() ? GetScopedSingleton<GurobiSolver::License>()
+                                  : nullptr};
   return GetScopedSingleton<GurobiSolver::License>();
 }
 
 // TODO(hongkai.dai@tri.global): break this large DoSolve function to smaller
 // ones.
-void GurobiSolver::DoSolve(const MathematicalProgram& prog,
-                           const Eigen::VectorXd& initial_guess,
-                           const SolverOptions& merged_options,
-                           MathematicalProgramResult* result) const {
+void GurobiSolver::DoSolve2(const MathematicalProgram& prog,
+                            const Eigen::VectorXd& initial_guess,
+                            internal::SpecificOptions* options,
+                            MathematicalProgramResult* result) const {
   if (!prog.GetVariableScaling().empty()) {
     static const logging::Warn log_once(
         "GurobiSolver doesn't support the feature of variable scaling.");
@@ -1144,12 +791,6 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
   // The invariant is
   // EXPECT_TRUE(HasCorrectNumberOfVariables(model, is_new_variables.size()))
   std::vector<bool> is_new_variable(num_prog_vars, false);
-
-  // Bound constraints.
-  std::vector<double> xlow(num_prog_vars,
-                           -std::numeric_limits<double>::infinity());
-  std::vector<double> xupp(num_prog_vars,
-                           std::numeric_limits<double>::infinity());
 
   std::vector<char> gurobi_var_type(num_prog_vars);
   bool is_mip{false};
@@ -1177,17 +818,10 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
     }
   }
 
-  for (const auto& binding : prog.bounding_box_constraints()) {
-    const auto& constraint = binding.evaluator();
-    const Eigen::VectorXd& lower_bound = constraint->lower_bound();
-    const Eigen::VectorXd& upper_bound = constraint->upper_bound();
+  std::vector<double> xlow;
+  std::vector<double> xupp;
+  AggregateBoundingBoxConstraints(prog, &xlow, &xupp);
 
-    for (int k = 0; k < static_cast<int>(binding.GetNumElements()); ++k) {
-      const int idx = prog.FindDecisionVariableIndex(binding.variables()(k));
-      xlow[idx] = std::max(lower_bound(k), xlow[idx]);
-      xupp[idx] = std::min(upper_bound(k), xupp[idx]);
-    }
-  }
   // bb_con_dual_indices[constraint] returns the pair (lower_dual_indices,
   // upper_dual_indices), where lower_dual_indices are the indices of the dual
   // variables associated with the lower bound side (x >= lower) of the bounding
@@ -1235,15 +869,21 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
   // rotated_lorentz_cone_new_variable_indices
   // record the indices of the newly created variable z in the Gurobi program.
   std::vector<std::vector<int>> lorentz_cone_new_variable_indices;
-  AddSecondOrderConeVariables(
+  internal::AddSecondOrderConeVariables(
       prog.lorentz_cone_constraints(), &is_new_variable, &num_gurobi_vars,
       &lorentz_cone_new_variable_indices, &gurobi_var_type, &xlow, &xupp);
 
   std::vector<std::vector<int>> rotated_lorentz_cone_new_variable_indices;
-  AddSecondOrderConeVariables(prog.rotated_lorentz_cone_constraints(),
-                              &is_new_variable, &num_gurobi_vars,
-                              &rotated_lorentz_cone_new_variable_indices,
-                              &gurobi_var_type, &xlow, &xupp);
+  internal::AddSecondOrderConeVariables(
+      prog.rotated_lorentz_cone_constraints(), &is_new_variable,
+      &num_gurobi_vars, &rotated_lorentz_cone_new_variable_indices,
+      &gurobi_var_type, &xlow, &xupp);
+
+  std::vector<std::vector<int>> l2norm_costs_lorentz_cone_variable_indices;
+  internal::AddL2NormCostVariables(prog.l2norm_costs(), &is_new_variable,
+                                   &num_gurobi_vars,
+                                   &l2norm_costs_lorentz_cone_variable_indices,
+                                   &gurobi_var_type, &xlow, &xupp);
 
   GRBmodel* model = nullptr;
   GRBnewmodel(env, &model, "gurobi_model", num_gurobi_vars, nullptr, &xlow[0],
@@ -1255,10 +895,16 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
   int error = 0;
   double constant_cost = 0;
   if (!error) {
-    error = AddCosts(model, &constant_cost, prog);
+    error = AddLinearAndQuadraticCosts(model, &constant_cost, prog);
   }
 
   int num_gurobi_linear_constraints = 0;
+  if (!error) {
+    error = internal::AddL2NormCosts(prog,
+                                     l2norm_costs_lorentz_cone_variable_indices,
+                                     model, &num_gurobi_linear_constraints);
+  }
+
   if (!error) {
     error =
         ProcessLinearConstraints(model, prog, &num_gurobi_linear_constraints,
@@ -1267,15 +913,15 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
 
   // Add Lorentz cone constraints.
   if (!error) {
-    error =
-        AddSecondOrderConeConstraints(prog, prog.lorentz_cone_constraints(),
-                                      lorentz_cone_new_variable_indices, model,
-                                      &num_gurobi_linear_constraints);
+    error = internal::AddSecondOrderConeConstraints(
+        prog, prog.lorentz_cone_constraints(),
+        lorentz_cone_new_variable_indices, model,
+        &num_gurobi_linear_constraints);
   }
 
   // Add rotated Lorentz cone constraints.
   if (!error) {
-    error = AddSecondOrderConeConstraints(
+    error = internal::AddSecondOrderConeConstraints(
         prog, prog.rotated_lorentz_cone_constraints(),
         rotated_lorentz_cone_new_variable_indices, model,
         &num_gurobi_linear_constraints);
@@ -1292,71 +938,64 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
   GRBenv* model_env = GRBgetenv(model);
   DRAKE_DEMAND(model_env != nullptr);
 
-  // Handle common solver options before gurobi-specific options stored in
-  // merged_options, so that gurobi-specific options can overwrite common solver
-  // options.
-  // Gurobi creates a new log file every time we set "LogFile" parameter through
-  // GRBsetstrparam(). So in order to avoid creating log files repeatedly, we
-  // store the log file name in @p log_file variable, and only call
-  // GRBsetstrparam(model_env, "LogFile", log_file) for once.
-  std::string log_file = merged_options.get_print_file_name();
-  if (!error) {
-    SetOptionOrThrow(model_env, "LogToConsole",
-                     static_cast<int>(merged_options.get_print_to_console()));
-  }
+  // A couple options don't use the standard GRBset{...}param API.
+  const bool compute_iis = [&options]() {
+    const int value = options->template Pop<int>("GRBcomputeIIS").value_or(0);
+    if (!(value == 0 || value == 1)) {
+      throw std::runtime_error(fmt::format(
+          "GurobiSolver(): option GRBcomputeIIS should be either 0 or 1, but "
+          "is incorrectly set to {}",
+          value));
+    }
+    return value;
+  }();
+  const std::optional<std::string> grb_write =
+      options->template Pop<std::string>("GRBwrite");
 
-  // Default the option for number of threads based on an environment variable
-  // (but only if the user hasn't set the option directly already).
-  if (merged_options.GetOptionsInt(id()).count("Threads") == 0) {
-    if (char* num_threads_str = std::getenv("GUROBI_NUM_THREADS")) {
-      const std::optional<int> num_threads = ParseInt(num_threads_str);
-      if (num_threads.has_value()) {
-        SetOptionOrThrow(model_env, "Threads", *num_threads);
-        log()->debug("Using GUROBI_NUM_THREADS={}", *num_threads);
-      } else {
-        static const logging::Warn log_once(
-            "Ignoring unparseable value '{}' for GUROBI_NUM_THREADS",
-            num_threads_str);
-      }
+  // Copy the remaining options into model_env.
+  options->Respell([](const auto& common, auto* respelled) {
+    respelled->emplace("LogToConsole", common.print_to_console ? 1 : 0);
+    if (!common.print_file_name.empty()) {
+      respelled->emplace("LogFile", common.print_file_name);
     }
-  }
-
-  for (const auto& it : merged_options.GetOptionsDouble(id())) {
-    if (!error) {
-      SetOptionOrThrow(model_env, it.first, it.second);
-    }
-  }
-  bool compute_iis = false;
-  for (const auto& it : merged_options.GetOptionsInt(id())) {
-    if (!error) {
-      if (it.first == "GRBcomputeIIS") {
-        compute_iis = static_cast<bool>(it.second);
-        if (!(it.second == 0 || it.second == 1)) {
-          throw std::runtime_error(fmt::format(
-              "GurobiSolver(): option GRBcomputeIIS should be either "
-              "0 or 1, but is incorrectly set to {}",
-              it.second));
+    // Here's our priority order for selecting the number of threads:
+    // - Gurobi-specific solver option "Threads" (already taken care of by the
+    ///  trumping logic inside SpecificOptions).
+    // - The value of CommonSolverOptions::kMaxThreads if set.
+    // - GUROBI_NUM_THREADS environment variable.
+    // - Drake's maximum parallelism.
+    std::optional<int> num_threads = common.max_threads;
+    if (!num_threads.has_value()) {
+      // If unset, use GUROBI_NUM_THREADS. We attempt to read the value of
+      // GUROBI_NUM_THREADS and warn the user if it is not parseable.
+      if (char* num_threads_str = std::getenv("GUROBI_NUM_THREADS")) {
+        num_threads = ParseInt(num_threads_str);
+        if (num_threads.has_value()) {
+          log()->debug("Using GUROBI_NUM_THREADS={}", *num_threads);
+        } else {
+          static const logging::Warn log_once(
+              "Ignoring unparseable value '{}' for GUROBI_NUM_THREADS",
+              num_threads_str);
         }
-      } else {
-        SetOptionOrThrow(model_env, it.first, it.second);
       }
     }
-  }
-  std::optional<std::string> grb_write;
-  for (const auto& it : merged_options.GetOptionsStr(id())) {
-    if (!error) {
-      if (it.first == "GRBwrite") {
-        if (it.second != "") {
-          grb_write = it.second;
-        }
-      } else if (it.first == "LogFile") {
-        log_file = it.second;
-      } else {
-        SetOptionOrThrow(model_env, it.first, it.second);
-      }
+    if (!num_threads.has_value()) {
+      // If unset, use max parallelism.
+      num_threads = Parallelism::Max().num_threads();
     }
-  }
-  SetOptionOrThrow(model_env, "LogFile", log_file);
+    DRAKE_DEMAND(num_threads.has_value());
+    respelled->emplace("Threads", *num_threads);
+  });
+  options->CopyToCallbacks(
+      [&model_env](const std::string& key, double value) {
+        SetOptionOrThrow(model_env, key, value);
+      },
+      [&model_env](const std::string& key, int value) {
+        SetOptionOrThrow(model_env, key, value);
+      },
+      [&model_env](const std::string& key, const std::string& value) {
+        SetOptionOrThrow(model_env, key, value);
+      });
 
   for (int i = 0; i < static_cast<int>(prog.num_vars()); ++i) {
     if (!error && !std::isnan(initial_guess(i))) {
@@ -1407,7 +1046,7 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
     }
   }
   if (!error) {
-    if (grb_write.has_value()) {
+    if (grb_write.has_value() && (grb_write->size() > 0)) {
       error = GRBwrite(model, grb_write.value().c_str());
       if (error) {
         const std::string gurobi_version =
@@ -1431,7 +1070,8 @@ void GurobiSolver::DoSolve(const MathematicalProgram& prog,
                        GRBgeterrormsg(env));
     solver_details.error_code = error;
   } else {
-    // Always set the primal and dual solution for any non-error gurobi status.
+    // Always set the primal and dual solution for any non-error gurobi
+    // status.
     SetSolution(model, model_env, prog, is_new_variable, num_prog_vars, is_mip,
                 num_gurobi_linear_constraints, constant_cost,
                 constraint_dual_start_row, bb_con_dual_indices, result,

@@ -40,7 +40,7 @@ namespace lcm {
 class LcmInterfaceSystem final : public LeafSystem<double>,
                                  public drake::lcm::DrakeLcmInterface {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmInterfaceSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmInterfaceSystem);
 
   /**
    * Constructs using the given URL.  With no URL, uses the LCM_DEFAULT_URL
@@ -80,6 +80,10 @@ class LcmInterfaceSystem final : public LeafSystem<double>,
   void DoCalcNextUpdateTime(const Context<double>&,
                             systems::CompositeEventCollection<double>*,
                             double*) const final;
+
+  typename LeafSystem<double>::GraphvizFragment DoGetGraphvizFragment(
+      const typename LeafSystem<double>::GraphvizFragmentParams& params)
+      const final;
 
   std::unique_ptr<drake::lcm::DrakeLcmInterface> owned_lcm_;
   drake::lcm::DrakeLcmInterface* const lcm_{};

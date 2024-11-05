@@ -5,6 +5,7 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/test/exponential_cone_program_examples.h"
+#include "drake/solvers/test/l2norm_cost_examples.h"
 #include "drake/solvers/test/linear_program_examples.h"
 #include "drake/solvers/test/mathematical_program_test_util.h"
 #include "drake/solvers/test/quadratic_program_examples.h"
@@ -304,6 +305,29 @@ GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable2) {
   TestSocpDuplicatedVariable2(solver, std::nullopt, 1E-6);
 }
 
+GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable3) {
+  ScsSolver solver;
+  TestSocpDuplicatedVariable3(solver, std::nullopt, 1E-5);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceToThreePoints) {
+  ScsSolver solver;
+  ShortestDistanceToThreePoints tester{};
+  tester.CheckSolution(solver, std::nullopt, 1E-4);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromCylinderToPoint) {
+  ScsSolver solver;
+  ShortestDistanceFromCylinderToPoint tester{};
+  tester.CheckSolution(solver);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromPlaneToTwoPoints) {
+  ScsSolver solver;
+  ShortestDistanceFromPlaneToTwoPoints tester{};
+  tester.CheckSolution(solver, std::nullopt, 5E-4);
+}
+
 TEST_P(QuadraticProgramTest, TestQP) {
   ScsSolver solver;
   if (solver.available()) {
@@ -321,6 +345,13 @@ GTEST_TEST(QPtest, TestUnitBallExample) {
   ScsSolver solver;
   if (solver.available()) {
     TestQPonUnitBallExample(solver);
+  }
+}
+
+GTEST_TEST(QPtest, TestQuadraticCostVariableOrder) {
+  ScsSolver solver;
+  if (solver.available()) {
+    TestQuadraticCostVariableOrder(solver);
   }
 }
 
@@ -399,6 +430,13 @@ GTEST_TEST(TestExponentialConeProgram, MinimalEllipsoidConveringPoints) {
   ScsSolver scs_solver;
   if (scs_solver.available()) {
     MinimalEllipsoidCoveringPoints(scs_solver, kTol);
+  }
+}
+
+GTEST_TEST(TestExponentialConeProgram, MatrixLogDeterminantLower) {
+  ScsSolver scs_solver;
+  if (scs_solver.available()) {
+    MatrixLogDeterminantLower(scs_solver, kTol);
   }
 }
 

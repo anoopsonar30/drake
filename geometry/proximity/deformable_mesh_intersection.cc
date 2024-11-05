@@ -4,8 +4,8 @@
 #include <utility>
 #include <vector>
 
+#include "drake/geometry/deformable_mesh_with_bvh.h"
 #include "drake/geometry/proximity/contact_surface_utility.h"
-#include "drake/geometry/proximity/deformable_volume_mesh.h"
 #include "drake/geometry/proximity/mesh_intersection.h"
 
 namespace drake {
@@ -18,6 +18,9 @@ namespace internal {
 class DeformableSurfaceVolumeIntersector
     : public SurfaceVolumeIntersector<PolyMeshBuilder<double>, Aabb> {
  public:
+  // N.B. If this class declaration moves to the header, don't inline this dtor.
+  ~DeformableSurfaceVolumeIntersector() = default;
+
   /* Returns the indices of tetrahedra containing the contact polygons.
    @pre Call it after SampleVolumeFieldOnSurface() finishes.  */
   std::vector<int>& mutable_tetrahedron_index_of_polygons() {
@@ -75,7 +78,8 @@ class DeformableSurfaceVolumeIntersector
 };
 
 void AddDeformableRigidContactSurface(
-    const deformable::DeformableGeometry& deformable_D,
+    const VolumeMeshFieldLinear<double, double>& deformable_sdf,
+    const DeformableVolumeMeshWithBvh<double>& deformable_mesh,
     const GeometryId deformable_id, const GeometryId rigid_id,
     const TriangleSurfaceMesh<double>& rigid_mesh_R,
     const Bvh<Obb, TriangleSurfaceMesh<double>>& rigid_bvh_R,
@@ -85,8 +89,7 @@ void AddDeformableRigidContactSurface(
 
   DeformableSurfaceVolumeIntersector intersect;
   intersect.SampleVolumeFieldOnSurface(
-      deformable_D.CalcSignedDistanceField(),
-      deformable_D.deformable_mesh().bvh(), rigid_mesh_R, rigid_bvh_R, X_DR,
+      deformable_sdf, deformable_mesh.bvh(), rigid_mesh_R, rigid_bvh_R, X_DR,
       false /* don't filter face normal along field gradient */);
 
   if (intersect.has_intersection()) {
@@ -107,7 +110,7 @@ void AddDeformableRigidContactSurface(
           signed_distance_field.EvaluateCartesian(i, contact_points_W);
     }
 
-    const VolumeMesh<double>& mesh = deformable_D.deformable_mesh().mesh();
+    const VolumeMesh<double>& mesh = deformable_mesh.mesh();
     // Each contact polygon generates one "participating tetrahedron". Hence
     // `participating_tetrahedra` contains duplicated entries when a tetrahedron
     // covers multiple contact polygons.

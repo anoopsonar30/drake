@@ -20,6 +20,7 @@ namespace drake {
 namespace systems {
 namespace sensors {
 namespace internal {
+namespace kcov339_avoidance_magic {
 namespace {
 
 // We need drake:: because there's also a systems::lcm namespace.
@@ -37,7 +38,6 @@ using multibody::FixedOffsetFrame;
 using multibody::Frame;
 using multibody::MultibodyPlant;
 using multibody::RigidBody;
-using multibody::SpatialInertia;
 using systems::lcm::LcmPublisherSystem;
 
 /* Returns a pointer to the named instance of TargetSystem (if it exists). */
@@ -66,10 +66,8 @@ class SimRgbdSensorTest : public ::testing::Test {
   void SetUp() override {
     std::tie(plant_, scene_graph_) =
         AddMultibodyPlantSceneGraph(&builder_, 1e-2);
-    bodyA_ =
-        &plant_->AddRigidBody("bodyA", SpatialInertia<double>::MakeUnitary());
-    bodyB_ =
-        &plant_->AddRigidBody("bodyB", SpatialInertia<double>::MakeUnitary());
+    bodyA_ = &plant_->AddRigidBody("bodyA");
+    bodyB_ = &plant_->AddRigidBody("bodyB");
 
     X_AF_ = RigidTransformd(Vector3d(-0.5, 0.5, 0.75));
     frame_F_ = &plant_->AddFrame(std::make_unique<FixedOffsetFrame<double>>(
@@ -108,13 +106,14 @@ class SimRgbdSensorTest : public ::testing::Test {
 
   /* Test helper for determining whether specifying an image port produces the
    expected connections. */
-  void AssertPublishedPorts(bool rgb, bool depth) {
+  void AssertPublishedPorts(bool rgb, bool depth, bool label) {
     auto [sensor, rgbd] = MakeSensorOrThrow();
     const size_t old_system_count = builder_.GetSystems().size();
     AddSimRgbdSensorLcmPublisher(
         sensor, rgb ? &rgbd->color_image_output_port() : nullptr,
-        depth ? &rgbd->depth_image_16U_output_port() : nullptr, false,
-        &builder_, &lcm_);
+        depth ? &rgbd->depth_image_16U_output_port() : nullptr,
+        label ? &rgbd->label_image_output_port() : nullptr, false, &builder_,
+        &lcm_);
     EXPECT_LT(old_system_count, builder_.GetSystems().size());
 
     const auto* images = GetSystem<ImageToLcmImageArrayT>(
@@ -129,6 +128,11 @@ class SimRgbdSensorTest : public ::testing::Test {
       EXPECT_NO_THROW(images->GetInputPort("depth"));
     } else {
       EXPECT_THROW(images->GetInputPort("depth"), std::exception);
+    }
+    if (label) {
+      EXPECT_NO_THROW(images->GetInputPort("label"));
+    } else {
+      EXPECT_THROW(images->GetInputPort("label"), std::exception);
     }
   }
 
@@ -187,7 +191,7 @@ TEST_F(SimRgbdSensorTest, SimRgbdSensorValues) {
  to the expected *geometry* frame with the expected pose. */
 TEST_F(SimRgbdSensorTest, AddSensorWithBodyFrameSpecification) {
   auto [sensor, rgbd] = MakeSensorOrThrow();
-  EXPECT_EQ(rgbd->parent_frame_id(),
+  EXPECT_EQ(rgbd->default_parent_frame_id(),
             plant_->GetBodyFrameIdOrThrow(bodyA_->index()));
 
   auto diagram = builder_.Build();
@@ -211,7 +215,7 @@ TEST_F(SimRgbdSensorTest, AddSensorWithBodyFrameSpecification) {
  and with a pose that accounts for both X_PB and X_AP. */
 TEST_F(SimRgbdSensorTest, AddSensorWithBodyOffsetFrameSpecification) {
   auto [sensor, rgbd] = MakeSensorOrThrow(frame_F_);
-  EXPECT_EQ(rgbd->parent_frame_id(),
+  EXPECT_EQ(rgbd->default_parent_frame_id(),
             plant_->GetBodyFrameIdOrThrow(bodyA_->index()));
 
   auto diagram = builder_.Build();
@@ -244,9 +248,9 @@ TEST_F(SimRgbdSensorTest, AddSensorForRgbdSensorConfiguration) {
   // Relying on glass-box testing, the cameras should simply use copy semantics.
   // So, we'll test one field (renderer_name) and infer that the whole thing
   // got copied.
-  EXPECT_EQ(rgbd->color_render_camera().core().renderer_name(),
+  EXPECT_EQ(rgbd->default_color_render_camera().core().renderer_name(),
             sensor.color_properties().core().renderer_name());
-  EXPECT_EQ(rgbd->depth_render_camera().core().renderer_name(),
+  EXPECT_EQ(rgbd->default_depth_render_camera().core().renderer_name(),
             sensor.depth_properties().core().renderer_name());
 }
 
@@ -256,27 +260,32 @@ TEST_F(SimRgbdSensorTest, AddSensorForRgbdSensorConfiguration) {
 TEST_F(SimRgbdSensorTest, AddPublisherNoPortIsNoOp) {
   const size_t old_system_count = builder_.GetSystems().size();
   SimRgbdSensor sensor = MakeSensorSpec();
-  AddSimRgbdSensorLcmPublisher(sensor, nullptr, nullptr, false, &builder_,
-                               &lcm_);
+  AddSimRgbdSensorLcmPublisher(sensor, nullptr, nullptr, nullptr, false,
+                               &builder_, &lcm_);
   EXPECT_EQ(old_system_count, builder_.GetSystems().size());
 }
 
 /* Confirms that if only the rgb port is provided, only the rgb port is
  connected. */
 TEST_F(SimRgbdSensorTest, AddPublisherRgbOnly) {
-  AssertPublishedPorts(true /* rgb */, false /* depth */);
+  AssertPublishedPorts(true /* rgb */, false /* depth */, false /* label */);
 }
 
 /* Confirms that if only the depth port is provided, only the depth port is
  connected. */
 TEST_F(SimRgbdSensorTest, AddPublisherDepthOnly) {
-  AssertPublishedPorts(false /* rgb */, true /* depth */);
+  AssertPublishedPorts(false /* rgb */, true /* depth */, false /* label */);
 }
 
-/* Confirms that if only the depth port is provided, only the depth port is
+/* Confirms that if only the label port is provided, only the label port is
  connected. */
-TEST_F(SimRgbdSensorTest, AddPublisherRgbAndDepth) {
-  AssertPublishedPorts(true /* rgb */, true /* depth */);
+TEST_F(SimRgbdSensorTest, AddPublisherLabelOnly) {
+  AssertPublishedPorts(false /* rgb */, false /* depth */, true /* label */);
+}
+
+/* Confirms that if all the ports are provided, all should be connected. */
+TEST_F(SimRgbdSensorTest, AddPublisherRgbDepthAndLabel) {
+  AssertPublishedPorts(true /* rgb */, true /* depth */, true /* label */);
 }
 
 /* Confirms that publisher is configured properly (channel name and period). We
@@ -286,7 +295,8 @@ TEST_F(SimRgbdSensorTest, AddPublisherTestProperties) {
   const auto [sensor, rgbd] = MakeSensorOrThrow();
   const size_t old_system_count = builder_.GetSystems().size();
   AddSimRgbdSensorLcmPublisher(sensor, &rgbd->color_image_output_port(),
-                               &rgbd->depth_image_16U_output_port(), false,
+                               &rgbd->depth_image_16U_output_port(),
+                               &rgbd->label_image_output_port(), false,
                                &builder_, &lcm_);
   EXPECT_LT(old_system_count, builder_.GetSystems().size());
 
@@ -300,6 +310,7 @@ TEST_F(SimRgbdSensorTest, AddPublisherTestProperties) {
 }
 
 }  // namespace
+}  // namespace kcov339_avoidance_magic
 }  // namespace internal
 }  // namespace sensors
 }  // namespace systems

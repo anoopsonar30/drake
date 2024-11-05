@@ -157,6 +157,7 @@ class ProximityProperties final : public GeometryProperties {
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ProximityProperties);
   // TODO(SeanCurtis-TRI): Should this have the physical properties built in?
   ProximityProperties() = default;
+  ~ProximityProperties() final;
 };
 
 /** The set of properties for geometry used in a "perception" role.
@@ -164,11 +165,12 @@ class ProximityProperties final : public GeometryProperties {
  Examples of functionality that depends on the perception role:
    - render::RenderEngineVtk
  */
-class PerceptionProperties final : public GeometryProperties{
+class PerceptionProperties final : public GeometryProperties {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(PerceptionProperties);
   // TODO(SeanCurtis-TRI): Should this have a render label built in?
   PerceptionProperties() = default;
+  ~PerceptionProperties() final;
 };
 
 /** The set of properties for geometry used in an "illustration" role.
@@ -179,8 +181,8 @@ class PerceptionProperties final : public GeometryProperties{
 class IllustrationProperties final : public GeometryProperties {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(IllustrationProperties);
-
   IllustrationProperties() = default;
+  ~IllustrationProperties() final;
 };
 
 /** General enumeration for indicating geometry role.  */
@@ -197,9 +199,9 @@ enum class Role {
 /** The operations that can be performed on the given properties when assigning
  roles to geometry.  */
 enum class RoleAssign {
-  kNew,      ///< Assign the properties to a geometry that doesn't already have
-             ///< the role.
-  kReplace   ///< Replace the existing role properties completely.
+  kNew,     ///< Assign the properties to a geometry that doesn't already have
+            ///< the role.
+  kReplace  ///< Replace the existing role properties completely.
 };
 
 /** @name  Geometry role to string conversions

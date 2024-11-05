@@ -29,6 +29,8 @@ namespace systems {
 /// ```
 /// where xᵢₙᵢₜ = 0 for vector-valued %ZeroOrderHold, and xᵢₙᵢₜ is a given
 /// value for abstract-valued %ZeroOrderHold.
+/// Use SetVectorState() to set xₙ in the context for vector-valued
+/// %ZeroOrderHold.
 ///
 /// See @ref discrete_systems "Discrete Systems" for general information about
 /// discrete systems in Drake, including how they interact with continuous
@@ -48,7 +50,7 @@ namespace systems {
 template <typename T>
 class ZeroOrderHold final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ZeroOrderHold)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ZeroOrderHold);
 
   /// Constructs a ZeroOrderHold system with the given `period_sec`, over a
   /// vector-valued input of size `vector_size`. The default initial value for
@@ -79,10 +81,17 @@ class ZeroOrderHold final : public LeafSystem<T> {
   /// Reports the first update time of this hold (in seconds).
   double offset() const { return offset_sec_; }
 
+  /// Sets the value of the state by modifying it in the context.
+  /// @p value must be a column vector of the appropriate size. This can only be
+  /// used to initialize a vector-valued state.
+  void SetVectorState(Context<T>* context,
+                      const Eigen::Ref<const VectorX<T>>& value) const;
+
   /// (Advanced) Manually sample the input port and copy ("latch") the value
   /// into the state. This emulates an update event and is mostly useful for
   /// testing.
   void LatchInputPortToState(Context<T>* context) const {
+    this->ValidateContext(context);
     if (is_abstract()) {
       LatchInputAbstractValueToState(*context, &context->get_mutable_state());
     } else {
@@ -118,4 +127,4 @@ class ZeroOrderHold final : public LeafSystem<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::ZeroOrderHold)
+    class ::drake::systems::ZeroOrderHold);

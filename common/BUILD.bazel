@@ -1,3 +1,5 @@
+load("//tools/install:install.bzl", "install")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
@@ -11,8 +13,6 @@ load(
     "drake_py_binary",
     "drake_py_unittest",
 )
-load("//tools/install:install.bzl", "install")
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -33,6 +33,7 @@ drake_cc_package_library(
         ":dummy_value",
         ":essential",
         ":extract_double",
+        ":file_source",
         ":find_resource",
         ":find_runfiles",
         ":fmt",
@@ -41,9 +42,11 @@ drake_cc_package_library(
         ":is_approx_equal_abstol",
         ":is_cloneable",
         ":is_less_than_comparable",
+        ":memory_file",
         ":name_value",
         ":network_policy",
         ":nice_type_name",
+        ":overloaded",
         ":parallelism",
         ":pointer_cast",
         ":polynomial",
@@ -52,7 +55,9 @@ drake_cc_package_library(
         ":reset_on_copy",
         ":scope_exit",
         ":scoped_singleton",
+        ":sha256",
         ":sorted_pair",
+        ":string_container",
         ":temp_directory",
         ":timer",
         ":type_safe_index",
@@ -84,6 +89,7 @@ drake_cc_library(
     name = "essential",
     srcs = [
         "drake_assert_and_throw.cc",
+        "drake_deprecated.cc",
         "text_logging.cc",
     ],
     hdrs = [
@@ -175,6 +181,30 @@ drake_cc_library(
     hdrs = ["extract_double.h"],
     deps = [
         ":essential",
+    ],
+)
+
+drake_cc_library(
+    name = "file_source",
+    srcs = ["file_source.cc"],
+    hdrs = ["file_source.h"],
+    deps = [
+        ":memory_file",
+        ":overloaded",
+    ],
+)
+
+drake_cc_library(
+    name = "memory_file",
+    srcs = ["memory_file.cc"],
+    hdrs = ["memory_file.h"],
+    deps = [
+        ":essential",
+        ":reset_after_move",
+        ":sha256",
+    ],
+    implementation_deps = [
+        ":find_resource",
     ],
 )
 
@@ -283,8 +313,7 @@ drake_cc_library(
     hdrs = ["find_cache.h"],
     internal = True,
     visibility = ["//:__subpackages__"],
-    interface_deps = [],
-    deps = [
+    implementation_deps = [
         ":essential",
     ],
 )
@@ -293,8 +322,7 @@ drake_cc_library(
     name = "find_runfiles",
     srcs = ["find_runfiles.cc"],
     hdrs = ["find_runfiles.h"],
-    interface_deps = [],
-    deps = [
+    implementation_deps = [
         ":essential",
         "@bazel_tools//tools/cpp/runfiles",
     ],
@@ -318,10 +346,10 @@ drake_cc_library(
         "//tools/cc_toolchain:linux": ["-ldl"],
         "//conditions:default": [],
     }),
-    interface_deps = [
+    deps = [
         ":essential",
     ],
-    deps = [
+    implementation_deps = [
         ":drake_marker_shared_library",
         ":find_runfiles",
     ],
@@ -335,9 +363,59 @@ drake_cc_library(
         DRAKE_RESOURCE_SENTINEL,
     ],
     visibility = ["//tools/install/libdrake:__pkg__"],
-    interface_deps = [],
-    deps = [
+    implementation_deps = [
         ":find_resource",
+    ],
+)
+
+drake_cc_library(
+    name = "hwy_dynamic",
+    srcs = ["hwy_dynamic.cc"],
+    hdrs = [
+        "hwy_dynamic.h",
+        "hwy_dynamic_impl.h",
+    ],
+    defines = [
+        # Highway automatically compiles our code that uses it for multiple CPU
+        # targets, so that the code is tuned as best as possible for the user's
+        # CPU that it will run on.
+        #
+        # By default Highway compiles to a ~dozen different CPU targets, but
+        # in practice Drake only cares about a few of them. We'll disable the
+        # default list of targets and write down the CPUs we care about one by
+        # one so that the test / support burden is better matched to our needs.
+        #
+        # Highway represents target sets using a bitmask. Each target is given
+        # a single bit (e.g., '#define HWY_AVX2 (1LL << 9)'). To express a set
+        # of targets (e.g., to set HWY_DISABLED_TARGETS) we must binary-or the
+        # per-target constants together.
+        #
+        # Highway only offers a deny-list for targets, so we'll need to deny
+        # everything and then un-deny what we want to allow. Per De Morgan's
+        # law, an ENABLE list folded over OR is the same as the negation of the
+        # same list folded over NAND; to end up with a DISABLE list, we can
+        # just drop the outermost negation, i.e., ENABLE list folded over NAND.
+        "HWY_DISABLED_TARGETS=(" + "&".join([
+            "(~({}))".format(name)
+            for name in [
+                # We must always provide a portable fallback.
+                "HWY_BASELINE_SCALAR",
+                # x86: SIMD with 256-bit lanes and FMA.
+                "HWY_AVX2",
+                # x86: SIMD with the improved 512VL encodings.
+                # TODO(jwnimmer-tri) Enable this once we support opt-out of CPU
+                # targets via NPY_DISABLE_CPU_FEATURES environment variable.
+                # "HWY_AVX3",
+                # arm: SIMD that has fixed 256-bit lanes.
+                # TODO(jwnimmer-tri) Enable this once we can test it.
+                # "HWY_SVE_256",
+            ]
+        ]) + ")",
+    ],
+    internal = True,
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":essential",
     ],
 )
 
@@ -387,12 +465,17 @@ drake_cc_library(
     hdrs = [
         "nice_type_name.h",
     ],
-    interface_deps = [
+    deps = [
         ":essential",
     ],
-    deps = [
+    implementation_deps = [
         ":nice_type_name_override_header",
     ],
+)
+
+drake_cc_library(
+    name = "overloaded",
+    hdrs = ["overloaded.h"],
 )
 
 drake_cc_library(
@@ -419,12 +502,12 @@ drake_cc_library(
     name = "random",
     srcs = ["random.cc"],
     hdrs = ["random.h"],
-    interface_deps = [
+    deps = [
         ":copyable_unique_ptr",
         ":essential",
         ":extract_double",
     ],
-    deps = [
+    implementation_deps = [
         ":autodiff",
     ],
 )
@@ -440,6 +523,18 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "sha256",
+    srcs = ["sha256.cc"],
+    hdrs = ["sha256.h"],
+    deps = [
+        ":essential",
+    ],
+    implementation_deps = [
+        "@picosha2_internal//:picosha2",
+    ],
+)
+
+drake_cc_library(
     name = "pointer_cast",
     srcs = ["pointer_cast.cc"],
     hdrs = ["pointer_cast.h"],
@@ -452,10 +547,9 @@ drake_cc_library(
     name = "temp_directory",
     srcs = ["temp_directory.cc"],
     hdrs = ["temp_directory.h"],
-    interface_deps = [
+    deps = [
         ":essential",
     ],
-    deps = [],
 )
 
 # This is a Drake-internal utility for use only as a direct dependency
@@ -509,6 +603,17 @@ drake_cc_library(
     hdrs = ["scoped_singleton.h"],
     deps = [
         ":essential",
+    ],
+)
+
+drake_cc_library(
+    name = "string_container",
+    hdrs = [
+        "string_hash.h",
+        "string_map.h",
+        "string_set.h",
+        "string_unordered_map.h",
+        "string_unordered_set.h",
     ],
 )
 
@@ -675,6 +780,14 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "sha256_test",
+    deps = [
+        ":sha256",
+        ":temp_directory",
+    ],
+)
+
+drake_cc_googletest(
     name = "pointer_cast_test",
     deps = [
         ":pointer_cast",
@@ -732,42 +845,6 @@ drake_cc_googletest(
     ],
 )
 
-# Functional test of DRAKE_ASSERT at compile time.
-drake_cc_test(
-    name = "drake_assert_test_compile",
-    deps = [
-        ":essential",
-        ":unused",
-    ],
-)
-
-# Functional test that mistyped DRAKE_ASSERTs will fail to compile.
-sh_test(
-    name = "drake_assert_test_compile_variants",
-    size = "small",
-    srcs = ["test/drake_assert_test_compile_variants.sh"],
-    args = [
-        "$(location //tools/cc_toolchain:capture_cc.env)",
-        "$(location :test/drake_assert_test_compile.cc)",
-    ],
-    data = [
-        "drake_assert.h",
-        "test/drake_assert_test_compile.cc",
-        "unused.h",
-        "//tools/cc_toolchain:capture_cc.env",
-        "//tools/cc_toolchain:toolchain_deps",
-    ],
-    # Fails when run under Valgrind tools.
-    tags = ["no_valgrind_tools"],
-)
-
-# TODO(eric.cousineau): Remove this alias and update `issue_template.md` to
-# use the actual target name after 2018/10/31.
-alias(
-    name = "print_host_settings",
-    actual = "//tools/cc_toolchain:print_host_settings",
-)
-
 drake_cc_googletest(
     name = "drake_copyable_test",
     deps = [
@@ -805,6 +882,7 @@ drake_cc_googletest(
     copts = ["-Wno-deprecated-declarations"],
     deps = [
         ":essential",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -836,6 +914,29 @@ drake_cc_googletest(
     name = "hash_test",
     deps = [
         ":hash",
+    ],
+)
+
+drake_cc_library(
+    name = "hwy_dynamic_test_array_mul",
+    testonly = True,
+    srcs = ["test/hwy_dynamic_test_array_mul.cc"],
+    hdrs = ["test/hwy_dynamic_test_array_mul.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":hwy_dynamic",
+        ":string_container",
+        "@highway_internal//:hwy",
+    ],
+)
+
+drake_cc_googletest(
+    name = "hwy_dynamic_test",
+    deps = [
+        ":hwy_dynamic",
+        ":hwy_dynamic_test_array_mul",
+        "//common/test_utilities:eigen_matrix_compare",
+        "@highway_internal//:hwy_test_util",
     ],
 )
 
@@ -874,10 +975,18 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "file_source_test",
+    deps = [
+        ":file_source",
+    ],
+)
+
+drake_cc_googletest(
     name = "find_cache_test",
     deps = [
         ":find_cache",
         ":temp_directory",
+        "//common/test_utilities:set_env",
     ],
 )
 
@@ -890,6 +999,7 @@ drake_cc_googletest(
         ":drake_path",
         ":find_resource",
         "//common/test_utilities:expect_no_throw",
+        "//common/test_utilities:expect_throws_message",
     ],
 )
 
@@ -980,6 +1090,18 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "memory_file_test",
+    data = [
+        "test/find_resource_test_data.txt",
+    ],
+    deps = [
+        ":find_resource",
+        ":memory_file",
+        ":temp_directory",
+    ],
+)
+
+drake_cc_googletest(
     name = "name_value_test",
     deps = [
         ":name_value",
@@ -1020,6 +1142,13 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
+    name = "overloaded_test",
+    deps = [
+        "//common:overloaded",
+    ],
+)
+
+drake_cc_googletest(
     name = "parallelism_test",
     num_threads = 2,
     deps = [
@@ -1034,6 +1163,14 @@ drake_cc_googletest(
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_no_throw",
         "//common/test_utilities:random_polynomial_matrix",
+    ],
+)
+
+drake_cc_googletest(
+    name = "string_container_test",
+    deps = [
+        ":string_container",
+        "//common/test_utilities:limit_malloc",
     ],
 )
 

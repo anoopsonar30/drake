@@ -6,13 +6,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "drake/common/drake_deprecated.h"
 #include "drake/geometry/collision_filter_manager.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_set.h"
 #include "drake/geometry/kinematics_vector.h"
 #include "drake/geometry/query_object.h"
 #include "drake/geometry/query_results/penetration_as_point_pair.h"
+#include "drake/geometry/scene_graph_config.h"
 #include "drake/geometry/scene_graph_inspector.h"
 #include "drake/systems/framework/context.h"
 #include "drake/systems/framework/leaf_system.h"
@@ -319,16 +319,40 @@ class QueryObject;
 template <typename T>
 class SceneGraph final : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SceneGraph)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SceneGraph);
 
   /** Constructs a default (empty) scene graph. */
   SceneGraph();
+
+  /** Constructs an empty scene graph with the provided configuration. */
+  explicit SceneGraph(const SceneGraphConfig& config);
 
   /** Constructor used for scalar conversions. */
   template <typename U>
   explicit SceneGraph(const SceneGraph<U>& other);
 
   ~SceneGraph() final;
+
+  /** @name      Configuration
+   Allows configuration changes to scene graph systems.
+   */
+  //@{
+
+  /** Sets the configuration. */
+  void set_config(const SceneGraphConfig& config);
+
+  /** @returns the current configuration. */
+  const SceneGraphConfig& get_config() const;
+
+  /** @returns the scene graph configuration from the given context.
+   Note: there is no matching per-Context set_config() function. The context's
+   scene graph configuration is copied from the main scene graph configuration
+   at context construction time. Thereafter, the context's scene graph
+   configuration is not mutable. */
+  const SceneGraphConfig& get_config(const systems::Context<T>& context) const;
+
+  //@}
+
 
   /** @name       Port management
    Access to SceneGraph's input/output ports. This topic includes
@@ -705,9 +729,33 @@ class SceneGraph final : public systems::LeafSystem<T> {
   void AddRenderer(std::string name,
                    std::unique_ptr<render::RenderEngine> renderer);
 
+  /** systems::Context-modifying variant of AddRenderer(). Rather than
+   modifying %SceneGraph's model, it modifies the copy of the model stored in
+   the provided context.  */
+  void AddRenderer(systems::Context<T>* context, std::string name,
+                   std::unique_ptr<render::RenderEngine> renderer) const;
+
+  /** Removes an existing renderer from this %SceneGraph
+   @param name The unique name of the renderer to be removed.
+   @throws std::exception if this %SceneGraph doesn't have a renderer with the
+   specified name. */
+  void RemoveRenderer(const std::string& name);
+
+  /** systems::Context-modifying variant of RemoveRenderer(). Rather than
+   modifying %SceneGraph's model, it modifies the copy of the model stored in
+   the provided context.  */
+  void RemoveRenderer(systems::Context<T>* context,
+                      const std::string& name) const;
+
   /** Reports true if this %SceneGraph has a renderer registered with the given
    name. */
   bool HasRenderer(const std::string& name) const;
+
+  /** systems::Context-query variant of HasRenderer(). Rather than querying
+   %SceneGraph's model, it queries the copy of the model stored in the
+   provided context.  */
+  bool HasRenderer(const systems::Context<T>& context,
+                   const std::string& name) const;
 
   /** Reports the type name for the RenderEngine registered with the given
    `name`.
@@ -717,11 +765,28 @@ class SceneGraph final : public systems::LeafSystem<T> {
             registered with the given `name`. */
   std::string GetRendererTypeName(const std::string& name) const;
 
+  /** systems::Context-query variant of GetRendererTypeName(). Rather than
+   querying %SceneGraph's model, it queries the copy of the model stored in the
+   provided context.  */
+  std::string GetRendererTypeName(const systems::Context<T>& context,
+                                  const std::string& name) const;
+
   /** Reports the number of renderers registered to this %SceneGraph.  */
   int RendererCount() const;
 
+  /** systems::Context-query variant of RendererCount(). Rather than querying
+   %SceneGraph's model, it queries the copy of the model stored in the
+   provided context.  */
+  int RendererCount(const systems::Context<T>& context) const;
+
   /** Reports the names of all registered renderers.  */
   std::vector<std::string> RegisteredRendererNames() const;
+
+  /** systems::Context-query variant of RegisteredRendererNames(). Rather than
+   querying %SceneGraph's model, it queries the copy of the model stored in the
+   provided context.  */
+  std::vector<std::string> RegisteredRendererNames(
+      const systems::Context<T>& context) const;
 
   //@}
 
@@ -886,9 +951,8 @@ class SceneGraph final : public systems::LeafSystem<T> {
    @warning Due to a bug (see issue
    <a href="https://github.com/RobotLocomotion/drake/issues/13597">#13597</a>),
    changing the illustration roles or properties in a systems::Context will not
-   have any apparent effect in, at least, the legacy `drake_visualizer`
-   application of days past. Please change the illustration role in the model
-   prior to allocating the context.
+   have any apparent effect in certain viewers. Please change the illustration
+   role in the model prior to allocating the context.
    @pydrake_mkdoc_identifier{illustration_context}
    */
   void AssignRole(systems::Context<T>* context, SourceId source_id,
@@ -1083,27 +1147,32 @@ class SceneGraph final : public systems::LeafSystem<T> {
   // The index of the output port with the QueryObject abstract value.
   int query_port_index_{-1};
 
-  // SceneGraph owns its configured model; it gets copied into the context when
-  // the context is set to its "default" state. We use unique_ptr in support of
-  // forward-declaring GeometryState<T> to reduce our #include footprint, but
-  // initialize a model_ reference to always point to the owned_model_, as a
-  // convenient shortcut in the code to treat it as if it were a direct member.
-  std::unique_ptr<GeometryState<T>> owned_model_;
-  GeometryState<T>& model_;
+  // Encapsulate some model detail to help enforce internal invariants.
+  class Hub;
+  std::unique_ptr<Hub> owned_hub_;
+  class Hub& hub_;
 
   SceneGraphInspector<T> model_inspector_;
 
-  // The geometry state is stored in the Context either as a Parameter with this
+  // The geometry state is stored in the Context as a Parameter with this
   // index.
   int geometry_state_index_{-1};
+
+  // The scene graph configuration from the time the context was created is
+  // stored in the Context as a Parameter with this index.
+  int scene_graph_config_index_{-1};
 
   // The cache indices for the pose and configuration update cache entries.
   systems::CacheIndex pose_update_index_{};
   systems::CacheIndex configuration_update_index_{};
+
+  // (Testing only) a global count of calls to the scalar converting
+  // constructor.
+  static int64_t scalar_conversion_count_;
 };
 
 }  // namespace geometry
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::geometry::SceneGraph)
+    class ::drake::geometry::SceneGraph);

@@ -29,9 +29,8 @@ GTEST_TEST(SpectrahedronTest, DefaultCtor) {
 }
 
 GTEST_TEST(SpectrahedronTest, Attributes) {
-  EXPECT_GT(Spectrahedron::supported_attributes().count(
-                solvers::ProgramAttribute::kPositiveSemidefiniteConstraint),
-            0);
+  EXPECT_TRUE(Spectrahedron::supported_attributes().contains(
+      solvers::ProgramAttribute::kPositiveSemidefiniteConstraint));
 }
 
 GTEST_TEST(SpectrahedronTest, UnsupportedProgram) {
@@ -330,7 +329,7 @@ GTEST_TEST(SpectrahedronTest, UnboundedTest) {
   Spectrahedron spect(prog);
   EXPECT_FALSE(spect.IsBounded());
 
-  // Construct an unbounded but constrainted SDP, and check that IsBounded
+  // Construct an unbounded but constrained SDP, and check that IsBounded
   // notices.
   prog.AddLinearConstraint(X1(0, 0) >= 0);
   Spectrahedron spect2(prog);

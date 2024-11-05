@@ -16,32 +16,6 @@ namespace drake {
 namespace systems {
 namespace analysis {
 namespace {
-// Only use two threads during testing. This value should match the "cpu" tag
-// in BUILD.bazel defining this test.
-constexpr int kTestConcurrency = 2;
-
-GTEST_TEST(SelectNumberOfThreadsToUseTest, BasicTest) {
-  const int hardware_concurrency =
-      static_cast<int>(std::thread::hardware_concurrency());
-
-  // When kNoConcurrency is selected, only one thread should be used.
-  EXPECT_EQ(internal::SelectNumberOfThreadsToUse(kNoConcurrency), 1);
-
-  // If kUseHardwareConcurrency is specified, the number of threads should
-  // match std::thread::hardware_concurrency().
-  EXPECT_EQ(internal::SelectNumberOfThreadsToUse(kUseHardwareConcurrency),
-            hardware_concurrency);
-
-  // If a value greater than zero is specified, it selects the number of threads
-  // to use.
-  EXPECT_EQ(internal::SelectNumberOfThreadsToUse(1), 1);
-  EXPECT_EQ(internal::SelectNumberOfThreadsToUse(10), 10);
-  EXPECT_EQ(internal::SelectNumberOfThreadsToUse(100), 100);
-
-  // Zero and negative values (that are not kUseHardwareConcurrency) throw.
-  EXPECT_THROW(internal::SelectNumberOfThreadsToUse(0), std::exception);
-  EXPECT_THROW(internal::SelectNumberOfThreadsToUse(-10), std::exception);
-}
 
 // Checks that RandomSimulation repeatedly produces the same output sample
 // when given the same RandomGenerator, but produces different output samples
@@ -112,7 +86,11 @@ GTEST_TEST(RandomSimulationTest, WithRandomSimulator) {
 // SetRandomState().
 class RandomContextSystem : public VectorSystem<double> {
  public:
-  RandomContextSystem() : VectorSystem(0, 1) { this->DeclareDiscreteState(1); }
+  RandomContextSystem()
+      : VectorSystem(0, 1,
+                     /* direct_feedthrough = */ false) {
+    this->DeclareDiscreteState(1);
+  }
 
  private:
   void SetRandomState(const Context<double>& context, State<double>* state,
@@ -181,10 +159,10 @@ GTEST_TEST(MonteCarloSimulationTest, BasicTest) {
 
   const auto serial_results = MonteCarloSimulation(
       make_simulator, &GetScalarOutput, final_time, num_samples,
-      &serial_generator, kNoConcurrency);
+      &serial_generator, Parallelism::None());
   const auto parallel_results = MonteCarloSimulation(
       make_simulator, &GetScalarOutput, final_time, num_samples,
-      &parallel_generator, kTestConcurrency);
+      &parallel_generator, Parallelism::Max());
 
   EXPECT_EQ(serial_results.size(), num_samples);
   EXPECT_EQ(parallel_results.size(), num_samples);
@@ -225,7 +203,9 @@ GTEST_TEST(MonteCarloSimulationTest, BasicTest) {
 // throws.
 class ThrowingRandomContextSystem : public VectorSystem<double> {
  public:
-  ThrowingRandomContextSystem() : VectorSystem(0, 1) {
+  ThrowingRandomContextSystem()
+      : VectorSystem(0, 1,
+                     /* direct_feedthrough = */ false) {
     this->DeclareDiscreteState(1);
   }
 
@@ -264,11 +244,11 @@ GTEST_TEST(MonteCarloSimulationExceptionTest, BasicTest) {
 
   EXPECT_THROW(MonteCarloSimulation(
       make_simulator, &GetScalarOutput, final_time, num_samples,
-      &serial_generator, kNoConcurrency),
+      &serial_generator, Parallelism::None()),
       std::exception);
   EXPECT_THROW(MonteCarloSimulation(
       make_simulator, &GetScalarOutput, final_time, num_samples,
-      &parallel_generator, kTestConcurrency),
+      &parallel_generator, Parallelism::Max()),
       std::exception);
 }
 

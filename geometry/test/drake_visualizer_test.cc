@@ -1,20 +1,27 @@
 #include "drake/geometry/drake_visualizer.h"
 
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <common_robotics_utilities/base64_helpers.hpp>
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
+#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/common/unused.h"
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/kinematics_vector.h"
 #include "drake/geometry/proximity_properties.h"
+#include "drake/geometry/read_gltf_to_memory.h"
 #include "drake/geometry/rgba.h"
 #include "drake/geometry/scene_graph.h"
 #include "drake/geometry/shape_specification.h"
@@ -74,6 +81,9 @@ class DrakeVisualizerTester {
 };
 
 namespace {
+
+namespace fs = std::filesystem;
+
 /* Collection of data for reporting what is waiting in the LCM queue.  */
 struct MessageResults {
   int num_load{};
@@ -91,7 +101,7 @@ struct MessageResults {
 template <typename T>
 class PoseSource : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PoseSource)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PoseSource);
   PoseSource() {
     this->DeclareAbstractOutputPort(systems::kUseDefaultName,
                                     FramePoseVector<T>(),
@@ -112,22 +122,20 @@ class PoseSource : public systems::LeafSystem<T> {
 template <typename T>
 class ConfigurationSource : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ConfigurationSource)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ConfigurationSource);
   ConfigurationSource() {
     this->DeclareAbstractOutputPort(
         systems::kUseDefaultName, GeometryConfigurationVector<T>(),
         &ConfigurationSource<T>::ReadConfigurations);
   }
 
-  void SetConfigurations(
-    GeometryConfigurationVector<T> configurations) {
+  void SetConfigurations(GeometryConfigurationVector<T> configurations) {
     configurations_ = std::move(configurations);
   }
 
  private:
   void ReadConfigurations(
-      const Context<T>&,
-      GeometryConfigurationVector<T>* configurations) const {
+      const Context<T>&, GeometryConfigurationVector<T>* configurations) const {
     *configurations = configurations_;
   }
 
@@ -355,12 +363,191 @@ class DrakeVisualizerTest : public ::testing::Test {
     }
   }
 
+  /* Test helper to evaluate how mesh types appear in messages. It can
+   distinguish between whether we expect to see an explicit mesh (e.g., a convex
+   hull) or whether we simply forward the file path. See tests below for usage.
+
+   Where role matters, the test assumes that the only distinction is kProximity
+   and everything else. It uses Role::kIllustration to represent "everything
+   else".
+
+   @param role         The role to assign to the test geometry -- should be
+                       either kIllustrated or kProximity.
+   @param expect_hull  If true, we expect the MeshType with the given `role`
+                       to be represented by its convex hull.
+   @param in_memory    If true, the mesh will be specified using in-memory
+                       resources. */
+  template <typename MeshType>
+  void ExpectMeshInMessage(Role role, bool expect_hull,
+                           bool in_memory = false) {
+    std::unique_ptr<MeshType> mesh;
+    const std::string gltf_path = FindResourceOrThrow(
+        "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf");
+
+    // The names of two supporting files. We'll poke the results by examining
+    // each of these two files when the Mesh is defined in memory.
+    const std::string kSupportingPngAsPath("fully_textured_pyramid_omr.png");
+    const std::string kSupportingPngAsMemory(
+        "fully_textured_pyramid_normal.png");
+
+    if (in_memory) {
+      InMemoryMesh mesh_data = ReadGltfToMemory(fs::path(gltf_path));
+      mesh_data.supporting_files[kSupportingPngAsMemory] =
+          MemoryFile::Make(std::get<fs::path>(
+              mesh_data.supporting_files[kSupportingPngAsMemory]));
+      mesh = make_unique<MeshType>(std::move(mesh_data));
+    } else {
+      mesh = make_unique<MeshType>(gltf_path);
+    }
+
+    SCOPED_TRACE(fmt::format("{} {} shape with {} role",
+                             in_memory ? "in-memory" : "on-disk",
+                             mesh->type_name(), role));
+    this->ConfigureDiagram({.role = role});
+
+    const FrameId f_id = this->scene_graph_->RegisterFrame(
+        this->pose_source_id_, GeometryFrame("test", 0));
+
+    const RigidTransformd X_PC(Vector3d(-1, 2, -3));
+    const GeometryId g_id = this->scene_graph_->RegisterGeometry(
+        this->pose_source_id_, f_id,
+        make_unique<GeometryInstance>(X_PC, mesh->Clone(), "test"));
+
+    // We assign a diffuse color, because we expect it to come through when
+    // `expect_hull` is true.
+    const Rgba expected_rgba(0.25, 0.5, 0.75, 1.0);
+    switch (role) {
+      case Role::kProximity: {
+        ProximityProperties props;
+        props.AddProperty("phong", "diffuse", expected_rgba);
+        this->scene_graph_->AssignRole(this->pose_source_id_, g_id, props);
+      } break;
+      case Role::kIllustration: {
+        IllustrationProperties props;
+        props.AddProperty("phong", "diffuse", expected_rgba);
+        this->scene_graph_->AssignRole(this->pose_source_id_, g_id, props);
+      } break;
+      case Role::kPerception:
+        DRAKE_UNREACHABLE();
+        break;
+      case Role::kUnassigned:
+        DRAKE_UNREACHABLE();
+        break;
+    }
+
+    FramePoseVector<T> poses;
+    poses.set_value(f_id, RigidTransform<T>{});
+    this->pose_source_->SetPoses(std::move(poses));
+
+    /* Dispatch a load message. */
+    auto context = this->diagram_->CreateDefaultContext();
+    const auto& vis_context = this->visualizer_->GetMyContextFromRoot(*context);
+    this->visualizer_->ForcedPublish(vis_context);
+
+    /* Confirm that messages were sent.  */
+    MessageResults results = this->ProcessMessages();
+    ASSERT_EQ(results.num_load, 1);
+    ASSERT_EQ(results.load_message.num_links, 1);
+
+    const auto& link_message = results.load_message.link[0];
+    ASSERT_EQ(link_message.num_geom, 1);
+    const auto& geo_message = link_message.geom[0];
+
+    EXPECT_EQ(geo_message.type, geo_message.MESH);
+    if (expect_hull) {
+      EXPECT_TRUE(geo_message.string_data.empty());
+      // The float data contains:
+      //   - 2 floats indicating triangle and vertex counts.
+      //   - 3 floats for each triangle (we expect 4 for the pyramid).
+      //   - 3 floats for each vertex and 3 vertices per triangle (faceted).
+      const int num_tris = 4;
+      const int num_vertices = num_tris * 3;
+      EXPECT_GT(geo_message.num_float_data,
+                2 + 3 * num_tris + 3 * num_vertices);
+
+      const auto& color = geo_message.color;
+      const Rgba test_rgba(color[0], color[1], color[2], color[3]);
+      // The color values used in this test can all be perfectly represented by
+      // 32-bit floats (e.g., 0.5, 0.75,  etc.). So, we can use exact equality.
+      EXPECT_EQ(test_rgba, expected_rgba);
+
+      const auto& p_PG = geo_message.position;
+      const auto& q_PG = geo_message.quaternion;
+      const RotationMatrixd R_PG(
+          Eigen::Quaternion<double>(q_PG[0], q_PG[1], q_PG[2], q_PG[3]));
+      const RigidTransformd X_PG_test(R_PG, {p_PG[0], p_PG[1], p_PG[2]});
+      /* Tolerance due to conversion to float. */
+      EXPECT_TRUE(CompareMatrices(X_PC.GetAsMatrix34(),
+                                  X_PG_test.GetAsMatrix34(), 1e-7));
+    } else {
+      if (in_memory) {
+        EXPECT_FALSE(geo_message.string_data.empty());
+        nlohmann::json json_root =
+            nlohmann::json::parse(geo_message.string_data);
+        ASSERT_TRUE(json_root.contains("in_memory_mesh"));
+        const auto& json_mesh = json_root["in_memory_mesh"];
+        ASSERT_TRUE(json_mesh.contains("mesh_file"));
+        ASSERT_TRUE(json_mesh["mesh_file"].contains("contents"));
+        ASSERT_TRUE(json_mesh["mesh_file"].contains("extension"));
+        ASSERT_TRUE(json_mesh["mesh_file"].contains("filename_hint"));
+        // Contents is a valid base64-encoded glTF file.
+        auto gltf_base64 =
+            json_mesh["mesh_file"]["contents"].get<std::string_view>();
+        const std::vector<uint8_t> decoded_gltf =
+            common_robotics_utilities::base64_helpers::Decode(
+                std::string{gltf_base64});
+        std::string gltf_content(
+            reinterpret_cast<const char*>(decoded_gltf.data()),
+            decoded_gltf.size());
+        EXPECT_FALSE(gltf_content.empty());
+        EXPECT_NO_THROW(unused(nlohmann::json::parse(gltf_content)));
+        EXPECT_EQ(json_mesh["mesh_file"]["extension"].get<std::string_view>(),
+                  mesh->source().extension());
+        EXPECT_EQ(
+            json_mesh["mesh_file"]["filename_hint"].get<std::string_view>(),
+            mesh->source().in_memory().mesh_file.filename_hint());
+
+        ASSERT_TRUE(json_mesh.contains("supporting_files"));
+        const nlohmann::json& files = json_mesh["supporting_files"];
+
+        // We won't explore *all* of the supporting files. We'll poke one that
+        // should be encoded as a path, and the other as a MemoryFile.
+        ASSERT_TRUE(files.contains(kSupportingPngAsPath));
+        ASSERT_TRUE(files[kSupportingPngAsPath].contains("path"));
+        EXPECT_EQ(
+            files[kSupportingPngAsPath]["path"].get<std::string_view>(),
+            std::get<fs::path>(mesh->source().in_memory().supporting_files.at(
+                kSupportingPngAsPath)));
+
+        ASSERT_TRUE(files.contains(kSupportingPngAsMemory));
+        const nlohmann::json& mem_file = files[kSupportingPngAsMemory];
+        EXPECT_EQ(mem_file["extension"].get<std::string_view>(), ".png");
+        EXPECT_TRUE(mem_file["filename_hint"].get<std::string_view>().ends_with(
+            kSupportingPngAsMemory));
+        const auto emissive_64 = mem_file["contents"].get<std::string_view>();
+        // We'll confirm that the contents indicate an encoded png.
+        const std::vector<uint8_t> decoded_png =
+            common_robotics_utilities::base64_helpers::Decode(
+                std::string{emissive_64});
+        // See http://www.libpng.org/pub/png/spec/1.2/PNG-Structure.html.
+        uint8_t kPngHeader[] = {137, 80, 78, 71, 13, 10, 26, 10};
+        for (int i = 0; i < 8; ++i) {
+          ASSERT_EQ(decoded_png[i], kPngHeader[i]);
+        }
+      } else {
+        EXPECT_THAT(geo_message.string_data,
+                    ::testing::HasSubstr("fully_textured_pyramid.gltf"));
+      }
+    }
+    /* We don't care about the draw message. */
+  }
+
   struct Subscribers;
   Subscribers& GetSubscribers(std::optional<Role> role) {
-    std::map<Role, Subscribers *> subscribers_{
-      {Role::kIllustration, &illustration_subs_},
-      {Role::kProximity, &proximity_subs_},
-      {Role::kPerception, &perception_subs_},
+    std::map<Role, Subscribers*> subscribers_{
+        {Role::kIllustration, &illustration_subs_},
+        {Role::kProximity, &proximity_subs_},
+        {Role::kPerception, &perception_subs_},
     };
     if (role.has_value()) {
       DRAKE_DEMAND(*role != Role::kUnassigned);
@@ -368,7 +555,6 @@ class DrakeVisualizerTest : public ::testing::Test {
     }
     return default_subs_;
   }
-
 
   static constexpr double kPublishPeriod = 1 / 64.0;
 
@@ -574,9 +760,9 @@ TYPED_TEST(DrakeVisualizerTest, ConfigureDefaultDiffuse) {
  provide data for the dynamic frames (i.e., "world" will not be included).  */
 TYPED_TEST(DrakeVisualizerTest, AnchoredAndDynamicGeometry) {
   using T = TypeParam;
-  this->ConfigureDiagram(
-      {.publish_period = this->kPublishPeriod, .role = Role::kProximity,
-       .use_role_channel_suffix = true});
+  this->ConfigureDiagram({.publish_period = this->kPublishPeriod,
+                          .role = Role::kProximity,
+                          .use_role_channel_suffix = true});
   const FrameId f_id = this->scene_graph_->RegisterFrame(
       this->pose_source_id_, GeometryFrame("frame", 0));
   const GeometryId g0_id = this->scene_graph_->RegisterGeometry(
@@ -642,16 +828,18 @@ TYPED_TEST(DrakeVisualizerTest, TargetRole) {
       {Role::kProximity, source_name + "::proximity"}};
   for (const auto& [role, name] : expected) {
     for (const bool use_suffix : {false, true}) {
-      SCOPED_TRACE(fmt::format("role '{}', name '{}', use_suffix '{}'",
-                               role, name, use_suffix));
-      this->ConfigureDiagram(
-          {.publish_period = this->kPublishPeriod, .role = role,
-           .use_role_channel_suffix = use_suffix});
+      SCOPED_TRACE(fmt::format("role '{}', name '{}', use_suffix '{}'", role,
+                               name, use_suffix));
+      this->ConfigureDiagram({.publish_period = this->kPublishPeriod,
+                              .role = role,
+                              .use_role_channel_suffix = use_suffix});
       this->PopulateScene();
       Simulator<T> simulator(*(this->diagram_));
       simulator.AdvanceTo(0.0);
       std::optional<Role> maybe_role;
-      if (use_suffix) { maybe_role = role; }
+      if (use_suffix) {
+        maybe_role = role;
+      }
       MessageResults results = this->ProcessMessages(maybe_role);
 
       /* Confirm that messages were sent.  */
@@ -690,9 +878,9 @@ TYPED_TEST(DrakeVisualizerTest, ForcePublish) {
  illustration role with color, that value is used instead of the default.  */
 TYPED_TEST(DrakeVisualizerTest, GeometryWithIllustrationFallback) {
   using T = TypeParam;
-  this->ConfigureDiagram(
-      {.publish_period = this->kPublishPeriod, .role = Role::kProximity,
-       .use_role_channel_suffix = true});
+  this->ConfigureDiagram({.publish_period = this->kPublishPeriod,
+                          .role = Role::kProximity,
+                          .use_role_channel_suffix = true});
   const GeometryId g_id = this->scene_graph_->RegisterAnchoredGeometry(
       this->pose_source_id_,
       make_unique<GeometryInstance>(RigidTransformd{}, make_unique<Sphere>(1),
@@ -723,9 +911,9 @@ TYPED_TEST(DrakeVisualizerTest, GeometryWithIllustrationFallback) {
 TYPED_TEST(DrakeVisualizerTest, AllRolesCanDefineDiffuse) {
   using T = TypeParam;
   for (const Role role : {Role::kProximity, Role::kPerception}) {
-    this->ConfigureDiagram(
-        {.publish_period = this->kPublishPeriod, .role = role,
-         .use_role_channel_suffix = true});
+    this->ConfigureDiagram({.publish_period = this->kPublishPeriod,
+                            .role = role,
+                            .use_role_channel_suffix = true});
     const GeometryId g_id = this->scene_graph_->RegisterAnchoredGeometry(
         this->pose_source_id_,
         make_unique<GeometryInstance>(RigidTransformd{}, make_unique<Sphere>(1),
@@ -787,9 +975,9 @@ TYPED_TEST(DrakeVisualizerTest, ChangesInVersion) {
   using T = TypeParam;
   for (const Role role :
        {Role::kProximity, Role::kPerception, Role::kIllustration}) {
-    this->ConfigureDiagram(
-        {.publish_period = this->kPublishPeriod, .role = role,
-         .use_role_channel_suffix = true});
+    this->ConfigureDiagram({.publish_period = this->kPublishPeriod,
+                            .role = role,
+                            .use_role_channel_suffix = true});
     const GeometryId g_id = this->scene_graph_->RegisterAnchoredGeometry(
         this->pose_source_id_,
         make_unique<GeometryInstance>(RigidTransformd{}, make_unique<Sphere>(1),
@@ -849,63 +1037,80 @@ TYPED_TEST(DrakeVisualizerTest, ChangesInVersion) {
 
  In the case where deformable mesh geometry is sent, we also explicitly test
  the mesh name and color information (as DrakeVisualizer uses bespoke code in
- this regard).
+ this regard). In particular, we configure the geometry to have different a
+ particular diffuse color for proximity roles while not specifying any color for
+ illustration roles. We expect that the specified color is respected for the
+ former while the default color of the visualizer is used for the latter.
 
  We are testing for the presence of the expected *type* of message, but we are
  not evaluating the mesh data produced. We assume that incorrectness in the
  mesh data will be immediately visible in visualization. */
 TYPED_TEST(DrakeVisualizerTest, VisualizeDeformableGeometry) {
-  DrakeVisualizerParams params;
-  /* We'll expect the visualizer default color gets applied to the deformable
-   meshes -- we haven't defined any other color to the geometry. So, we'll pick
-   an arbitrary value that *isn't* the default value. */
-  params.default_color = Rgba{0.25, 0.5, 0.75, 0.5};
-  this->ConfigureDiagram(params);
+  for (const auto role :
+       std::vector<Role>{Role::kProximity, Role::kIllustration}) {
+    DrakeVisualizerParams params;
+    /* We'll expect the visualizer default color gets applied to the deformable
+     meshes if a diffuse color isn't specifically requested via
+     GeometryProperties. */
+    params.default_color = Rgba{0.25, 0.5, 0.75, 0.5};
+    params.role = role;
+    this->ConfigureDiagram(params);
 
-  constexpr double kRezHint = 0.5;
-  constexpr double kRadius = 1.0;
-  auto geometry_instance = make_unique<GeometryInstance>(
-      RigidTransformd::Identity(), make_unique<Sphere>(kRadius), "sphere");
-  GeometryId g_id = this->scene_graph_->RegisterDeformableGeometry(
-      this->configuration_source_id_, this->scene_graph_->world_frame_id(),
-      std::move(geometry_instance), kRezHint);
-  const auto& inspector = this->scene_graph_->model_inspector();
-  const VolumeMesh<double>* mesh = inspector.GetReferenceMesh(g_id);
-  ASSERT_NE(mesh, nullptr);
-  this->configuration_source_->SetConfigurations(
-      {{g_id, VectorX<double>::Zero(3 * mesh->num_vertices())}});
+    const Rgba expected_illustration_rgba = params.default_color;
+    const Rgba expected_proximity_rgba = Rgba(0.75, 0.25, 0.5, 0.75);
 
-  /* Dispatch a load message. */
-  auto context = this->diagram_->CreateDefaultContext();
-  const auto& vis_context = this->visualizer_->GetMyContextFromRoot(*context);
-  this->visualizer_->ForcedPublish(vis_context);
+    constexpr double kRezHint = 0.5;
+    constexpr double kRadius = 1.0;
+    auto geometry_instance = make_unique<GeometryInstance>(
+        RigidTransformd::Identity(), make_unique<Sphere>(kRadius), "sphere");
+    geometry_instance->set_illustration_properties(IllustrationProperties{});
+    ProximityProperties proximity_properties;
+    proximity_properties.AddProperty("phong", "diffuse",
+                                     expected_proximity_rgba);
+    geometry_instance->set_proximity_properties(proximity_properties);
+    GeometryId g_id = this->scene_graph_->RegisterDeformableGeometry(
+        this->configuration_source_id_, this->scene_graph_->world_frame_id(),
+        std::move(geometry_instance), kRezHint);
+    const auto& inspector = this->scene_graph_->model_inspector();
+    const VolumeMesh<double>* mesh = inspector.GetReferenceMesh(g_id);
+    ASSERT_NE(mesh, nullptr);
+    this->configuration_source_->SetConfigurations(
+        {{g_id, VectorX<double>::Zero(3 * mesh->num_vertices())}});
 
-  /* Confirm that messages were sent.  */
-  MessageResults results = this->ProcessMessages();
-  ASSERT_EQ(results.num_load, 1);
-  // No rigid geometries are added.
-  ASSERT_EQ(results.load_message.num_links, 0);
-  ASSERT_EQ(results.num_deformable, 1);
-  ASSERT_EQ(results.deformable_message.num_geom, 1);
-  EXPECT_EQ(results.deformable_message.name, "deformable_geometries");
-  EXPECT_EQ(results.deformable_message.robot_num, 0);
+    /* Dispatch a load message. */
+    auto context = this->diagram_->CreateDefaultContext();
+    const auto& vis_context = this->visualizer_->GetMyContextFromRoot(*context);
+    this->visualizer_->ForcedPublish(vis_context);
 
-  auto is_visualizer_color = [expected = params.default_color](
-                                 const lcmt_viewer_geometry_data& message) {
-    const auto& color = message.color;
-    const Rgba test_rgba(color[0], color[1], color[2], color[3]);
-    // The color values used in this test can all be perfectly represented by
-    // 32-bit floats (e.g., 0.5, 0.75,  etc.). So, we can use exact equality.
-    return expected == test_rgba;
-  };
+    /* Confirm that messages were sent.  */
+    MessageResults results = this->ProcessMessages();
+    ASSERT_EQ(results.num_load, 1);
+    /* No rigid geometries are added. */
+    ASSERT_EQ(results.load_message.num_links, 0);
+    ASSERT_EQ(results.num_deformable, 1);
+    ASSERT_EQ(results.deformable_message.num_geom, 1);
+    EXPECT_EQ(results.deformable_message.name, "deformable_geometries");
+    EXPECT_EQ(results.deformable_message.robot_num, 0);
 
-  const auto& geo_message = results.deformable_message.geom[0];
-  EXPECT_EQ(geo_message.type, geo_message.MESH);
-  EXPECT_EQ(geo_message.string_data, "sphere");
-  EXPECT_EQ(geo_message.num_float_data, geo_message.float_data.size());
-  EXPECT_EQ(geo_message.float_data.size(),
-            2 + geo_message.float_data[0] * 3 + geo_message.float_data[1] * 3);
-  EXPECT_TRUE(is_visualizer_color(geo_message));
+    auto is_visualizer_color = [](const lcmt_viewer_geometry_data& message,
+                                  const Rgba expected) {
+      const auto& color = message.color;
+      const Rgba test_rgba(color[0], color[1], color[2], color[3]);
+      // The color values used in this test can all be perfectly represented by
+      // 32-bit floats (e.g., 0.5, 0.75,  etc.). So, we can use exact equality.
+      return expected == test_rgba;
+    };
+
+    const auto& geo_message = results.deformable_message.geom[0];
+    EXPECT_EQ(geo_message.type, geo_message.MESH);
+    EXPECT_EQ(geo_message.string_data, "sphere");
+    EXPECT_EQ(geo_message.num_float_data, geo_message.float_data.size());
+    EXPECT_EQ(geo_message.float_data.size(), 2 + geo_message.float_data[0] * 3 +
+                                                 geo_message.float_data[1] * 3);
+    EXPECT_TRUE(is_visualizer_color(
+        geo_message, role == Role::kProximity ? expected_proximity_rgba
+                                              : expected_illustration_rgba));
+  }
 }
 
 /* This tests DrakeVisualizer's ability to replace primitive shape declarations
@@ -1065,6 +1270,42 @@ TYPED_TEST(DrakeVisualizerTest, VisualizeHydroGeometry) {
   /* We don't care about the draw message. */
 }
 
+/* This confirms that DrakeVisualizer dispatches a faceted convex hull for
+ Convex shapes. */
+TYPED_TEST(DrakeVisualizerTest, ConvexIsHullAlways) {
+  this->template ExpectMeshInMessage<Convex>(Role::kProximity,
+                                             /* expect_hull = */ true);
+  this->template ExpectMeshInMessage<Convex>(Role::kIllustration,
+                                             /* expect_hull = */ true);
+  this->template ExpectMeshInMessage<Convex>(Role::kProximity,
+                                             /* expect_hull = */ true,
+                                             /* in_memory = */ true);
+  this->template ExpectMeshInMessage<Convex>(Role::kIllustration,
+                                             /* expect_hull = */ true,
+                                             /* in_memory = */ true);
+}
+
+/* This confirms that DrakeVisualizer dispatches a faceted convex hull for
+ Mesh shapes with proximity role, but the mesh name for non-proximity role. */
+TYPED_TEST(DrakeVisualizerTest, MeshIsHullForProximity) {
+  this->template ExpectMeshInMessage<Mesh>(Role::kProximity,
+                                           /* expect_hull = */ true);
+  this->template ExpectMeshInMessage<Mesh>(Role::kIllustration,
+                                           /* expect_hull = */ false);
+}
+
+/* When a Mesh contains an in-memory representations, confirm that it encodes
+ as the expected json. */
+TYPED_TEST(DrakeVisualizerTest, InMemoryMesh) {
+  this->template ExpectMeshInMessage<Mesh>(Role::kProximity,
+                                           /* expect_hull = */ true,
+                                           /* in_memory = */ true);
+
+  this->template ExpectMeshInMessage<Mesh>(Role::kIllustration,
+                                           /* expect_hull = */ false,
+                                           /* in_memory = */ true);
+}
+
 /* Tests the AddToBuilder method that connects directly to a provided SceneGraph
  instance -- see TestAddToBuilder for testing details.  */
 template <typename T>
@@ -1201,6 +1442,13 @@ GTEST_TEST(DrakeVisualizerdTest, Transmogrify) {
       "DrakeVisualizer can only be scalar converted if it owns its "
       "DrakeLcmInterface instance.");
 }
+
+// The Graphviz should have an arrow pointing to the DrakeLcmInterface.
+GTEST_TEST(DrakeVisualizerdTest, Graphviz) {
+  DrakeVisualizerd dut;
+  EXPECT_THAT(dut.GetGraphvizString(), testing::HasSubstr(" -> drakelcm"));
+}
+
 }  // namespace
 }  // namespace geometry
 }  // namespace drake

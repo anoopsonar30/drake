@@ -366,6 +366,77 @@ GTEST_TEST(Hydroelastic, GeometriesPopulationAndQuery) {
   DRAKE_EXPECT_NO_THROW(geometries.rigid_geometry(rigid_id));
 }
 
+void DoTestVanished(const Shape& shape, bool expect_vanished) {
+  SCOPED_TRACE(fmt::format("DoTestVanished: {}, expect_vanished: {}",
+                           shape.to_string(), expect_vanished));
+  Geometries geometries;
+
+  GeometryId soft_id = GeometryId::get_new_id();
+  ProximityProperties soft_properties;
+  AddCompliantHydroelasticProperties(1.0, 1e8, &soft_properties);
+  const double thickness = 1.3;
+  soft_properties.AddProperty(kHydroGroup, kSlabThickness, thickness);
+
+  geometries.MaybeAddGeometry(shape, soft_id, soft_properties);
+  EXPECT_EQ(geometries.is_vanished(soft_id), expect_vanished);
+}
+
+// Primitives may vanish if they are too small and cause numerical problems.
+
+GTEST_TEST(HydroelasticVanished, Sphere) {
+  DoTestVanished(Sphere(0.5), false);
+  DoTestVanished(Sphere(1e-6), true);
+}
+
+GTEST_TEST(HydroelasticVanished, Box) {
+  DoTestVanished(Box(0.5, 0.5, 0.5), false);
+  DoTestVanished(Box(1e-6, 1e-6, 1e-6), true);
+}
+
+GTEST_TEST(HydroelasticVanished, Capsule) {
+  DoTestVanished(Capsule(0.5, 0.5), false);
+  DoTestVanished(Capsule(1e-6, 1e-6), true);
+}
+
+GTEST_TEST(HydroelasticVanished, Cylinder) {
+  DoTestVanished(Cylinder(0.5, 0.5), false);
+  DoTestVanished(Cylinder(1e-6, 1e-6), true);
+}
+
+GTEST_TEST(HydroelasticVanished, Ellipsoid) {
+  DoTestVanished(Ellipsoid(0.5, 0.5, 0.5), false);
+  DoTestVanished(Ellipsoid(1e-6, 1e-6, 1e-6), true);
+}
+
+// Half-spaces never vanish.
+
+GTEST_TEST(HydroelasticVanished, HalfSpace) {
+  DoTestVanished(HalfSpace{}, false);
+}
+
+// Mesh types that are tiny do not vanish, and are allowed to throw exceptions
+// on degenerate gradients.
+
+GTEST_TEST(HydroelasticVanished, Mesh) {
+  const Mesh normal_mesh_specification(
+      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk"), 1e-4);
+  DoTestVanished(normal_mesh_specification, false);
+  const Mesh tiny_mesh_specification(
+      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk"), 1e-8);
+  DRAKE_EXPECT_THROWS_MESSAGE(DoTestVanished(tiny_mesh_specification, false),
+                              ".*cannot compute gradient.*");
+}
+
+GTEST_TEST(HydroelasticVanished, Convex) {
+  const Convex normal_convex_specification(
+      FindResourceOrThrow("drake/geometry/test/octahedron.obj"), 1e-4);
+  DoTestVanished(normal_convex_specification, false);
+  const Convex tiny_convex_specification(
+      FindResourceOrThrow("drake/geometry/test/octahedron.obj"), 1e-8);
+  DRAKE_EXPECT_THROWS_MESSAGE(DoTestVanished(tiny_convex_specification, false),
+                              ".*cannot compute gradient.*");
+}
+
 GTEST_TEST(Hydroelastic, RemoveGeometry) {
   Geometries geometries;
 
@@ -599,100 +670,106 @@ TEST_F(HydroelasticRigidGeometryTest, Ellipsoid) {
   }
 }
 
-// Confirm that a mesh type (convex/mesh) has a rigid representation. We rely
-// on the fact that we're loading a unit cube (vertices one unit away from the
-// origin along each axis) to confirm that the correct mesh got loaded. We also
-// confirm that the scale factor is included in the rigid representation.
-template <typename MeshType>
-void TestRigidMeshTypeFromObj(const std::string& file) {
+// Confirm that a mesh has a rigid representation. We rely on the fact that
+// we're loading a unit cube (vertices one unit away from the origin along each
+// axis) to confirm that the correct mesh got loaded. We also confirm that the
+// scale factor is included in the rigid representation.
+void TestRigidMeshCube(const Mesh& mesh) {
   // Empty props since its contents do not matter.
   ProximityProperties props;
 
   constexpr double kEps = 2 * std::numeric_limits<double>::epsilon();
 
-  for (const double scale : {1.0, 5.1, 0.4}) {
-    std::optional<RigidGeometry> geometry =
-        MakeRigidRepresentation(MeshType(file, scale), props);
-    ASSERT_NE(geometry, std::nullopt);
-    ASSERT_FALSE(geometry->is_half_space());
+  // Non-unit scale to make sure scale is being accounted for.
+  std::optional<RigidGeometry> geometry = MakeRigidRepresentation(mesh, props);
+  ASSERT_NE(geometry, std::nullopt);
+  ASSERT_FALSE(geometry->is_half_space());
 
-    // We only check that the obj file was read by verifying the number of
-    // vertices and triangles, which depend on the specific content of
-    // the obj file.
-    const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
-    EXPECT_EQ(surface_mesh.num_vertices(), 8);
-    EXPECT_EQ(surface_mesh.num_triangles(), 12);
+  // We only check that the obj file was read by verifying the number of
+  // vertices and triangles, which depend on the specific content of
+  // the obj file.
+  const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
+  EXPECT_EQ(surface_mesh.num_vertices(), 8);
+  EXPECT_EQ(surface_mesh.num_triangles(), 12);
 
-    // The scale factor multiplies the measure of every vertex position, so
-    // the expected distance of the vertex to the origin should be:
-    // scale * sqrt(3) (because the original mesh was the unit sphere).
-    const double expected_dist = std::sqrt(3) * scale;
-    for (int v = 0; v < surface_mesh.num_vertices(); ++v) {
-      const double dist = surface_mesh.vertex(v).norm();
-      ASSERT_NEAR(dist, expected_dist, scale * kEps)
-          << "for scale: " << scale << " at vertex " << v;
-    }
+  // The scale factor multiplies the measure of every vertex position, so
+  // the expected distance of the vertex to the origin should be:
+  // scale * sqrt(3) (because the original mesh was the unit sphere).
+  const double expected_dist = std::sqrt(3) * mesh.scale();
+  for (int v = 0; v < surface_mesh.num_vertices(); ++v) {
+    const double dist = surface_mesh.vertex(v).norm();
+    ASSERT_NEAR(dist, expected_dist, mesh.scale() * kEps)
+        << "for scale: " << mesh.scale() << " at vertex " << v;
   }
 }
 
 // Confirm support for a rigid Mesh. Tests that a hydroelastic representation
 // is made.
 TEST_F(HydroelasticRigidGeometryTest, Mesh) {
-  const std::string file_lower_case =
+  // We just want a non-unit scale.
+  constexpr double kScale = 0.75;
+  const std::string obj_path =
       FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
+  const std::string vtk_path =
+      FindResourceOrThrow("drake/geometry/test/cube_as_volume.vtk");
   {
-    SCOPED_TRACE("Rigid Mesh, lower-case obj extension");
-    TestRigidMeshTypeFromObj<Mesh>(file_lower_case);
+    SCOPED_TRACE("Rigid Mesh, on-disk obj");
+    TestRigidMeshCube(Mesh(obj_path, kScale));
   }
   {
-    SCOPED_TRACE("Rigid Mesh, upper-case OBJ extension");
-    const std::string file_upper_case = temp_directory() + "/quad_cube.OBJ";
-    std::filesystem::copy(file_lower_case, file_upper_case);
-    TestRigidMeshTypeFromObj<Mesh>(file_upper_case);
+    SCOPED_TRACE("Rigid Mesh, on-disk vtk");
+    TestRigidMeshCube(Mesh(vtk_path, kScale));
+  }
+  {
+    SCOPED_TRACE("Rigid Mesh, in-memory vtk");
+    TestRigidMeshCube(Mesh(InMemoryMesh{MemoryFile::Make(vtk_path)}, kScale));
   }
   {
     SCOPED_TRACE("Rigid Mesh, unsupported extension");
-    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshTypeFromObj<Mesh>("invalid.stl"),
+    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshCube(Mesh("invalid.stl", kScale)),
                                 ".*Mesh shapes can only use .*invalid.stl");
   }
 }
 
-// Confirm support for a rigid Convex. Tests that a hydroelastic representation
-// is made.
+// Confirm that Convex shapes have a rigid representation based on their convex
+// hull.
 TEST_F(HydroelasticRigidGeometryTest, Convex) {
-  {
-    SCOPED_TRACE("Rigid Convex");
-    std::string file = FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
-    TestRigidMeshTypeFromObj<Convex>(file);
-  }
-
-  {
-    SCOPED_TRACE("Rigid Convex, unsupported extension");
-    DRAKE_EXPECT_THROWS_MESSAGE(TestRigidMeshTypeFromObj<Convex>("invalid.stl"),
-                                ".*Convex shapes can only use .*invalid.stl");
-  }
-}
-
-TEST_F(HydroelasticRigidGeometryTest, MeshFromVtk) {
-  const std::string file_lower_case =
-      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk");
-  const std::string file_upper_case = temp_directory() + "/non_convex_mesh.VTK";
-  std::filesystem::copy(file_lower_case, file_upper_case);
-  // Empty props since its contents do not matter.
-  const ProximityProperties props;
-  for (const std::string& file_name : {file_lower_case, file_upper_case}) {
-    SCOPED_TRACE(file_name);
-    std::optional<RigidGeometry> geometry =
-        MakeRigidRepresentation(Mesh(file_name), props);
+  auto expect_convex_cube = [](const std::string& file) {
+    const Convex convex(file, 1.0);
+    // Empty properties since its contents do not matter.
+    const std::optional<RigidGeometry> geometry =
+        MakeRigidRepresentation(convex, ProximityProperties());
     ASSERT_NE(geometry, std::nullopt);
+    ASSERT_FALSE(geometry->is_half_space());
 
-    // We only check that the vtk file was read by verifying the number of
-    // vertices and triangles, which depend on the specific content of
-    // the vtk file.
+    // The surface mesh should be a triangulated cube.
     const TriangleSurfaceMesh<double>& surface_mesh = geometry->mesh();
-    EXPECT_EQ(surface_mesh.num_vertices(), 5);
-    EXPECT_EQ(surface_mesh.num_triangles(), 6);
+    EXPECT_EQ(surface_mesh.num_vertices(), 8);
+    EXPECT_EQ(surface_mesh.num_triangles(), 12);
+  };
+
+  {
+    SCOPED_TRACE("Rigid Convex from Obj file");
+    const std::string file =
+        FindResourceOrThrow("drake/geometry/test/cube_with_hole.obj");
+    expect_convex_cube(file);
   }
+
+  {
+    SCOPED_TRACE("Rigid Convex from glTF file");
+    const std::string file =
+        FindResourceOrThrow("drake/geometry/test/cube_with_hole.gltf");
+    expect_convex_cube(file);
+  }
+
+  // TODO(SeanCurtis-TRI): Create cube_with_hole.vtk to complete the set. It's
+  // not urgent, because, ultimately, support for glTF implies that the
+  // underlying code is using Convex::GetConvexHull() and *that* has already
+  // been unit tested with tetrahedral .vtk.
+
+  // No need to test *this* API against unsupported file types; that will be
+  // handled by the under-the-hood convex hull computation. Hydroelastics
+  // doesn't care about the mesh file, just that a convex hull is available.
 }
 
 // Template magic to instantiate a particular kind of shape at compile time.
@@ -782,7 +859,7 @@ void TestPropertyErrors(
     const char* property_name, const char* compliance,
     function<void(const ShapeType&, const ProximityProperties&)> maker,
     std::optional<ValueType> bad_value, const ProximityProperties& props) {
-  ShapeName shape_name(shape_spec);
+  const std::string_view shape_name = shape_spec.type_name();
 
   // Error case: missing property value.
   {
@@ -1180,24 +1257,31 @@ TEST_F(HydroelasticSoftGeometryTest, Convex) {
 }
 
 // Test construction of a compliant (generally non-convex) tetrahedral mesh.
+// Test against both on-disk and in-memory vtk file. All other mesh types simply
+// default to computation of its convex hull which has been tested as part
+// of the Mesh API against in-memory and on-disk data.
 TEST_F(HydroelasticSoftGeometryTest, Mesh) {
-  const Mesh mesh_specification(
-      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk"));
+  const std::string path =
+      FindResourceOrThrow("drake/geometry/test/non_convex_mesh.vtk");
+  const std::vector<Mesh> meshes{Mesh(path),
+                                 Mesh(InMemoryMesh{MemoryFile::Make(path)})};
+  for (const Mesh& mesh_specification : meshes) {
+    ProximityProperties properties = soft_properties();
+    std::optional<SoftGeometry> compliant_geometry =
+        MakeSoftRepresentation(mesh_specification, properties);
 
-  ProximityProperties properties = soft_properties();
-  std::optional<SoftGeometry> compliant_geometry =
-      MakeSoftRepresentation(mesh_specification, properties);
-
-  // Smoke test the mesh and the pressure field. It relies on unit tests for
-  // the generators of the mesh and the pressure field.
-  const int expected_num_vertices = 6;
-  EXPECT_EQ(compliant_geometry->mesh().num_vertices(), expected_num_vertices);
-  const double E = properties.GetPropertyOrDefault(kHydroGroup, kElastic, 1e8);
-  for (int v = 0; v < compliant_geometry->mesh().num_vertices(); ++v) {
-    const double pressure =
-        compliant_geometry->pressure_field().EvaluateAtVertex(v);
-    EXPECT_GE(pressure, 0);
-    EXPECT_LE(pressure, E);
+    // Smoke test the mesh and the pressure field. It relies on unit tests for
+    // the generators of the mesh and the pressure field.
+    const int expected_num_vertices = 6;
+    EXPECT_EQ(compliant_geometry->mesh().num_vertices(), expected_num_vertices);
+    const double E =
+        properties.GetPropertyOrDefault(kHydroGroup, kElastic, 1e8);
+    for (int v = 0; v < compliant_geometry->mesh().num_vertices(); ++v) {
+      const double pressure =
+          compliant_geometry->pressure_field().EvaluateAtVertex(v);
+      EXPECT_GE(pressure, 0);
+      EXPECT_LE(pressure, E);
+    }
   }
 }
 
@@ -1218,9 +1302,8 @@ TYPED_TEST_SUITE_P(HydroelasticSoftGeometryErrorTests);
 TYPED_TEST_P(HydroelasticSoftGeometryErrorTests, BadResolutionHint) {
   using ShapeType = TypeParam;
   ShapeType shape_spec = make_default_shape<ShapeType>();
-  if (ShapeName(shape_spec).name() != "HalfSpace" &&
-      ShapeName(shape_spec).name() != "Box" &&
-      ShapeName(shape_spec).name() != "Convex") {
+  if (shape_spec.type_name() != "HalfSpace" &&
+      shape_spec.type_name() != "Box" && shape_spec.type_name() != "Convex") {
     TestPropertyErrors<ShapeType, double>(
         shape_spec, kHydroGroup, kRezHint, "soft",
         [](const ShapeType& s, const ProximityProperties& p) {
@@ -1251,7 +1334,7 @@ TYPED_TEST_P(HydroelasticSoftGeometryErrorTests, BadSlabThickness) {
   using ShapeType = TypeParam;
   ShapeType shape_spec = make_default_shape<ShapeType>();
   // Half space only!
-  if (ShapeName(shape_spec).name() == "HalfSpace") {
+  if (shape_spec.type_name() == "HalfSpace") {
     TestPropertyErrors<ShapeType, double>(
         shape_spec, kHydroGroup, kSlabThickness, "soft",
         [](const ShapeType& s, const ProximityProperties& p) {

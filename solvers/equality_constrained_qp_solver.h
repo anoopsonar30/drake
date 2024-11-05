@@ -21,7 +21,7 @@ namespace solvers {
  */
 class EqualityConstrainedQPSolver final : public SolverBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EqualityConstrainedQPSolver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EqualityConstrainedQPSolver);
 
   EqualityConstrainedQPSolver();
   ~EqualityConstrainedQPSolver() final;
@@ -41,8 +41,9 @@ class EqualityConstrainedQPSolver final : public SolverBase {
   using SolverBase::Solve;
 
  private:
-  void DoSolve(const MathematicalProgram&, const Eigen::VectorXd&,
-               const SolverOptions&, MathematicalProgramResult*) const final;
+  void DoSolve2(const MathematicalProgram&, const Eigen::VectorXd&,
+                internal::SpecificOptions*,
+                MathematicalProgramResult*) const final;
 };
 
 }  // namespace solvers

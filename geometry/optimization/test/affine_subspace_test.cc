@@ -8,6 +8,7 @@
 #include "drake/geometry/optimization/convex_set.h"
 #include "drake/geometry/optimization/hpolyhedron.h"
 #include "drake/geometry/optimization/hyperellipsoid.h"
+#include "drake/geometry/optimization/hyperrectangle.h"
 #include "drake/geometry/optimization/intersection.h"
 #include "drake/geometry/optimization/minkowski_sum.h"
 #include "drake/geometry/optimization/point.h"
@@ -19,15 +20,27 @@ namespace drake {
 namespace geometry {
 namespace optimization {
 
+using Eigen::MatrixXd;
+using Eigen::Vector2d;
+using Eigen::Vector3d;
+using Eigen::VectorXd;
+using solvers::Binding;
+using solvers::Constraint;
+using solvers::MathematicalProgram;
+using solvers::Solve;
+using solvers::VectorXDecisionVariable;
+using symbolic::Variable;
+
 void CheckOrthogonalComplementBasis(const AffineSubspace& as) {
-  Eigen::MatrixXd perpendicular_basis = as.OrthogonalComplementBasis();
+  MatrixXd perpendicular_basis = as.OrthogonalComplementBasis();
   EXPECT_EQ(perpendicular_basis.cols(),
             as.ambient_dimension() - as.AffineDimension());
   EXPECT_EQ(perpendicular_basis.rows(), as.ambient_dimension());
   // Check that every perpendicular basis vector is orthogonal to
-  // every basis vector.
+  // every basis vector, and that no basis vector has norm zero.
   const double kTol = 1e-15;
   for (int i = 0; i < perpendicular_basis.cols(); ++i) {
+    EXPECT_GE(perpendicular_basis.col(i).norm(), kTol);
     for (int j = 0; j < as.basis().cols(); ++j) {
       EXPECT_NEAR(0, as.basis().col(j).dot(perpendicular_basis.col(i)), kTol);
     }
@@ -46,24 +59,27 @@ GTEST_TEST(AffineSubspaceTest, DefaultCtor) {
   EXPECT_TRUE(dut.MaybeGetPoint().has_value());
   ASSERT_TRUE(dut.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(dut.PointInSet(dut.MaybeGetFeasiblePoint().value()));
-  EXPECT_TRUE(dut.PointInSet(Eigen::VectorXd::Zero(0)));
+  EXPECT_TRUE(dut.PointInSet(VectorXd::Zero(0)));
   EXPECT_TRUE(dut.IntersectsWith(dut));
-  EXPECT_NO_THROW(dut.Project(Eigen::VectorXd::Zero(0)));
   EXPECT_EQ(dut.AffineDimension(), 0);
-  Eigen::VectorXd test_point(0);
+  VectorXd test_point(0);
   EXPECT_EQ(dut.ToLocalCoordinates(test_point).size(), 0);
   EXPECT_TRUE(CompareMatrices(dut.ToLocalCoordinates(test_point), test_point));
+  const auto projection_result = dut.Projection(test_point);
+  const auto& [distances, projections] = projection_result.value();
   EXPECT_TRUE(CompareMatrices(
       dut.ToGlobalCoordinates(dut.ToLocalCoordinates(test_point)),
-      dut.Project(test_point)));
+      projections));
   EXPECT_TRUE(dut.ContainedIn(AffineSubspace()));
   EXPECT_TRUE(dut.IsNearlyEqualTo(AffineSubspace()));
   CheckOrthogonalComplementBasis(dut);
+  EXPECT_TRUE(dut.has_exact_volume());
+  EXPECT_THROW(dut.CalcVolume(), std::exception);
 }
 
 GTEST_TEST(AffineSubspaceTest, Point) {
   Eigen::Matrix<double, 3, 0> basis;
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 1, 2, 3;
   const AffineSubspace as(basis, translation);
 
@@ -78,33 +94,36 @@ GTEST_TEST(AffineSubspaceTest, Point) {
   ASSERT_TRUE(as.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(as.PointInSet(as.MaybeGetFeasiblePoint().value()));
   EXPECT_TRUE(as.PointInSet(translation));
-  EXPECT_FALSE(as.PointInSet(Eigen::VectorXd::Zero(3)));
+  EXPECT_FALSE(as.PointInSet(VectorXd::Zero(3)));
   EXPECT_TRUE(as.IntersectsWith(as));
-  EXPECT_TRUE(as.PointInSet(as.Project(Eigen::VectorXd::Zero(3))));
+  auto projection_result = as.Projection(VectorXd::Zero(3));
+  EXPECT_TRUE(as.PointInSet(std::get<1>(projection_result.value())));
   CheckOrthogonalComplementBasis(as);
+  EXPECT_EQ(as.CalcVolume(), 0);
 
   // Should throw because the ambient dimension is wrong.
-  EXPECT_THROW(as.Project(Eigen::VectorXd::Zero(1)), std::exception);
+  EXPECT_THROW(as.Projection(VectorXd::Zero(1)), std::exception);
 
   // Test local coordinates
   EXPECT_EQ(as.AffineDimension(), 0);
-  Eigen::VectorXd test_point(3);
+  VectorXd test_point(3);
   test_point << 42, 27, 0;
   EXPECT_EQ(as.ToLocalCoordinates(test_point).size(), 0);
-  EXPECT_TRUE(CompareMatrices(as.ToLocalCoordinates(test_point),
-                              Eigen::VectorXd::Zero(0)));
   EXPECT_TRUE(
-      CompareMatrices(as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point)),
-                      as.Project(test_point)));
+      CompareMatrices(as.ToLocalCoordinates(test_point), VectorXd::Zero(0)));
+  projection_result = as.Projection(test_point);
+  const auto& [distances, projections] = projection_result.value();
   EXPECT_TRUE(CompareMatrices(
-      as.ToLocalCoordinates(as.ToGlobalCoordinates(Eigen::VectorXd::Zero(0))),
-      Eigen::VectorXd::Zero(0)));
+      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point)), projections));
+  EXPECT_TRUE(CompareMatrices(
+      as.ToLocalCoordinates(as.ToGlobalCoordinates(VectorXd::Zero(0))),
+      VectorXd::Zero(0)));
 }
 
 GTEST_TEST(AffineSubspaceTest, Line) {
   Eigen::Matrix<double, 3, 1> basis;
   basis << 1, 1, 0;
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 1, 0, 0;
   const AffineSubspace as(basis, translation);
 
@@ -121,31 +140,40 @@ GTEST_TEST(AffineSubspaceTest, Line) {
   ASSERT_TRUE(as.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(as.PointInSet(as.MaybeGetFeasiblePoint().value()));
   EXPECT_TRUE(as.PointInSet(translation));
-  Eigen::VectorXd test_point(3);
+  VectorXd test_point(3);
   test_point << 2, 1, 0;
   EXPECT_TRUE(as.PointInSet(test_point, kTol));
-  EXPECT_FALSE(as.PointInSet(Eigen::VectorXd::Zero(3), kTol));
+  EXPECT_FALSE(as.PointInSet(VectorXd::Zero(3), kTol));
   EXPECT_TRUE(as.IntersectsWith(as));
-  EXPECT_TRUE(as.PointInSet(as.Project(Eigen::VectorXd::Zero(3)), kTol));
+  const auto projection_result = as.Projection(VectorXd::Zero(3));
+  ASSERT_TRUE(projection_result.has_value());
+  const auto& [distances, projections] = projection_result.value();
+  EXPECT_TRUE(as.PointInSet(projections, kTol));
   CheckOrthogonalComplementBasis(as);
+  EXPECT_EQ(as.CalcVolume(), 0);
 
   // Test local coordinates
   EXPECT_EQ(as.AffineDimension(), 1);
-  Eigen::VectorXd test_point2(3);
+  VectorXd test_point2(3);
   test_point2 << 2, 1, 1;
-  Eigen::VectorXd expected_project(3);
+  VectorXd expected_project(3);
   expected_project << 2, 1, 0;
-  Eigen::VectorXd expected_local_coords(1);
+  VectorXd expected_local_coords(1);
   expected_local_coords << 1;
   EXPECT_EQ(as.ToLocalCoordinates(test_point2).size(), 1);
   EXPECT_TRUE(CompareMatrices(as.ToLocalCoordinates(test_point2),
                               expected_local_coords, kTol));
+  const auto projection_result2 = as.Projection(test_point2);
+  ASSERT_TRUE(projection_result2.has_value());
+  const auto& [distances2, projections2] = projection_result2.value();
   EXPECT_TRUE(CompareMatrices(
-      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)),
-      as.Project(test_point2), kTol));
+      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)), projections2,
+      kTol));
   EXPECT_TRUE(CompareMatrices(
       as.ToLocalCoordinates(as.ToGlobalCoordinates(expected_local_coords)),
       expected_local_coords, kTol));
+  EXPECT_TRUE(as.PointInSet(projections, kTol));
+  EXPECT_TRUE(as.PointInSet(projections2, kTol));
 }
 
 GTEST_TEST(AffineSubspaceTest, Plane) {
@@ -155,7 +183,7 @@ GTEST_TEST(AffineSubspaceTest, Plane) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
@@ -172,28 +200,34 @@ GTEST_TEST(AffineSubspaceTest, Plane) {
   ASSERT_TRUE(as.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(as.PointInSet(as.MaybeGetFeasiblePoint().value()));
   EXPECT_TRUE(as.PointInSet(translation));
-  Eigen::VectorXd test_point(3);
+  VectorXd test_point(3);
   test_point << 43, -7, 1;
   EXPECT_TRUE(as.PointInSet(test_point));
-  EXPECT_FALSE(as.PointInSet(Eigen::VectorXd::Zero(3)));
+  EXPECT_FALSE(as.PointInSet(VectorXd::Zero(3)));
   EXPECT_TRUE(as.IntersectsWith(as));
-  EXPECT_TRUE(as.PointInSet(as.Project(Eigen::VectorXd::Zero(3))));
+  const auto projection_result = as.Projection(VectorXd::Zero(3));
+  ASSERT_TRUE(projection_result.has_value());
+  EXPECT_TRUE(as.PointInSet(std::get<1>(projection_result.value())));
   CheckOrthogonalComplementBasis(as);
+  EXPECT_EQ(as.CalcVolume(), 0);
 
   // Test local coordinates
   EXPECT_EQ(as.AffineDimension(), 2);
-  Eigen::VectorXd test_point2(3);
+  VectorXd test_point2(3);
   test_point2 << 42, 27, 0;
-  Eigen::VectorXd expected_project(3);
+  VectorXd expected_project(3);
   expected_project << 42, 27, 1;
-  Eigen::VectorXd expected_local_coords(2);
+  VectorXd expected_local_coords(2);
   expected_local_coords << 42, 27;
   EXPECT_EQ(as.ToLocalCoordinates(test_point2).size(), 2);
   EXPECT_TRUE(CompareMatrices(as.ToLocalCoordinates(test_point2),
                               expected_local_coords, kTol));
+  const auto projection_result2 = as.Projection(test_point2);
+  ASSERT_TRUE(projection_result.has_value());
+  const auto& [distances2, projections2] = projection_result2.value();
   EXPECT_TRUE(CompareMatrices(
-      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)),
-      as.Project(test_point2), kTol));
+      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)), projections2,
+      kTol));
   EXPECT_TRUE(CompareMatrices(
       as.ToLocalCoordinates(as.ToGlobalCoordinates(expected_local_coords)),
       expected_local_coords, kTol));
@@ -206,7 +240,7 @@ GTEST_TEST(AffineSubspaceTest, VolumeInR3) {
            0, 1, 0,
            0, 0, 1;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
@@ -223,28 +257,32 @@ GTEST_TEST(AffineSubspaceTest, VolumeInR3) {
   ASSERT_TRUE(as.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(as.PointInSet(as.MaybeGetFeasiblePoint().value()));
   EXPECT_TRUE(as.PointInSet(translation));
-  Eigen::VectorXd test_point(3);
+  VectorXd test_point(3);
   test_point << 43, -7, 1;
   EXPECT_TRUE(as.PointInSet(test_point));
-  EXPECT_TRUE(as.PointInSet(Eigen::VectorXd::Zero(3)));
+  EXPECT_TRUE(as.PointInSet(VectorXd::Zero(3)));
   EXPECT_TRUE(as.IntersectsWith(as));
-  EXPECT_TRUE(as.PointInSet(as.Project(Eigen::VectorXd::Zero(3))));
+  const auto projection_result = as.Projection(VectorXd::Zero(3));
+  ASSERT_TRUE(projection_result.has_value());
+  EXPECT_TRUE(as.PointInSet(std::get<1>(projection_result.value())));
   CheckOrthogonalComplementBasis(as);
+  EXPECT_EQ(as.CalcVolume(), std::numeric_limits<double>::infinity());
 
   // Test local coordinates
   EXPECT_EQ(as.AffineDimension(), 3);
-  Eigen::VectorXd test_point2(3);
+  VectorXd test_point2(3);
   test_point2 << 42, 27, 1;
-  Eigen::VectorXd expected_project(3);
+  VectorXd expected_project(3);
   expected_project << 42, 27, 1;
-  Eigen::VectorXd expected_local_coords(3);
+  VectorXd expected_local_coords(3);
   expected_local_coords << 42, 27, 0;
   EXPECT_EQ(as.ToLocalCoordinates(test_point2).size(), 3);
   EXPECT_TRUE(CompareMatrices(as.ToLocalCoordinates(test_point2),
                               expected_local_coords, kTol));
-  EXPECT_TRUE(CompareMatrices(
-      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)),
-      as.Project(test_point2), kTol));
+  const auto projection_result2 = as.Projection(test_point2);
+  ASSERT_TRUE(projection_result2.has_value());
+  const auto& [_, projections2] = projection_result2.value();
+  EXPECT_TRUE(CompareMatrices(projections2, expected_project, kTol));
   EXPECT_TRUE(CompareMatrices(
       as.ToLocalCoordinates(as.ToGlobalCoordinates(expected_local_coords)),
       expected_local_coords, kTol));
@@ -258,7 +296,7 @@ GTEST_TEST(AffineSubspaceTest, VolumeInR4) {
            0, 0, 1,
            0, 0, 0;
   // clang-format on
-  Eigen::VectorXd translation(4);
+  VectorXd translation(4);
   translation << 0, 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
@@ -275,28 +313,32 @@ GTEST_TEST(AffineSubspaceTest, VolumeInR4) {
   ASSERT_TRUE(as.MaybeGetFeasiblePoint().has_value());
   EXPECT_TRUE(as.PointInSet(as.MaybeGetFeasiblePoint().value()));
   EXPECT_TRUE(as.PointInSet(translation));
-  Eigen::VectorXd test_point(4);
+  VectorXd test_point(4);
   test_point << 43, -7, 1, 1;
   EXPECT_TRUE(as.PointInSet(test_point));
-  EXPECT_FALSE(as.PointInSet(Eigen::VectorXd::Zero(4)));
+  EXPECT_FALSE(as.PointInSet(VectorXd::Zero(4)));
   EXPECT_TRUE(as.IntersectsWith(as));
-  EXPECT_TRUE(as.PointInSet(as.Project(Eigen::VectorXd::Zero(4))));
+  const auto projection_result = as.Projection(VectorXd::Zero(4));
+  ASSERT_TRUE(projection_result.has_value());
+  EXPECT_TRUE(as.PointInSet(std::get<1>(projection_result.value())));
   CheckOrthogonalComplementBasis(as);
+  EXPECT_EQ(as.CalcVolume(), 0);
 
   // Test local coordinates
   EXPECT_EQ(as.AffineDimension(), 3);
-  Eigen::VectorXd test_point2(4);
+  VectorXd test_point2(4);
   test_point2 << 42, 27, -7, 0;
-  Eigen::VectorXd expected_project(4);
+  VectorXd expected_project(4);
   expected_project << 42, 27, -7, 1;
-  Eigen::VectorXd expected_local_coords(3);
+  VectorXd expected_local_coords(3);
   expected_local_coords << 42, 27, -7;
   EXPECT_EQ(as.ToLocalCoordinates(test_point2).size(), 3);
   EXPECT_TRUE(CompareMatrices(as.ToLocalCoordinates(test_point2),
                               expected_local_coords, kTol));
-  EXPECT_TRUE(CompareMatrices(
-      as.ToGlobalCoordinates(as.ToLocalCoordinates(test_point2)),
-      as.Project(test_point2), kTol));
+  const auto projection_result2 = as.Projection(test_point2);
+  ASSERT_TRUE(projection_result2.has_value());
+  const auto& [_, projections2] = projection_result2.value();
+  EXPECT_TRUE(CompareMatrices(projections2, expected_project, kTol));
   EXPECT_TRUE(CompareMatrices(
       as.ToLocalCoordinates(as.ToGlobalCoordinates(expected_local_coords)),
       expected_local_coords, kTol));
@@ -312,7 +354,7 @@ GTEST_TEST(AffineSubspaceTest, NotABasis1) {
            0, 1, 1;
   // clang-format on
 
-  Eigen::VectorXd translation(2);
+  VectorXd translation(2);
   translation << 0, 1;
   EXPECT_THROW(AffineSubspace(basis, translation), std::exception);
 }
@@ -327,7 +369,7 @@ GTEST_TEST(AffineSubspaceTest, NotABasis2) {
            0, 0;
   // clang-format on
 
-  Eigen::VectorXd translation(2);
+  VectorXd translation(2);
   translation << 0, 1;
   EXPECT_THROW(AffineSubspace(basis, translation), std::exception);
 }
@@ -339,7 +381,7 @@ GTEST_TEST(AffineSubspaceTest, Serialize) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
   const std::string yaml = yaml::SaveYamlString(as);
@@ -356,7 +398,7 @@ GTEST_TEST(AffineSubspaceTest, Move) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace orig(basis, translation);
 
@@ -378,7 +420,7 @@ GTEST_TEST(AffineSubspaceTest, CloneTest) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
@@ -397,13 +439,13 @@ GTEST_TEST(AffineSubspaceTest, PointInSetConstraints) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
   const double kTol = 1e-11;
 
-  solvers::MathematicalProgram prog;
+  MathematicalProgram prog;
   auto x = prog.NewContinuousVariables<3>();
   auto [new_vars, new_constraints] = as.AddPointInSetConstraints(&prog, x);
 
@@ -412,13 +454,112 @@ GTEST_TEST(AffineSubspaceTest, PointInSetConstraints) {
   EXPECT_EQ(new_constraints.size(), 1);
   EXPECT_EQ(new_vars.rows(), as.basis().cols());
 
-  auto result = solvers::Solve(prog);
+  auto result = Solve(prog);
   ASSERT_TRUE(result.is_success());
   const auto new_vars_val = result.GetSolution(new_vars);
-  const Eigen::Vector3d x_val = result.GetSolution(x);
+  const Vector3d x_val = result.GetSolution(x);
   EXPECT_TRUE(as.PointInSet(x_val, kTol));
   EXPECT_TRUE(
       CompareMatrices(x_val, as.basis() * new_vars_val + translation, kTol));
+}
+
+GTEST_TEST(AffineSubspaceTest, PointInNonnegativeScalingConstraints) {
+  Eigen::Matrix<double, 3, 2> basis;
+  // clang-format off
+  basis << 1, 0,
+           0, 1,
+           0, 0;
+  // clang-format on
+  VectorXd translation(3);
+  translation << 0, 0, 1;
+  const AffineSubspace as(basis, translation);
+
+  MathematicalProgram prog;
+  auto x = prog.NewContinuousVariables(3, "x");
+  auto t = prog.NewContinuousVariables(1, "t")[0];
+
+  std::vector<Binding<Constraint>> constraints =
+      as.AddPointInNonnegativeScalingConstraints(&prog, x, t);
+
+  EXPECT_EQ(constraints.size(), 2);
+
+  // Because the nonnegative scaling constraints rely on an additional (hidden)
+  // variable y, to check the constraint, we solve an optimization problem,
+  // fixing the values of x and t. Success implies a feasible value was found
+  // for the unconstrained variable y.
+
+  Vector3d x_test_value = Vector3d::Zero();
+  double t_test_value = 0;
+  auto x_constraint = prog.AddLinearEqualityConstraint(MatrixXd::Identity(3, 3),
+                                                       x_test_value, x);
+  auto t_constraint = prog.AddLinearEqualityConstraint(
+      MatrixXd::Identity(1, 1), Vector1d(t_test_value), Vector1<Variable>(t));
+
+  // Test values for x, t, and whether the constraint is satisfied.
+  const std::vector<std::tuple<Vector3d, double, bool>> test_x_t{
+      {Vector3d(-43.0, 43.0, 0.0), 0.0, true},
+      {Vector3d(-43.0, 43.0, 0.5), 0.5, true},
+      {Vector3d(-43.0, 43.0, 3.0), 3.0, true},
+      {Vector3d(-43.0, 43.0, -1.0), 0.0, false},
+      {Vector3d(-43.0, 43.0, -1.0), 1.0, false},
+      {Vector3d(-43.0, 43.0, 0.0), -1.0, false},
+      {Vector3d(-43.0, 43.0, 5.0), 0.0, false},
+      {Vector3d(-43.0, 43.0, 1.0), 0.5, false}};
+
+  for (const auto& [x_val, t_val, expect_success] : test_x_t) {
+    x_constraint.evaluator()->UpdateCoefficients(MatrixXd::Identity(3, 3),
+                                                 x_val);
+    t_constraint.evaluator()->UpdateCoefficients(MatrixXd::Identity(1, 1),
+                                                 Vector1d(t_val));
+    auto result = Solve(prog);
+    EXPECT_EQ(result.is_success(), expect_success);
+  }
+
+  MatrixXd A(3, 2);
+  // clang-format off
+  A << 1, 0,
+       0, 1,
+       2, 0;
+  // clang-format on
+  Vector3d b = Vector3d::Zero();
+  Vector2d c(1, -1);
+  double d = 0;
+
+  MathematicalProgram prog2;
+  auto x2 = prog2.NewContinuousVariables(2, "x");
+  auto t2 = prog2.NewContinuousVariables(2, "t");
+
+  std::vector<Binding<Constraint>> constraints2 =
+      as.AddPointInNonnegativeScalingConstraints(&prog2, A, b, c, d, x2, t2);
+
+  EXPECT_EQ(constraints2.size(), 2);
+
+  Vector2d x2_test_value = Vector2d::Zero();
+  Vector2d t2_test_value = Vector2d::Zero();
+  auto x2_constraint = prog2.AddLinearEqualityConstraint(
+      MatrixXd::Identity(2, 2), x2_test_value, x2);
+  auto t2_constraint = prog2.AddLinearEqualityConstraint(
+      MatrixXd::Identity(2, 2), t2_test_value, t2);
+
+  const std::vector<std::tuple<Vector2d, Vector2d, bool>> test_x2_t2{
+      {Vector2d{1.0, 1.0}, Vector2d{2.0, 0.0}, true},
+      {Vector2d(2.0, 1.0), Vector2d(4.0, 0.0), true},
+      {Vector2d(0.0, 1.0), Vector2d(0.0, 0.0), true},
+      {Vector2d(0.0, 1.0), Vector2d(1.0, 1.0), true},
+      {Vector2d(2.0, 1.0), Vector2d(0.0, -4.0), true},
+      {Vector2d{1.0, 1.0}, Vector2d{0.0, 0.0}, false},
+      {Vector2d{1.0, 1.0}, Vector2d{1.0, 0.0}, false},
+      {Vector2d{-1.0, 1.0}, Vector2d{0.0, 2.0}, false},
+      {Vector2d{-1.0, 1.0}, Vector2d{-2.0, 0.0}, false}};
+
+  for (const auto& [x2_val, t2_val, expect_success] : test_x2_t2) {
+    x2_constraint.evaluator()->UpdateCoefficients(MatrixXd::Identity(2, 2),
+                                                  x2_val);
+    t2_constraint.evaluator()->UpdateCoefficients(MatrixXd::Identity(2, 2),
+                                                  t2_val);
+    auto result2 = Solve(prog2);
+    EXPECT_EQ(result2.is_success(), expect_success);
+  }
 }
 
 // Check that the ConvexSet is contained in an AffineSubspace
@@ -428,22 +569,22 @@ bool CheckAffineSubspaceSetContainment(const AffineSubspace& as,
     // The empty set is contained in every affine subspace.
     return true;
   }
-  Eigen::VectorXd feasible_point = set.MaybeGetFeasiblePoint().value();
+  VectorXd feasible_point = set.MaybeGetFeasiblePoint().value();
   if (!as.PointInSet(feasible_point, tol)) {
     return false;
   }
 
-  solvers::MathematicalProgram prog;
+  MathematicalProgram prog;
 
   // x represents the offset relative to the feasible point. We add a bounding
   // box constraint to ensure the problem is not unbounded.
-  solvers::VectorXDecisionVariable x =
+  VectorXDecisionVariable x =
       prog.NewContinuousVariables(set.ambient_dimension(), "x");
   prog.AddBoundingBoxConstraint(-1, 1, x);
 
   // y represents the actual point we are finding, so as to constrain it
   // to lie within the convex set.
-  solvers::VectorXDecisionVariable y =
+  VectorXDecisionVariable y =
       prog.NewContinuousVariables(set.ambient_dimension(), "y");
   prog.AddLinearConstraint(y == x + feasible_point);
   set.AddPointInSetConstraints(&prog, y);
@@ -451,9 +592,8 @@ bool CheckAffineSubspaceSetContainment(const AffineSubspace& as,
   // This is the objective we use. We will iteratively try to minimize and
   // maximize the ith component of x for each dimension to find a feasible point
   // along that axis, and then check that it's contained in the affine hull.
-  Eigen::VectorXd new_objective_vector =
-      Eigen::VectorXd::Zero(set.ambient_dimension());
-  solvers::Binding<solvers::LinearCost> objective =
+  VectorXd new_objective_vector = VectorXd::Zero(set.ambient_dimension());
+  Binding<solvers::LinearCost> objective =
       prog.AddLinearCost(new_objective_vector, x);
 
   for (int i = 0; i < set.ambient_dimension(); ++i) {
@@ -461,7 +601,7 @@ bool CheckAffineSubspaceSetContainment(const AffineSubspace& as,
     new_objective_vector[i] = 1;
     objective.evaluator()->UpdateCoefficients(new_objective_vector);
 
-    auto result = solvers::Solve(prog);
+    auto result = Solve(prog);
     DRAKE_DEMAND(result.is_success());
     if (!as.PointInSet(result.GetSolution(y), tol)) {
       return false;
@@ -470,7 +610,7 @@ bool CheckAffineSubspaceSetContainment(const AffineSubspace& as,
     new_objective_vector[i] = -1;
     objective.evaluator()->UpdateCoefficients(new_objective_vector);
 
-    result = solvers::Solve(prog);
+    result = Solve(prog);
     DRAKE_DEMAND(result.is_success());
     if (!as.PointInSet(result.GetSolution(y), tol)) {
       return false;
@@ -489,25 +629,34 @@ bool CheckAffineSubspaceSetContainment(const AffineSubspace& as,
 // don't have the affine hull, since it's not the smallest affine set
 // containing the ConvexSet.
 void CheckAffineHullTightness(const AffineSubspace& as, const ConvexSet& set,
-                              double tol = 0) {
+                              double tol = 1e-12) {
   ASSERT_TRUE(as.ambient_dimension() == set.ambient_dimension());
   ASSERT_FALSE(set.IsEmpty());
 
-  const Eigen::VectorXd translation = as.translation();
-  const Eigen::MatrixXd basis = as.basis();
+  const VectorXd translation = as.translation();
+  const MatrixXd basis = as.basis();
 
   for (int i = 0; i < basis.cols(); ++i) {
     const int right_cols_num = basis.cols() - i - 1;
-    Eigen::MatrixXd new_basis(basis.rows(), basis.cols() - 1);
+    MatrixXd new_basis(basis.rows(), basis.cols() - 1);
     new_basis << basis.leftCols(i), basis.rightCols(right_cols_num);
     const AffineSubspace new_as(new_basis, translation);
     EXPECT_FALSE(CheckAffineSubspaceSetContainment(new_as, set, tol));
   }
 }
 
+GTEST_TEST(AffineSubspaceTest, AffineHulToleranceAPI) {
+  // Don't accept a negative tolerance (even if it will be ignored by the
+  // function based on the subclass of ConvexSet).
+  Point p(Vector1d(1.0));
+  HPolyhedron h = HPolyhedron::MakeUnitBox(1);
+  EXPECT_THROW(AffineSubspace(p, -1.0), std::exception);
+  EXPECT_THROW(AffineSubspace(h, -1.0), std::exception);
+}
+
 GTEST_TEST(AffineSubspaceTest, AffineHullCartesianProduct) {
   // Point VPolytope
-  VPolytope point(Eigen::Vector2d(2, -1));
+  VPolytope point(Vector2d(2, -1));
 
   // Line segment VPolytope
   Eigen::Matrix<double, 3, 2> line_segment_points;
@@ -528,7 +677,7 @@ GTEST_TEST(AffineSubspaceTest, AffineHullCartesianProduct) {
 
   const double kTol = 1e-15;
 
-  Eigen::VectorXd test_point(5);
+  VectorXd test_point(5);
   test_point << 2, -1, 2, 2, 2;
   EXPECT_TRUE(as.PointInSet(test_point, kTol));
 
@@ -537,7 +686,7 @@ GTEST_TEST(AffineSubspaceTest, AffineHullCartesianProduct) {
 }
 
 GTEST_TEST(AffineSubspaceTest, AffineHullHPolyhedron) {
-  // Test a full-dimensional HPolyhedron
+  // Test a full-dimensional HPolyhedron.
   HPolyhedron h1 = HPolyhedron::MakeUnitBox(3);
   AffineSubspace as1(h1);
 
@@ -551,20 +700,20 @@ GTEST_TEST(AffineSubspaceTest, AffineHullHPolyhedron) {
   EXPECT_TRUE(CheckAffineSubspaceSetContainment(as1, h1, kTol));
   CheckAffineHullTightness(as1, h1, kTol);
 
-  // Test a not-full-dimensional HPolyhedron
-  Eigen::MatrixXd A(6, 3);
-  Eigen::VectorXd b(6);
+  // Test a not-full-dimensional HPolyhedron.
+  MatrixXd A2(6, 3);
+  VectorXd b2(6);
 
   // clang-format off
-  A <<  1,  0,  0,
-       -1,  0,  0,
-        0,  1,  0,
-        0, -1,  0,
-        0,  0,  1,
-        0,  0, -1;
-  b << 1, 0, 1, 0, 0, 0;
+  A2 <<  1,  0,  0,
+        -1,  0,  0,
+         0,  1,  0,
+         0, -1,  0,
+         0,  0,  1,
+         0,  0, -1;
+  b2 << 1, 0, 1, 0, 0, 0;
   // clang-format on
-  HPolyhedron h2(A, b);
+  HPolyhedron h2(A2, b2);
 
   const double kTol2 = 1e-6;
 
@@ -577,6 +726,29 @@ GTEST_TEST(AffineSubspaceTest, AffineHullHPolyhedron) {
 
   EXPECT_TRUE(CheckAffineSubspaceSetContainment(as2, h2, kTol2));
   CheckAffineHullTightness(as2, h2, kTol2);
+
+  // Numerically-challenging HPolyhedron from #20985.
+  Eigen::Matrix<double, 6, 3> A3;
+  Eigen::Vector<double, 6> b3;
+  // clang-format off
+  A3 <<  1,  0,  0,
+         0,  1,  0,
+         0,  0,  1,
+        -1,  0,  0,
+         0, -1,  0,
+         0,  0, -1;
+  // clang-format on
+  b3 << 0.03, 0.03, 0.075, 0.03, 0.03, 0.075;
+  const HPolyhedron h3(A3, b3);
+  const AffineSubspace as3(h3, 0);
+
+  EXPECT_EQ(as3.basis().cols(), 3);
+  EXPECT_EQ(as3.basis().rows(), 3);
+  EXPECT_EQ(as3.translation().size(), 3);
+  EXPECT_EQ(as3.ambient_dimension(), 3);
+
+  EXPECT_TRUE(CheckAffineSubspaceSetContainment(as3, h3, kTol2));
+  CheckAffineHullTightness(as3, h3, kTol2);
 }
 
 GTEST_TEST(AffineSubspaceTest, AffineHullHyperellipsoid) {
@@ -585,7 +757,7 @@ GTEST_TEST(AffineSubspaceTest, AffineHullHyperellipsoid) {
   const math::RotationMatrixd R =
       math::RotationMatrixd::MakeZRotation(M_PI / 2.0);
   const Eigen::Matrix3d A = D * R.matrix();
-  const Eigen::Vector3d center{4.0, 5.0, 6.0};
+  const Vector3d center{4.0, 5.0, 6.0};
 
   Hyperellipsoid E(A, center);
   AffineSubspace as(E);
@@ -599,11 +771,28 @@ GTEST_TEST(AffineSubspaceTest, AffineHullHyperellipsoid) {
   CheckAffineHullTightness(as, E);
 }
 
+GTEST_TEST(AffineSubspaceTest, AffineHullHyperrectangle) {
+  const Eigen::Vector3d lb{0, -1, -1};
+  const Eigen::Vector3d ub{0, 1, 1};
+
+  Hyperrectangle H(lb, ub);
+  AffineSubspace as(H);
+
+  EXPECT_EQ(as.basis().cols(), 2);
+  EXPECT_EQ(as.basis().rows(), 3);
+  EXPECT_EQ(as.translation().size(), 3);
+  EXPECT_EQ(as.ambient_dimension(), 3);
+
+  const double kTol = 1e-15;
+  EXPECT_TRUE(CheckAffineSubspaceSetContainment(as, H, kTol));
+  CheckAffineHullTightness(as, H);
+}
+
 GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
   // Point-Line intersection
 
   // Point VPolytope
-  VPolytope point(Eigen::Vector3d(0.5, 0.5, 0.5));
+  VPolytope point(Vector3d(0.5, 0.5, 0.5));
 
   // Line segment VPolytope
   Eigen::Matrix<double, 3, 2> line_segment_points;
@@ -618,8 +807,8 @@ GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
   AffineSubspace as1(i1);
 
   const double kTol1 = 1e-6;
-  EXPECT_TRUE(i1.PointInSet(Eigen::Vector3d(0.5, 0.5, 0.5), kTol1));
-  EXPECT_TRUE(as1.PointInSet(Eigen::Vector3d(0.5, 0.5, 0.5), kTol1));
+  EXPECT_TRUE(i1.PointInSet(Vector3d(0.5, 0.5, 0.5), kTol1));
+  EXPECT_TRUE(as1.PointInSet(Vector3d(0.5, 0.5, 0.5), kTol1));
 
   EXPECT_EQ(as1.basis().cols(), 0);
   EXPECT_EQ(as1.basis().rows(), 3);
@@ -639,7 +828,7 @@ GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
   AffineSubspace as2(i2);
 
   const double kTol2 = 1e-6;
-  const Eigen::Vector3d one_third(1. / 3., 1. / 3., 1. / 3.);
+  const Vector3d one_third(1. / 3., 1. / 3., 1. / 3.);
   EXPECT_TRUE(i2.PointInSet(one_third, kTol2));
   EXPECT_TRUE(as2.PointInSet(one_third, kTol2));
 
@@ -661,11 +850,11 @@ GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
   AffineSubspace as3(i3);
 
   const double kTol3 = 1e-6;
-  EXPECT_TRUE(i3.PointInSet(Eigen::Vector3d(0, 0, 0), kTol3));
-  EXPECT_TRUE(i3.PointInSet(Eigen::Vector3d(1, 1, 1), kTol3));
+  EXPECT_TRUE(i3.PointInSet(Vector3d(0, 0, 0), kTol3));
+  EXPECT_TRUE(i3.PointInSet(Vector3d(1, 1, 1), kTol3));
 
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(0, 0, 0), kTol3));
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(1, 1, 1), kTol3));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(0, 0, 0), kTol3));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(1, 1, 1), kTol3));
 
   EXPECT_EQ(as3.basis().cols(), 1);
   EXPECT_EQ(as3.basis().rows(), 3);
@@ -689,11 +878,11 @@ GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
 
   // The numerics are much better with commerical solvers.
   const double kTol4 = 1e-6;
-  EXPECT_TRUE(i4.PointInSet(Eigen::Vector3d(0, 0, 0), kTol4));
-  EXPECT_TRUE(i4.PointInSet(Eigen::Vector3d(1, 1, 0), kTol4));
+  EXPECT_TRUE(i4.PointInSet(Vector3d(0, 0, 0), kTol4));
+  EXPECT_TRUE(i4.PointInSet(Vector3d(1, 1, 0), kTol4));
 
-  EXPECT_TRUE(as4.PointInSet(Eigen::Vector3d(0, 0, 0), kTol4));
-  EXPECT_TRUE(as4.PointInSet(Eigen::Vector3d(1, 1, 0), kTol4));
+  EXPECT_TRUE(as4.PointInSet(Vector3d(0, 0, 0), kTol4));
+  EXPECT_TRUE(as4.PointInSet(Vector3d(1, 1, 0), kTol4));
 
   EXPECT_EQ(as4.basis().cols(), 1);
   EXPECT_EQ(as4.basis().rows(), 3);
@@ -718,13 +907,13 @@ GTEST_TEST(AffineSubspaceTest, AffineHullIntersection) {
   EXPECT_EQ(as5.basis().cols(), 2);
 
   const double kTol5 = 1e-6;
-  EXPECT_TRUE(i5.PointInSet(Eigen::Vector3d(0, 0, 0), kTol5));
-  EXPECT_TRUE(i5.PointInSet(Eigen::Vector3d(1, 1, 0), kTol5));
-  EXPECT_TRUE(i5.PointInSet(Eigen::Vector3d(1, 1, 1), kTol5));
+  EXPECT_TRUE(i5.PointInSet(Vector3d(0, 0, 0), kTol5));
+  EXPECT_TRUE(i5.PointInSet(Vector3d(1, 1, 0), kTol5));
+  EXPECT_TRUE(i5.PointInSet(Vector3d(1, 1, 1), kTol5));
 
-  EXPECT_TRUE(as5.PointInSet(Eigen::Vector3d(0, 0, 0), kTol5));
-  EXPECT_TRUE(as5.PointInSet(Eigen::Vector3d(1, 1, 0), kTol5));
-  EXPECT_TRUE(as5.PointInSet(Eigen::Vector3d(1, 1, 1), kTol5));
+  EXPECT_TRUE(as5.PointInSet(Vector3d(0, 0, 0), kTol5));
+  EXPECT_TRUE(as5.PointInSet(Vector3d(1, 1, 0), kTol5));
+  EXPECT_TRUE(as5.PointInSet(Vector3d(1, 1, 1), kTol5));
 
   EXPECT_EQ(as5.basis().cols(), 2);
   EXPECT_EQ(as5.basis().rows(), 3);
@@ -762,11 +951,11 @@ GTEST_TEST(AffineSubspaceTest, AffineHullMinkowskiSum) {
   AffineSubspace as1(ms1);
 
   const double kTol = 1e-12;
-  EXPECT_TRUE(ms1.PointInSet(Eigen::Vector3d(2, 2, 2), kTol));
-  EXPECT_TRUE(ms1.PointInSet(Eigen::Vector3d(4, 4, 4), kTol));
+  EXPECT_TRUE(ms1.PointInSet(Vector3d(2, 2, 2), kTol));
+  EXPECT_TRUE(ms1.PointInSet(Vector3d(4, 4, 4), kTol));
 
-  EXPECT_TRUE(as1.PointInSet(Eigen::Vector3d(2, 2, 2), kTol));
-  EXPECT_TRUE(as1.PointInSet(Eigen::Vector3d(4, 4, 4), kTol));
+  EXPECT_TRUE(as1.PointInSet(Vector3d(2, 2, 2), kTol));
+  EXPECT_TRUE(as1.PointInSet(Vector3d(4, 4, 4), kTol));
 
   EXPECT_EQ(as1.basis().cols(), 1);
   EXPECT_EQ(as1.basis().rows(), 3);
@@ -788,13 +977,13 @@ GTEST_TEST(AffineSubspaceTest, AffineHullMinkowskiSum) {
   MinkowskiSum ms2(line_segment1, line_segment3);
   AffineSubspace as2(ms2);
 
-  EXPECT_TRUE(ms2.PointInSet(Eigen::Vector3d(0, 0, 0), kTol));
-  EXPECT_TRUE(ms2.PointInSet(Eigen::Vector3d(1, 0, 0), kTol));
-  EXPECT_TRUE(ms2.PointInSet(Eigen::Vector3d(1, 1, 1), kTol));
+  EXPECT_TRUE(ms2.PointInSet(Vector3d(0, 0, 0), kTol));
+  EXPECT_TRUE(ms2.PointInSet(Vector3d(1, 0, 0), kTol));
+  EXPECT_TRUE(ms2.PointInSet(Vector3d(1, 1, 1), kTol));
 
-  EXPECT_TRUE(as2.PointInSet(Eigen::Vector3d(0, 0, 0), kTol));
-  EXPECT_TRUE(as2.PointInSet(Eigen::Vector3d(1, 0, 0), kTol));
-  EXPECT_TRUE(as2.PointInSet(Eigen::Vector3d(1, 1, 1), kTol));
+  EXPECT_TRUE(as2.PointInSet(Vector3d(0, 0, 0), kTol));
+  EXPECT_TRUE(as2.PointInSet(Vector3d(1, 0, 0), kTol));
+  EXPECT_TRUE(as2.PointInSet(Vector3d(1, 1, 1), kTol));
 
   EXPECT_EQ(as2.basis().cols(), 2);
   EXPECT_EQ(as2.basis().rows(), 3);
@@ -816,15 +1005,15 @@ GTEST_TEST(AffineSubspaceTest, AffineHullMinkowskiSum) {
   MinkowskiSum ms3(line_segment3, triangle);
   AffineSubspace as3(ms3);
 
-  EXPECT_TRUE(ms3.PointInSet(Eigen::Vector3d(0, 1, 0), kTol));
-  EXPECT_TRUE(ms3.PointInSet(Eigen::Vector3d(0, 0, 1), kTol));
-  EXPECT_TRUE(ms3.PointInSet(Eigen::Vector3d(0, 1, 1), kTol));
-  EXPECT_TRUE(ms3.PointInSet(Eigen::Vector3d(1, 1, 1), kTol));
+  EXPECT_TRUE(ms3.PointInSet(Vector3d(0, 1, 0), kTol));
+  EXPECT_TRUE(ms3.PointInSet(Vector3d(0, 0, 1), kTol));
+  EXPECT_TRUE(ms3.PointInSet(Vector3d(0, 1, 1), kTol));
+  EXPECT_TRUE(ms3.PointInSet(Vector3d(1, 1, 1), kTol));
 
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(0, 1, 0), kTol));
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(0, 0, 1), kTol));
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(0, 1, 1), kTol));
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(1, 1, 1), kTol));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(0, 1, 0), kTol));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(0, 0, 1), kTol));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(0, 1, 1), kTol));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(1, 1, 1), kTol));
 
   EXPECT_EQ(as3.basis().cols(), 3);
   EXPECT_EQ(as3.basis().rows(), 3);
@@ -836,9 +1025,13 @@ GTEST_TEST(AffineSubspaceTest, AffineHullMinkowskiSum) {
 }
 
 GTEST_TEST(AffineSubspaceTest, AffineHullPoint) {
-  const Eigen::Vector3d p_value{4.2, 2.7, 0.0};
+  const Vector3d p_value{4.2, 2.7, 0.0};
   Point p(p_value);
-  AffineSubspace as(p);
+
+  // The tolerance is ignored, but including it verifies that we can call the
+  // constructor with a double (instead of std::optional<double>).
+  double kTol = 43.0;
+  AffineSubspace as(p, kTol);
 
   EXPECT_EQ(as.basis().cols(), 0);
   EXPECT_EQ(as.basis().rows(), 3);
@@ -874,7 +1067,7 @@ GTEST_TEST(AffineSubspaceTest, AffineHullSpectrahedron) {
   // matrix has 6 unique entries, and the remaining 3 are not considered part
   // of the ambient space.) This spectrahedron has 1 additional equality
   // constraint, so its affine dimension should be 5.
-  solvers::MathematicalProgram prog;
+  MathematicalProgram prog;
   auto X1 = prog.NewSymmetricContinuousVariables<3>();
   prog.AddLinearCost(-(X1(0, 1) + X1(1, 2)));
   prog.AddPositiveSemidefiniteConstraint(X1);
@@ -899,12 +1092,13 @@ GTEST_TEST(AffineSubspaceTest, AffineHullSpectrahedron) {
 }
 
 GTEST_TEST(AffineSubspaceTest, AffineHullVPolytope) {
+  const double kTol = 1e-12;
   // Check that computing the affine hull of an empty set throws an error
   const VPolytope dut;
   EXPECT_THROW(AffineSubspace{dut}, std::exception);
 
   // Check a point as a VPolytope
-  Eigen::Vector3d point(2, -1, 0);
+  Vector3d point(2, -1, 0);
   VPolytope v(point);
   AffineSubspace as1(v);
 
@@ -913,8 +1107,8 @@ GTEST_TEST(AffineSubspaceTest, AffineHullVPolytope) {
   EXPECT_EQ(as1.translation().size(), 3);
   EXPECT_EQ(as1.ambient_dimension(), 3);
 
-  EXPECT_TRUE(as1.PointInSet(Eigen::Vector3d(2, -1, 0)));
-  EXPECT_FALSE(as1.PointInSet(Eigen::Vector3d(2, -1, 1)));
+  EXPECT_TRUE(as1.PointInSet(Vector3d(2, -1, 0), kTol));
+  EXPECT_FALSE(as1.PointInSet(Vector3d(2, -1, 1), kTol));
   EXPECT_TRUE(CheckAffineSubspaceSetContainment(as1, v));
   CheckAffineHullTightness(as1, v);
 
@@ -933,9 +1127,9 @@ GTEST_TEST(AffineSubspaceTest, AffineHullVPolytope) {
   EXPECT_EQ(as2.translation().size(), 3);
   EXPECT_EQ(as2.ambient_dimension(), 3);
 
-  EXPECT_TRUE(as2.PointInSet(Eigen::Vector3d(2, 2, 2)));
-  EXPECT_FALSE(as2.PointInSet(Eigen::Vector3d(2, 2, 0)));
-  EXPECT_TRUE(CheckAffineSubspaceSetContainment(as2, line_segment));
+  EXPECT_TRUE(as2.PointInSet(Vector3d(2, 2, 2), kTol));
+  EXPECT_FALSE(as2.PointInSet(Vector3d(2, 2, 0), kTol));
+  EXPECT_TRUE(CheckAffineSubspaceSetContainment(as2, line_segment, kTol));
   CheckAffineHullTightness(as2, line_segment);
 
   // Check a triangle in 3D as a VPolytope
@@ -953,8 +1147,8 @@ GTEST_TEST(AffineSubspaceTest, AffineHullVPolytope) {
   EXPECT_EQ(as3.translation().size(), 3);
   EXPECT_EQ(as3.ambient_dimension(), 3);
 
-  EXPECT_TRUE(as3.PointInSet(Eigen::Vector3d(42, 27, 0)));
-  EXPECT_FALSE(as3.PointInSet(Eigen::Vector3d(42, 27, 1)));
+  EXPECT_TRUE(as3.PointInSet(Vector3d(42, 27, 0), kTol));
+  EXPECT_FALSE(as3.PointInSet(Vector3d(42, 27, 1), kTol));
   EXPECT_TRUE(CheckAffineSubspaceSetContainment(as3, triangle));
   CheckAffineHullTightness(as3, triangle);
 }
@@ -968,7 +1162,7 @@ GTEST_TEST(AffineSubspaceTest, BatchChangeOfCoordinates) {
            0, 1,
            0, 0;
   // clang-format on
-  Eigen::VectorXd translation(3);
+  VectorXd translation(3);
   translation << 0, 0, 1;
   const AffineSubspace as(basis, translation);
 
@@ -978,15 +1172,15 @@ GTEST_TEST(AffineSubspaceTest, BatchChangeOfCoordinates) {
             0, 0, 0, 0, 0,
             0, 0, 0, 0, 0;
   // clang-format on
-
-  Eigen::MatrixXd projected = as.Project(points);
-  EXPECT_EQ(projected.rows(), 3);
-  EXPECT_EQ(projected.cols(), 5);
+  const auto projection_result = as.Projection(points);
+  ASSERT_TRUE(projection_result.has_value());
+  const auto& [distances, projections] = projection_result.value();
   for (int i = 0; i < points.cols(); ++i) {
-    EXPECT_TRUE(CompareMatrices(projected.col(i), as.Project(points.col(i))));
+    EXPECT_TRUE(CompareMatrices(
+        projections.col(i), std::get<1>(as.Projection(points.col(i)).value())));
   }
 
-  Eigen::MatrixXd local = as.ToLocalCoordinates(points);
+  MatrixXd local = as.ToLocalCoordinates(points);
   EXPECT_EQ(local.rows(), 2);
   EXPECT_EQ(local.cols(), 5);
   for (int i = 0; i < points.cols(); ++i) {
@@ -994,7 +1188,7 @@ GTEST_TEST(AffineSubspaceTest, BatchChangeOfCoordinates) {
         CompareMatrices(local.col(i), as.ToLocalCoordinates(points.col(i))));
   }
 
-  Eigen::MatrixXd global = as.ToGlobalCoordinates(local);
+  MatrixXd global = as.ToGlobalCoordinates(local);
   EXPECT_EQ(global.rows(), 3);
   EXPECT_EQ(global.cols(), 5);
   for (int i = 0; i < local.cols(); ++i) {
@@ -1010,7 +1204,7 @@ GTEST_TEST(AffineSubspaceTest, ContainmentTest) {
             1,
             0;
   // clang-format on
-  Eigen::VectorXd translation1(3);
+  VectorXd translation1(3);
   translation1 << 0, 0, 1;
   const AffineSubspace as1(basis1, translation1);
 
@@ -1020,7 +1214,7 @@ GTEST_TEST(AffineSubspaceTest, ContainmentTest) {
             0, 1,
             0, 0;
   // clang-format on
-  Eigen::VectorXd translation2(3);
+  VectorXd translation2(3);
   translation2 << 1, 1, 1;
   const AffineSubspace as2(basis2, translation2);
 
@@ -1038,7 +1232,7 @@ GTEST_TEST(AffineSubspaceTest, CompareDifferentDimensions) {
   basis1 << 1,
             0;
   // clang-format on
-  Eigen::VectorXd translation1(2);
+  VectorXd translation1(2);
   translation1 << 0, 1;
   const AffineSubspace as1(basis1, translation1);
 
@@ -1048,7 +1242,7 @@ GTEST_TEST(AffineSubspaceTest, CompareDifferentDimensions) {
             0, 1,
             0, 0;
   // clang-format on
-  Eigen::VectorXd translation2(3);
+  VectorXd translation2(3);
   translation2 << 0, 0, 1;
   const AffineSubspace as2(basis2, translation2);
 
@@ -1066,8 +1260,8 @@ GTEST_TEST(AffineSubspaceTest, EqualityTest) {
   basis1 << 1, 0,
             0, 1,
             0, 0;
-  // clang- format on
-  Eigen::VectorXd translation1(3);
+  // clang-format on
+  VectorXd translation1(3);
   translation1 << 0, 0, 1;
 
   Eigen::Matrix<double, 3, 2> basis2;
@@ -1076,7 +1270,7 @@ GTEST_TEST(AffineSubspaceTest, EqualityTest) {
             1, -1,
             0, 0;
   // clang-format on
-  Eigen::VectorXd translation2(3);
+  VectorXd translation2(3);
   translation2 << 1, 1, 1;
 
   const AffineSubspace as1(basis1, translation1);
@@ -1085,7 +1279,7 @@ GTEST_TEST(AffineSubspaceTest, EqualityTest) {
   const AffineSubspace as4(basis2, translation1);
   const AffineSubspace as5(basis2, translation2);
 
-  const double kTol = 1e-15;
+  const double kTol = 1e-14;
 
   EXPECT_TRUE(as1.IsNearlyEqualTo(as2, kTol));
   EXPECT_TRUE(as2.IsNearlyEqualTo(as3, kTol));
@@ -1105,16 +1299,16 @@ GTEST_TEST(AffineSubspaceTest, EqualityTest2) {
   basis1 << -1,  0.5,
             0.5, -1,
             0.5, 0.5;
-  // clang- format on
+  // clang-format on
   Eigen::Matrix<double, 3, 2> basis2;
   // clang-format off
   basis2 << 1,  0,
             -1, 1,
             0, -1;
-  // clang- format on
-  Eigen::VectorXd translation1(3);
+  // clang-format on
+  VectorXd translation1(3);
   translation1 << 0, 0, 1;
-  Eigen::VectorXd translation2(3);
+  VectorXd translation2(3);
   translation2 << 0, 1, 0;
 
   const AffineSubspace as1(basis1, translation1);
@@ -1136,7 +1330,7 @@ GTEST_TEST(AffineSubspaceTest, DeliberatelyLooseTolerance) {
   basis1 << 1, 0;
   Eigen::Matrix<double, 2, 1> basis2;
   basis2 << 0, 1;
-  Eigen::VectorXd translation(2);
+  VectorXd translation(2);
   translation << 0, 0;
 
   const AffineSubspace as1(basis1, translation);

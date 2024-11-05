@@ -70,7 +70,7 @@ void SystemScalarConverter::RemoveUnlessAlsoSupportedBy(
   // (This would use erase_if, if we had it.)
   for (auto iter = funcs_.begin(); iter != funcs_.end(); ) {
     const Key& our_key = iter->first;
-    if (other.funcs_.count(our_key) == 0) {
+    if (!other.funcs_.contains(our_key)) {
       iter = funcs_.erase(iter);
     } else {
       ++iter;
@@ -112,14 +112,14 @@ void AddPydrakeConverterFunction(
 
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS((
     &AddPydrakeConverterFunction<T, U>
-))
+));
 
 }  // namespace system_scalar_converter_internal
 
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS((
     &SystemScalarConverter::IsConvertible<T, U>,
     &SystemScalarConverter::Remove<T, U>
-))
+));
 
 }  // namespace systems
 }  // namespace drake

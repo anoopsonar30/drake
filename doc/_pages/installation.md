@@ -11,16 +11,20 @@ notebooks. See the [Tutorials](/index.html#tutorials) page for details.
 
 ## Supported Configurations
 
+<!-- The macOS python version below should match what's listed in both the root
+CMakeLists.txt and tools/workspace/python/repository.bzl. When any Python
+version changes, also be sure to grep the full body of documentation to find
+any other citations to it (e.g., in PYTHONPATH). -->
+
 The following table shows the configurations and platforms that Drake
 officially supports:
 
 | Operating System ⁽¹⁾               | Architecture | Python ⁽²⁾ | End of life ⁽⁴⁾ |
 |------------------------------------|--------------|------------|-----------------|
-| Ubuntu 20.04 LTS (Focal Fossa)     | x86_64       | 3.8 ⁽³⁾    | March 2024      |
 | Ubuntu 22.04 LTS (Jammy Jellyfish) | x86_64       | 3.10 ⁽³⁾   | March 2026      |
-| macOS Monterey (12)                | x86_64       | 3.11       | October 2023    |
-| macOS Monterey (12)                | arm64        | 3.11       | October 2023    |
-| macOS Ventura (13)                 | arm64        | 3.11       | October 2024    |
+| Ubuntu 24.04 LTS (Noble Numbat)    | x86_64       | 3.12 ⁽³⁾   | March 2028      |
+| macOS Sonoma (14)                  | arm64        | 3.12 ⁽³⁾   | October 2025    |
+| macOS Sequoia (15) ⁽⁵⁾             | TBD          | TBD        | October 2026    |
 
 "Official support" means that we have Continuous Integration test coverage to
 notice regressions, so if it doesn't work for you then please file a bug report.
@@ -41,13 +45,17 @@ may experience compatibility hiccups; when asking for help, be sure to mention
 that Conda is involved.
 
 ⁽³⁾ The Python version shown in the table is supported for all installation
-channels. Additionally, on Ubuntu when installing via ``pip`` Python versions
-3.8 through 3.12 (inclusive) are supported.
+channels. Additionally, when installing via ``pip``
+on Ubuntu Python versions 3.10 through 3.12 (inclusive) are supported and
+on macOS Python versions 3.11 through 3.12 (inclusive) are supported.
 Refer to [OS Support](/stable.html#os-support) for details on our "end of life"
 timeline for changing which Python versions are supported.
 
 ⁽⁴⁾ These end-of-life dates are estimates.
 Refer to [OS Support](/stable.html#os-support) for details.
+
+⁽⁵⁾ Sequoia support is in development; refer to
+[#21910](https://github.com/RobotLocomotion/drake/issues/21910) for details.
 
 Additionally, if you are compiling your own C++ code against Drake's C++ code
 and are using Drake's pre-compiled binaries, then you must use the same
@@ -55,10 +63,10 @@ compiler as our releases:
 
 | Operating System                   | C/C++ Compiler           | Std   |
 |------------------------------------|--------------------------|-------|
-| Ubuntu 20.04 LTS (Focal Fossa)     | GCC 9                    | C++17 |
 | Ubuntu 22.04 LTS (Jammy Jellyfish) | GCC 11                   | C++20 |
-| macOS Monterey (12)                | Apple LLVM 14 (Xcode 14) | C++20 |
-| macOS Ventura (13)                 | Apple LLVM 14 (Xcode 14) | C++20 |
+| Ubuntu 24.04 LTS (Noble Numbat)    | GCC 13                   | C++20 |
+| macOS Sonoma (14)                  | Apple LLVM 14 (Xcode 15) | C++20 |
+| macOS Sequoia (15)                 | TBD                      | TBD   |
 
 ## Available Versions
 

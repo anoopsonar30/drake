@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 #include <msgpack.hpp>
 
-#include "drake/common/find_resource.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
-#include "drake/geometry/meshcat_types.h"
+#include "drake/geometry/meshcat_internal.h"
+#include "drake/geometry/meshcat_types_internal.h"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/systems/analysis/simulator.h"
@@ -19,6 +19,7 @@ namespace drake {
 namespace geometry {
 namespace {
 
+using internal::TransformGeometryName;
 using multibody::AddMultibodyPlantSceneGraph;
 
 // The tests in this file require a dependency on MultibodyPlant.  One could
@@ -45,9 +46,9 @@ class MeshcatVisualizerWithIiwaTest : public ::testing::Test {
     auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.001);
     plant_ = &plant;
     scene_graph_ = &scene_graph;
-    multibody::Parser(plant_).AddModels(
-        FindResourceOrThrow("drake/manipulation/models/iiwa_description/urdf/"
-                            "iiwa14_spheres_collision.urdf"));
+    multibody::Parser(plant_).AddModelsFromUrl(
+        "package://drake_models/iiwa_description/urdf/"
+        "iiwa14_spheres_collision.urdf");
     plant.WeldFrames(plant.world_frame(),
                      plant.GetBodyByName("base").body_frame());
     plant.Finalize();
@@ -67,8 +68,7 @@ class MeshcatVisualizerWithIiwaTest : public ::testing::Test {
 
   void CheckVisible(const std::string& path, bool visibility) {
     ASSERT_TRUE(meshcat_->HasPath(path));
-    const std::string property =
-        meshcat_->GetPackedProperty(path, "visible");
+    const std::string property = meshcat_->GetPackedProperty(path, "visible");
     ASSERT_GT(property.size(), 0);
     msgpack::object_handle oh =
         msgpack::unpack(property.data(), property.size());
@@ -140,14 +140,14 @@ TEST_F(MeshcatVisualizerWithIiwaTest, Roles) {
         plant_->GetBodyByName("iiwa_link_7").index());
     for (GeometryId geom_id : inspector.GetGeometries(iiwa_link_7, role)) {
       EXPECT_TRUE(meshcat_->HasPath(
-          fmt::format("visualizer/iiwa14/iiwa_link_7/{}", geom_id)));
+          fmt::format("visualizer/iiwa14/iiwa_link_7/{}",
+                      TransformGeometryName(geom_id, inspector))));
     }
     meshcat_->Delete();
   }
 
   params.role = Role::kUnassigned;
-  DRAKE_EXPECT_THROWS_MESSAGE(SetUpDiagram(params),
-                              ".*Role::kUnassigned.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(SetUpDiagram(params), ".*Role::kUnassigned.*");
 }
 
 // Tests that adding multiple MeshcatVisualizers using the same role to a
@@ -201,7 +201,7 @@ TEST_F(MeshcatVisualizerWithIiwaTest, DeletePrefixOnInitialization) {
   SetUpDiagram(params);
   // Scribble a transform onto the scene tree beneath the visualizer prefix.
   meshcat_->SetTransform("/drake/visualizer/my_random_path",
-                        math::RigidTransformd());
+                         math::RigidTransformd());
   EXPECT_TRUE(meshcat_->HasPath("/drake/visualizer/my_random_path"));
 
   {  // Send an initialization event.
@@ -218,7 +218,7 @@ TEST_F(MeshcatVisualizerWithIiwaTest, DeletePrefixOnInitialization) {
   params.delete_on_initialization_event = false;
   SetUpDiagram(params);
   meshcat_->SetTransform("/drake/visualizer/my_random_path",
-                        math::RigidTransformd());
+                         math::RigidTransformd());
   {  // Send an initialization event.
     auto events = diagram_->AllocateCompositeEventCollection();
     diagram_->GetInitializationEvents(*context_, events.get());
@@ -243,16 +243,14 @@ TEST_F(MeshcatVisualizerWithIiwaTest, Delete) {
 // "position".
 bool has_iiwa_frame(const MeshcatAnimation& animation, int frame) {
   return animation
-      .get_key_frame<std::vector<double>>(
-          0, "visualizer/iiwa14/iiwa_link_1", "position")
+      .get_key_frame<std::vector<double>>(0, "visualizer/iiwa14/iiwa_link_1",
+                                          "position")
       .has_value();
 }
 
 TEST_F(MeshcatVisualizerWithIiwaTest, Recording) {
   MeshcatVisualizerParams params;
   SetUpDiagram(params);
-  DRAKE_EXPECT_THROWS_MESSAGE(visualizer_->get_mutable_recording(),
-                              ".*You must create a recording.*");
 
   // Publish once without recording and confirm that we don't have the iiwa
   // frame.
@@ -323,6 +321,36 @@ TEST_F(MeshcatVisualizerWithIiwaTest, RecordingWithoutSetTransform) {
       X_7_message);
 }
 
+// Confirm that the default frame rates match the publish period of the
+// visualizer. Otherwise the rounding to an animation frame done in
+// MeshcatAnimation can lead to odd visualization artifacts, like the first
+// visualized frame not being the initial state. (Technically, it's OK to have
+// the visualizer's publish period be any integer multiple of the meshcat
+// recording's keyframe period; for expediency, we just test for exact
+// equality.)
+TEST_F(MeshcatVisualizerWithIiwaTest, RecordingFrameRate) {
+  MeshcatVisualizerParams params;
+  SetUpDiagram(params);
+
+  // StartRecording via the MeshcatVisualizer API.
+  visualizer_->StartRecording();
+  MeshcatAnimation* animation = &meshcat_->get_mutable_recording();
+  EXPECT_EQ(1.0 / animation->frames_per_second(), params.publish_period);
+  visualizer_->DeleteRecording();
+
+  // Set the animation to a different frame rate before our final test, for good
+  // measure.
+  meshcat_->StartRecording(12.3);
+  animation = &meshcat_->get_mutable_recording();
+  EXPECT_EQ(animation->frames_per_second(), 12.3);
+  visualizer_->DeleteRecording();
+
+  // StartRecording via the Meshcat API.
+  meshcat_->StartRecording();
+  animation = &meshcat_->get_mutable_recording();
+  EXPECT_EQ(1.0 / animation->frames_per_second(), params.publish_period);
+}
+
 TEST_F(MeshcatVisualizerWithIiwaTest, ScalarConversion) {
   SetUpDiagram();
 
@@ -372,14 +400,67 @@ GTEST_TEST(MeshcatVisualizerTest, HydroGeometry) {
     // tell us whether or not hydro was used -- the normal representation is
     // just the ellipse axes (very small); the hydro representation is all
     // of the tessellated faces (very large).
-    const std::string data = meshcat->GetPackedObject(fmt::format(
-        "/drake/{}/two_bodies/body1/{}", prefix, sphere1.get_value()));
+    const std::string data = meshcat->GetPackedObject(
+        fmt::format("/drake/{}/two_bodies/body1/{}", prefix,
+                    TransformGeometryName(sphere1, inspector)));
     if (show_hydroelastic) {
       EXPECT_GT(data.size(), 5000);
+      // The BufferGeometry has explicitly declared its material to be flat
+      // shaded. The encoding includes the property name and the value \xC3 for
+      // true. (False is \xC2.)
+      EXPECT_THAT(data, testing::HasSubstr("flatShading\xC3")) << data;
     } else {
       EXPECT_LT(data.size(), 1000);
     }
   }
+}
+
+// When visualizing proximity geometry, if a geometry has a convex hull it is
+// used in place of the geometry.
+GTEST_TEST(MeshcatVisualizerTest, ConvexHull) {
+  auto meshcat = std::make_shared<Meshcat>();
+
+  // Load a scene with mesh collision geometry.
+  systems::DiagramBuilder<double> builder;
+  auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.001);
+  multibody::Parser(&plant).AddModelsFromUrl(
+      "package://drake/geometry/render/test/box.sdf");
+  plant.Finalize();
+
+  // Dig out a GeometryId that we just loaded.
+  const auto& inspector = scene_graph.model_inspector();
+  const GeometryId box_id =
+      inspector.GetAllGeometryIds(Role::kProximity).front();
+  ASSERT_EQ(inspector.GetName(box_id), "box::collision");
+  ASSERT_NE(inspector.GetConvexHull(box_id), nullptr);
+  ASSERT_EQ(inspector.GetShape(box_id).type_name(), "Mesh");
+  // We didn't add anything with a hydroelastic representation.
+  ASSERT_TRUE(std::holds_alternative<std::monostate>(
+      inspector.maybe_get_hydroelastic_mesh(box_id)));
+
+  // Add a proximity visualizer.
+  // We set show_hydroelastic to true to make sure the convex hull still comes
+  // through for meshes that don't have hydro representations (see above).
+  // This does *not* test the case where a mesh has both a hydro representation
+  // and a convex mesh. The test criterion below (BufferGeometry) is unable to
+  // distinguish between visualized hydro geometry and convex hull.
+  MeshcatVisualizerParams params{.role = Role::kProximity,
+                                 .show_hydroelastic = true};
+  MeshcatVisualizer<double>::AddToBuilder(&builder, scene_graph, meshcat,
+                                          params);
+
+  // Send the geometry to Meshcat.
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  diagram->ForcedPublish(*context);
+
+  // Read back the mesh shape. The message would have type _meshfile_object if
+  // the obj had been sent. If, however, the generated convex hull is sent, the
+  // type will be BufferGeometry.
+  const std::string data = meshcat->GetPackedObject(
+      fmt::format("/drake/{}/box/box/{}", params.prefix,
+                  TransformGeometryName(box_id, inspector)));
+  EXPECT_THAT(data, testing::HasSubstr("BufferGeometry"));
 }
 
 GTEST_TEST(MeshcatVisualizerTest, MultipleModels) {
@@ -387,13 +468,14 @@ GTEST_TEST(MeshcatVisualizerTest, MultipleModels) {
 
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.001);
-  std::string urdf = FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/urdf/"
-      "iiwa14_no_collision.urdf");
-  auto iiwa0 = multibody::Parser(&plant).AddModels(urdf).at(0);
+  const std::string urdf_url =
+      "package://drake_models/iiwa_description/urdf/"
+      "iiwa14_no_collision.urdf";
+  auto iiwa0 = multibody::Parser(&plant).AddModelsFromUrl(urdf_url).at(0);
   plant.WeldFrames(plant.world_frame(),
                    plant.GetBodyByName("base", iiwa0).body_frame());
-  auto iiwa1 = multibody::Parser(&plant, "second").AddModels(urdf).at(0);
+  auto iiwa1 =
+      multibody::Parser(&plant, "second").AddModelsFromUrl(urdf_url).at(0);
   plant.WeldFrames(plant.world_frame(),
                    plant.GetBodyByName("base", iiwa1).body_frame());
   plant.Finalize();
@@ -473,8 +555,8 @@ GTEST_TEST(MeshcatVisualizerTest, AcceptingProperty) {
       auto context = diagram->CreateDefaultContext();
 
       // Publish geometry. Check whether the shape was published.
-      const std::string geom_path =
-          fmt::format("prefix/box/box/{}", geom_id.get_value());
+      const std::string geom_path = fmt::format(
+          "prefix/box/box/{}", TransformGeometryName(geom_id, inspector));
       const bool should_show =
           (accepting == "prefix") ||
           (include_unspecified_accepting && accepting.empty());
@@ -484,12 +566,18 @@ GTEST_TEST(MeshcatVisualizerTest, AcceptingProperty) {
   }
 }
 
-// Full system acceptance test of setting alpha slider values.
+// Full system acceptance test of setting alpha slider values (including the
+// initial value).
 TEST_F(MeshcatVisualizerWithIiwaTest, AlphaSlidersSystemCheck) {
-  MeshcatVisualizerParams params;
-  params.enable_alpha_slider = true;
+  // Note: due to the quantizing effect of the slider, we can't set an
+  // arbitrary value for the initial slider value and expect a perfect match.
+  // Only values that are integer multiples of 0.02 will work.
+  const MeshcatVisualizerParams params{.enable_alpha_slider = true,
+                                       .initial_alpha_slider_value = 0.5};
   SetUpDiagram(params);
   systems::Simulator<double> simulator(*diagram_);
+
+  EXPECT_EQ(meshcat_->GetSliderValue("visualizer α"), 0.5);
 
   // Simulate for a moment and publish to populate the visualizer.
   simulator.AdvanceTo(0.1);
@@ -539,8 +627,8 @@ GTEST_TEST(MeshcatVisualizerTest, AlphaSliderCheckResults) {
       inspector.GetGeometries(body_frame, Role::kIllustration);
   DRAKE_DEMAND(geom_ids.size() == 1);
   const GeometryId geom_id = *geom_ids.begin();
-  const std::string geom_path =
-      fmt::format("visualizer/box/box/{}", geom_id.get_value());
+  const std::string geom_path = fmt::format(
+      "visualizer/box/box/{}", TransformGeometryName(geom_id, inspector));
 
   // Create the visualizer.
   MeshcatVisualizerParams params;
@@ -583,48 +671,28 @@ GTEST_TEST(MeshcatVisualizerTest, AlphaSliderCheckResults) {
   }
 }
 
-void Sleep(double seconds) {
-  auto millis = static_cast<int64_t>(seconds * 1000);
-  std::this_thread::sleep_for(std::chrono::milliseconds(millis));
-}
-
 GTEST_TEST(MeshcatVisualizerTest, RealtimeRate) {
-  // Set up a simulation with a visualizer. To avoid any potential ambiguity
-  // around publish event timing, we'll configure the visualizer to publish at
-  // 1024 Hz but we'll manually step time at 1000 Hz. This guarantees that
-  // exactly one publish event has been triggered after each one of our steps
-  // (as long as we don't advance past 42 ms).
+  // MeshcatVisualizer doesn't compute realtime rate, but it is responsible for
+  // calling Meshcat::SetSimulationTime() (which has been tested elsewhere).
+  // Here we just need proof that we're doing so when we publish.
+  //
+  // To that end, we'll change the times in the context and force publish. We'll
+  // confirm that meshcat reports that simulation time.
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.0);
   plant.Finalize();
-  auto meshcat = std::make_shared<Meshcat>();
-  MeshcatVisualizerParams params;
-  params.publish_period = 1.0 / 1024;
-  auto* meshcat_visualizer = &MeshcatVisualizer<double>::AddToBuilder(
-      &builder, scene_graph, meshcat, params);
-  systems::Simulator<double> simulator(builder.Build());
+  MeshcatParams meshcat_params{.realtime_rate_period = 0.125 /*seconds*/};
+  auto meshcat = std::make_shared<Meshcat>(meshcat_params);
+  auto& visualizer = MeshcatVisualizer<double>::AddToBuilder(
+      &builder, scene_graph, meshcat);
+  auto diagram = builder.Build();
+  auto context = diagram->CreateDefaultContext();
+  auto& vis_context = visualizer.GetMyContextFromRoot(*context);
 
-  // Bootstrap the realtime rate calculator.
-  simulator.AdvanceTo(0.002);
-  EXPECT_GT(meshcat->GetRealtimeRate(), 0.0);
-
-  // After sleeping for much more wall time (>= 0.500) than sim time (0.001) and
-  // then taking exactly one more step, the rate should be quite slow (< 1/500).
-  Sleep(0.5);
-  simulator.AdvanceTo(0.003);
-  const double slow_rate = meshcat->GetRealtimeRate();
-  EXPECT_LE(slow_rate, 0.002);
-
-  // When we reset the calculator before stepping, the rate does not update.
-  meshcat_visualizer->ResetRealtimeRateCalculator();
-  simulator.AdvanceTo(0.004);
-  EXPECT_EQ(meshcat->GetRealtimeRate(), slow_rate);
-
-  // One more step causes an update. (The new reported rate will almost
-  // certainly be faster than slow_rate, but we don't want to rely on the
-  // kernel's details of process scheduling, or else we could be flaky.)
-  simulator.AdvanceTo(0.005);
-  EXPECT_NE(meshcat->GetRealtimeRate(), slow_rate);
+  constexpr double kT = 1.5;
+  context->SetTime(kT);
+  visualizer.ForcedPublish(vis_context);
+  ASSERT_EQ(meshcat->GetSimulationTime(), kT);
 }
 
 TEST_F(MeshcatVisualizerWithIiwaTest, Graphviz) {

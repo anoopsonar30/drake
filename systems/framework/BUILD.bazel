@@ -1,14 +1,14 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
+load(
+    "//tools/skylark:alias.bzl",
+    "drake_cc_hdrs_forwarding_library",
+)
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load(
-    "//tools/skylark:alias.bzl",
-    "drake_cc_hdrs_forwarding_library",
-)
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -48,7 +48,6 @@ drake_cc_package_library(
         ":system",
         ":system_base",
         ":system_constraint",
-        ":system_html",
         ":system_output",
         ":system_scalar_converter",
         ":system_symbolic_inspector",
@@ -358,15 +357,6 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "system_html",
-    srcs = ["system_html.cc"],
-    hdrs = ["system_html.h"],
-    deps = [
-        ":system",
-    ],
-)
-
-drake_cc_library(
     name = "context",
     srcs = ["context.cc"],
     hdrs = ["context.h"],
@@ -532,7 +522,7 @@ drake_cc_library(
     name = "leaf_system",
     srcs = ["leaf_system.cc"],
     hdrs = ["leaf_system.h"],
-    interface_deps = [
+    deps = [
         ":abstract_value_cloner",
         ":leaf_context",
         ":leaf_output_port",
@@ -544,7 +534,7 @@ drake_cc_library(
         "//common:essential",
         "//common:unused",
     ],
-    deps = [
+    implementation_deps = [
         ":system_symbolic_inspector",
         ":value_checker",
         "//common:pointer_cast",
@@ -621,16 +611,17 @@ drake_cc_library(
     name = "diagram",
     srcs = ["diagram.cc"],
     hdrs = ["diagram.h"],
-    interface_deps = [
+    deps = [
         ":diagram_context",
         ":diagram_output_port",
         ":system",
         "//common:default_scalars",
         "//common:essential",
     ],
-    deps = [
+    implementation_deps = [
         ":abstract_value_cloner",
         "//common:pointer_cast",
+        "//common:string_container",
     ],
 )
 
@@ -638,12 +629,13 @@ drake_cc_library(
     name = "diagram_builder",
     srcs = ["diagram_builder.cc"],
     hdrs = ["diagram_builder.h"],
-    interface_deps = [
+    deps = [
         ":diagram",
         "//common:default_scalars",
         "//common:essential",
+        "//common:string_container",
     ],
-    deps = [
+    implementation_deps = [
         "//common:pointer_cast",
     ],
 )
@@ -674,11 +666,11 @@ drake_cc_library(
     name = "system_symbolic_inspector",
     srcs = ["system_symbolic_inspector.cc"],
     hdrs = ["system_symbolic_inspector.h"],
-    interface_deps = [
-        "//common/symbolic:expression",
-        ":system",
-    ],
     deps = [
+        ":system",
+        "//common/symbolic:expression",
+    ],
+    implementation_deps = [
         "//common/symbolic:polynomial",
     ],
 )
@@ -859,15 +851,6 @@ drake_cc_googletest(
     name = "event_test",
     deps = [
         ":event_collection",
-    ],
-)
-
-drake_cc_googletest(
-    name = "event_deprecated_test",
-    copts = ["-Wno-deprecated-declarations"],
-    deps = [
-        ":event_collection",
-        "//systems/primitives:pass_through",
     ],
 )
 

@@ -8,6 +8,7 @@
 #include "drake/multibody/parsing/detail_make_model_name.h"
 #include "drake/multibody/parsing/detail_path_utils.h"
 #include "drake/multibody/parsing/scoped_names.h"
+#include "drake/multibody/tree/quaternion_floating_joint.h"
 #include "drake/multibody/tree/scoped_name.h"
 
 namespace drake {
@@ -39,9 +40,73 @@ void AddWeld(
         // See warning in ModelInstanceInfo about these members.
         info.parent_frame_name = parent_frame.name();
         info.child_frame_name = child_frame.name();
+        info.X_PC = X_PC;
       }
     }
     DRAKE_THROW_UNLESS(found);
+  }
+}
+
+// If the given model contains a single body, returns its body frame.
+// Otherwise, triggers a parse error.
+const Frame<double>& GetUniqueBodyFrame(const ParsingWorkspace& workspace,
+                                        ModelInstanceIndex model_instance) {
+  const auto& plant = *workspace.plant;
+  const auto& body_indices = plant.GetBodyIndices(model_instance);
+  if (body_indices.size() == 1) {
+    return plant.get_body(body_indices[0]).body_frame();
+  }
+  workspace.diagnostic.Error(fmt::format(
+      "Model instance '{}' cannot use an empty frame name for its "
+      "default_free_body_pose in add_model because it has {} (not 1) bodies.",
+      plant.GetModelInstanceName(model_instance), body_indices.size()));
+  return plant.world_frame();
+}
+
+// Implements the AddModel::default_free_body_pose logic (for one entry of that
+// std::map).
+void ApplyAddModelDefaultFreeBodyPose(
+    const ParsingWorkspace& workspace, ModelInstanceIndex model_instance,
+    const Frame<double>& parent_frame, const std::string& child_frame_name,
+    const math::RigidTransform<double>& X_PC) {
+  auto& plant = *workspace.plant;
+  const Frame<double>& child_frame =
+      child_frame_name.empty()
+          ? GetUniqueBodyFrame(workspace, model_instance)
+          : plant.GetFrameByName(child_frame_name, model_instance);
+  const math::RigidTransform<double> child_offset =
+      child_frame.GetFixedPoseInBodyFrame();
+  if ((&parent_frame == &plant.world_frame()) &&
+      child_offset.IsExactlyIdentity()) {
+    // If the parent frame is the world and the child frame is coincident with
+    // the body frame, then we can use the function to posture a body without
+    // first adding a joint. (Note that this is a possible source of surprise
+    // for users -- if they really did want the default pose to be taken with
+    // respect to a child fixed offset frame that for now is the identity but
+    // might later be re-postured by changing its parameter for the offset
+    // transform after the fact, then using the body frame as child joint would
+    // not suit their need. In that case, instead of using the sugar for
+    // `default_free_body_pose`, the user can add whatever specific joint they
+    // want with whatever frames and default posture they want, outside of
+    // dmd. Our preference for using the body frame here is motivated by
+    // backwards compatibility, so we could reconsider this decision if it
+    // becomes a pain point.)
+    plant.SetDefaultFreeBodyPose(child_frame.body(), X_PC);
+  } else {
+    // Add a floating joint so that we can set a default posture.
+    // TODO(SeanCurtis-TRI): When the new multibody graph code lands,
+    // update this code to test to see if there is already a joint between
+    // the two bodies.
+    // Note: the logic for generating the joint name is borrowed from
+    // MultibodyTree::CreateJointImplementations().
+    std::string joint_name = child_frame.body().name();
+    while (plant.HasJointNamed(joint_name, model_instance)) {
+      joint_name = "_" + joint_name;
+    }
+    const auto& joint =
+        plant.AddJoint(std::make_unique<QuaternionFloatingJoint<double>>(
+            joint_name, parent_frame, child_frame));
+    plant.get_mutable_joint(joint.index()).SetDefaultPose(X_PC);
   }
 }
 
@@ -57,12 +122,8 @@ void ParseModelDirectivesImpl(
   DRAKE_DEMAND(plant != nullptr);
   auto get_scoped_frame = [plant = plant, &model_namespace](
                               const std::string& name) -> const Frame<double>& {
-    // TODO(eric.cousineau): Simplify logic?
-    if (name == "world") {
-      return plant->world_frame();
-    }
     return GetScopedFrameByName(
-        *plant, ScopedName::Join(model_namespace, name).to_string());
+        *plant, DmdScopedNameJoin(model_namespace, name).to_string());
   };
 
   for (auto& directive : directives.directives) {
@@ -87,11 +148,16 @@ void ParseModelDirectivesImpl(
         plant->GetMutableJointByName(joint_name, child_model_instance_id)
             .set_default_positions(positions);
       }
-      for (const auto& [body_name, pose] :
-               directive.add_model->default_free_body_pose) {
-        plant->SetDefaultFreeBodyPose(
-            plant->GetBodyByName(body_name, *child_model_instance_id),
-            pose.GetDeterministicValue());
+      for (const auto& [child_frame_name, pose] :
+           directive.add_model->default_free_body_pose) {
+        const std::string parent_frame_name = pose.base_frame.value_or("world");
+        const Frame<double>& parent_frame =
+            (parent_frame_name == "world")
+                ? plant->world_frame()
+                : get_scoped_frame(parent_frame_name);
+        const math::RigidTransform<double> X_PC = pose.GetDeterministicValue();
+        ApplyAddModelDefaultFreeBodyPose(workspace, *child_model_instance_id,
+                                         parent_frame, child_frame_name, X_PC);
       }
       info.model_instance = *child_model_instance_id;
       info.model_name = name;
@@ -152,20 +218,24 @@ void ParseModelDirectivesImpl(
       if (!plant->geometry_source_is_registered()) {
         continue;
       }
+      auto& group = *directive.add_collision_filter_group;
 
       // Find the model instance index that corresponds to model_namespace, if
       // the name is non-empty.
       std::optional<ModelInstanceIndex> model_instance;
       if (!model_namespace.empty()) {
         model_instance = plant->GetModelInstanceByName(model_namespace);
+      } else if (group.model_namespace.has_value()) {
+        model_instance = plant->GetModelInstanceByName(*group.model_namespace);
       }
 
-      auto& group = *directive.add_collision_filter_group;
       drake::log()->debug("  add_collision_filter_group: {}", group.name);
       std::set<std::string> member_set(group.members.begin(),
                                        group.members.end());
-      collision_resolver->AddGroup(
-          diagnostic, group.name, member_set, model_instance);
+      std::set<std::string> member_groups_set(group.member_groups.begin(),
+                                              group.member_groups.end());
+      collision_resolver->AddGroup(diagnostic, group.name, member_set,
+                                   member_groups_set, model_instance);
       for (const auto& ignored_group : group.ignored_collision_filter_groups) {
         collision_resolver->AddPair(
             diagnostic, group.name, ignored_group, model_instance);
@@ -195,6 +265,12 @@ void ParseModelDirectivesImpl(
 }
 
 }  // namespace
+
+ScopedName DmdScopedNameJoin(const std::string& namespace_name,
+                             const std::string& element_name) {
+  if (element_name == "world") return ScopedName("", element_name);
+  return ScopedName::Join(namespace_name, element_name);
+}
 
 ModelDirectives LoadModelDirectives(const DataSource& data_source) {
   // Even though the 'defaults' we use to start parsing here are empty, by

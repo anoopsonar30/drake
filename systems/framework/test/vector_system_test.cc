@@ -27,7 +27,7 @@ class TestVectorSystem : public VectorSystem<double> {
  public:
   static constexpr int kSize = 2;
 
-  TestVectorSystem() : VectorSystem<double>(kSize, kSize) {}
+  TestVectorSystem() : VectorSystem<double>(kSize, kSize, std::nullopt) {}
 
   // Let test code abuse these by making them public.
   using VectorSystem<double>::DeclareAbstractState;
@@ -327,7 +327,7 @@ class NoFeedthroughContinuousTimeSystem : public VectorSystem<double> {
 
 class NoInputContinuousTimeSystem : public VectorSystem<double> {
  public:
-  NoInputContinuousTimeSystem() : VectorSystem<double>(0, 1) {
+  NoInputContinuousTimeSystem() : VectorSystem<double>(0, 1, std::nullopt) {
     this->DeclareContinuousState(1);
   }
 
@@ -401,8 +401,9 @@ TEST_F(VectorSystemTest, NoInputContinuousTimeSystemTest) {
 
 class NoInputNoOutputDiscreteTimeSystem : public VectorSystem<double> {
  public:
-  NoInputNoOutputDiscreteTimeSystem() : VectorSystem<double>(0, 0) {
-    this->DeclarePeriodicDiscreteUpdateNoHandler(1.0);
+  NoInputNoOutputDiscreteTimeSystem()
+      : VectorSystem<double>(0, 0, std::nullopt) {
+    this->DeclarePeriodicDiscreteUpdate(1.0, 0.0);
     this->DeclareDiscreteState(1);
   }
 
@@ -439,7 +440,8 @@ class OpenScalarTypeSystem : public VectorSystem<T> {
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(OpenScalarTypeSystem);
 
   explicit OpenScalarTypeSystem(int some_number)
-      : VectorSystem<T>(SystemTypeTag<OpenScalarTypeSystem>{}, 1, 1),
+      : VectorSystem<T>(SystemTypeTag<OpenScalarTypeSystem>{}, 1, 1,
+                        std::nullopt),
         some_number_(some_number) {}
 
   // Scalar-converting copy constructor.
@@ -480,8 +482,8 @@ class DirectScalarTypeConversionSystem : public VectorSystem<T> {
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DirectScalarTypeConversionSystem);
 
   DirectScalarTypeConversionSystem()
-      : VectorSystem<T>(
-            SystemTypeTag<DirectScalarTypeConversionSystem>(), 0, 0) {
+      : VectorSystem<T>(SystemTypeTag<DirectScalarTypeConversionSystem>(), 0, 0,
+                        std::nullopt) {
     // This will fail at compile-time if T is ever symbolic::Expression.
     const T neg_one = test::copysign_int_to_non_symbolic_scalar(-1, T{1.0});
     DRAKE_DEMAND(neg_one == T{-1.0});
@@ -519,7 +521,8 @@ TEST_F(VectorSystemTest, DirectToAutoDiffXdTest) {
 // the required methods.
 class MissingMethodsContinuousTimeSystem : public VectorSystem<double> {
  public:
-  MissingMethodsContinuousTimeSystem() : VectorSystem<double>(0, 1) {
+  MissingMethodsContinuousTimeSystem()
+      : VectorSystem<double>(0, 1, std::nullopt) {
     this->DeclareContinuousState(1);
   }
 };
@@ -544,8 +547,9 @@ TEST_F(VectorSystemTest, MissingMethodsContinuousTimeSystemTest) {
 // the required methods.
 class MissingMethodsDiscreteTimeSystem : public VectorSystem<double> {
  public:
-  MissingMethodsDiscreteTimeSystem() : VectorSystem<double>(0, 1) {
-    this->DeclarePeriodicDiscreteUpdateNoHandler(1.0);
+  MissingMethodsDiscreteTimeSystem()
+      : VectorSystem<double>(0, 1, std::nullopt) {
+    this->DeclarePeriodicDiscreteUpdate(1.0, 0.0);
     this->DeclareDiscreteState(1);
   }
 };

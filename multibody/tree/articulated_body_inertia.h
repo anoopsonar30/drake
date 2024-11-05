@@ -90,10 +90,10 @@ namespace multibody {
 ///     Springer Science & Business Media.
 ///
 /// @tparam_default_scalar
-template<typename T>
+template <typename T>
 class ArticulatedBodyInertia {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ArticulatedBodyInertia)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ArticulatedBodyInertia);
 
   /// Default ArticulatedBodyInertia constructor initializes all matrix values
   /// to NaN for a quick detection of uninitialized values.
@@ -188,7 +188,8 @@ class ArticulatedBodyInertia {
   IsPhysicallyValid() const {
     throw std::logic_error(
         "IsPhysicallyValid() is only supported for numeric types. It is not "
-        "supported for type '" + NiceTypeName::Get<T>() + "'.");
+        "supported for type '" +
+        NiceTypeName::Get<T>() + "'.");
     return false;  // Return something so that the compiler doesn't complain.
   }
 
@@ -228,9 +229,7 @@ class ArticulatedBodyInertia {
   /// @param[in] p_QR_E Vector from the original about point Q to the new
   ///                   about point R, expressed in the same frame E `this`
   ///                   articulated body inertia is expressed in.
-  /// @returns A reference to `this` articulated body inertia for articulated
-  ///          body A but now computed about a new point R.
-  ArticulatedBodyInertia<T>& ShiftInPlace(const Vector3<T>& p_QR_E) {
+  void ShiftInPlace(const Vector3<T>& p_QR_E) {
     // We want to compute P_AR_E = Φ(P_RQ_E) P_AQ_E Φ(p_RQ_E)ᵀ. This can be
     // done efficiently using block multiplication.
     //
@@ -254,7 +253,7 @@ class ArticulatedBodyInertia {
         matrix_.template block<3, 3>(3, 0).transpose();
     Eigen::Block<Matrix6<T>, 3, 3> Fp = matrix_.template block<3, 3>(0, 3);
     Matrix3<T> M = matrix_.template block<3, 3>(3, 3)
-        .template selfadjointView<Eigen::Lower>();
+                       .template selfadjointView<Eigen::Lower>();
 
     // Compute common term Fp = F + (p×)M.
     // The minus on p× is needed because we are doing each column times p×, in
@@ -270,8 +269,6 @@ class ArticulatedBodyInertia {
 
     // Overwrite F (in the lower left) with Fp. M doesn't change.
     F = Fp;
-
-    return *this;
   }
 
   /// Given `this` articulated body inertia `P_AQ_E` for some articulated body
@@ -287,7 +284,9 @@ class ArticulatedBodyInertia {
   /// @retval P_AR_E This same articulated body inertia for articulated body
   ///         A but now computed about a new point R.
   ArticulatedBodyInertia<T> Shift(const Vector3<T>& p_QR_E) const {
-    return ArticulatedBodyInertia<T>(*this).ShiftInPlace(p_QR_E);
+    ArticulatedBodyInertia<T> result(*this);
+    result.ShiftInPlace(p_QR_E);
+    return result;
   }
 
   /// Adds in to this articulated body inertia `P_AQ_E` for an articulated body
@@ -310,8 +309,8 @@ class ArticulatedBodyInertia {
   /// @warning This operation is only valid if both articulated body inertias
   ///          are computed about the same point Q and expressed in the same
   ///          frame E.
-  ArticulatedBodyInertia<T>&
-  operator+=(const ArticulatedBodyInertia<T>& P_BQ_E) {
+  ArticulatedBodyInertia<T>& operator+=(
+      const ArticulatedBodyInertia<T>& P_BQ_E) {
     matrix_.template triangularView<Eigen::Lower>() = matrix_ + P_BQ_E.matrix_;
     return *this;
   }
@@ -320,8 +319,8 @@ class ArticulatedBodyInertia {
   /// for the same articulated body B as this ABI (about the same point Q and
   /// expressed in the same frame E). The resulting inertia will have the same
   /// properties.
-  ArticulatedBodyInertia<T>&
-  operator-=(const ArticulatedBodyInertia<T>& P_BQ_E) {
+  ArticulatedBodyInertia<T>& operator-=(
+      const ArticulatedBodyInertia<T>& P_BQ_E) {
     matrix_.template triangularView<Eigen::Lower>() = matrix_ - P_BQ_E.matrix_;
     return *this;
   }
@@ -332,7 +331,7 @@ class ArticulatedBodyInertia {
   /// @note This method does not evaluate the product immediately. Instead, it
   /// returns an intermediate Eigen quantity that can be optimized automatically
   /// during compile time.
-  template<typename OtherDerived>
+  template <typename OtherDerived>
   const Eigen::Product<Eigen::SelfAdjointView<const Matrix6<T>, Eigen::Lower>,
                        OtherDerived>
   operator*(const Eigen::MatrixBase<OtherDerived>& rhs) const {
@@ -351,9 +350,9 @@ class ArticulatedBodyInertia {
   /// @note This method does not evaluate the product immediately. Instead, it
   /// returns an intermediate Eigen quantity that can be optimized automatically
   /// during compile time.
-  template<typename OtherDerived> friend
-  const Eigen::Product<OtherDerived,
-                       Eigen::SelfAdjointView<const Matrix6<T>, Eigen::Lower>>
+  template <typename OtherDerived>
+  friend const Eigen::Product<
+      OtherDerived, Eigen::SelfAdjointView<const Matrix6<T>, Eigen::Lower>>
   operator*(const Eigen::MatrixBase<OtherDerived>& lhs,
             const ArticulatedBodyInertia& rhs) {
     return lhs * rhs.matrix_.template selfadjointView<Eigen::Lower>();
@@ -363,7 +362,8 @@ class ArticulatedBodyInertia {
   // Make ArticulatedBodyInertia templated on every other scalar type a friend
   // of ArticulatedBodyInertia<T> so that cast<Scalar>() can access private
   // members of ArticulatedBodyInertia<T>.
-  template <typename> friend class ArticulatedBodyInertia;
+  template <typename>
+  friend class ArticulatedBodyInertia;
 
   // Helper method for NaN initialization.
   static constexpr T nan() {
@@ -398,4 +398,4 @@ class ArticulatedBodyInertia {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::ArticulatedBodyInertia)
+    class drake::multibody::ArticulatedBodyInertia);

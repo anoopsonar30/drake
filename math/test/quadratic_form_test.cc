@@ -86,6 +86,13 @@ GTEST_TEST(TestDecomposePSDmatrixIntoXtransposeTimesX, negativeY) {
       DecomposePSDmatrixIntoXtransposeTimesX(-Eigen::Matrix3d::Identity(), 0),
       "Y is not positive semidefinite. It has an eigenvalue -1.* that is less"
       " than the tolerance -0.*.");
+
+  // If return_empty_if_not_psd is true, the function should return an empty
+  // matrix.
+  Eigen::MatrixXd X = DecomposePSDmatrixIntoXtransposeTimesX(
+      -Eigen::Matrix3d::Identity(), 0, true /* return_empty_if_not_psd */);
+  EXPECT_EQ(X.rows(), 0);
+  EXPECT_EQ(X.cols(), 3);
 }
 
 GTEST_TEST(TestDecomposePSDmatrixIntoXtransposeTimesX, indefiniteY) {
@@ -99,18 +106,33 @@ GTEST_TEST(TestDecomposePSDmatrixIntoXtransposeTimesX, indefiniteY) {
   // clang-format on
   EXPECT_THROW(DecomposePSDmatrixIntoXtransposeTimesX(Y, 0),
                std::runtime_error);
+
+  // If return_empty_if_not_psd is true, the function should return an empty
+  // matrix.
+  Eigen::MatrixXd X = DecomposePSDmatrixIntoXtransposeTimesX(
+      Y, 0, true /* return_empty_if_not_psd */);
+  EXPECT_EQ(X.rows(), 0);
+  EXPECT_EQ(X.cols(), 4);
 }
 
 GTEST_TEST(TestDecomposePSDmatrixIntoXtransposeTimesX, almost_psd_Y) {
   // Y is almost PSD.
   const RotationMatrixd U = RotationMatrixd::MakeYRotation(M_PI / 2);
-  const Eigen::Matrix3d Y = U.matrix()
-                          * Eigen::Vector3d(1, -1E-10, 2).asDiagonal()
-                          * U.transpose().matrix();
+  const Eigen::Matrix3d Y = U.matrix() *
+                            Eigen::Vector3d(1, -1E-10, 2).asDiagonal() *
+                            U.transpose().matrix();
   // With tolerance being 0, DecomposePSDmatrixIntoXtransposeTimesX should
   // detect Y is not PSD.
   EXPECT_THROW(DecomposePSDmatrixIntoXtransposeTimesX(Y, 0),
                std::runtime_error);
+
+  // If return_empty_if_not_psd is true, the function should return an empty
+  // matrix.
+  Eigen::MatrixXd X = DecomposePSDmatrixIntoXtransposeTimesX(
+      Y, 0, true /* return_empty_if_not_psd */);
+  EXPECT_EQ(X.rows(), 0);
+  EXPECT_EQ(X.cols(), 3);
+
   // With tolerance being 1E-10, it should regard Y as a PSD matrix.
   CheckDecomposePSDmatrixIntoXtransposeTimesX(Y, 2E-10, 1E-9);
 }
@@ -134,7 +156,7 @@ void CheckDecomposePositiveQuadraticForm(
                               MatrixCompareType::absolute));
   EXPECT_NEAR(d.squaredNorm(), c, tol_check);
   Eigen::MatrixXd Y(Q.rows() + 1, Q.rows() + 1);
-  Y << Q, b/2, b.transpose() / 2, c;
+  Y << Q, b / 2, b.transpose() / 2, c;
   Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr(Y);
   EXPECT_EQ(qr.rank(), R.rows());
 }
@@ -238,16 +260,15 @@ GTEST_TEST(TestDecomposePositiveQuadraticForm, Test7) {
 }
 
 void CheckBalancing(const Eigen::Matrix3d& S, const Eigen::Matrix3d& P,
-                   const Eigen::MatrixXd& T) {
+                    const Eigen::MatrixXd& T) {
   const Eigen::MatrixXd D = T.transpose() * S * T;
   const Eigen::MatrixXd Dinv = (T.transpose() * P * T).cwiseAbs();
 
   // Check that D and Dinv are diagonal.
-  EXPECT_TRUE(CompareMatrices(D, Eigen::MatrixXd(D.diagonal().asDiagonal()),
-                              1e-11));
   EXPECT_TRUE(
-      CompareMatrices(Dinv, Eigen::MatrixXd(Dinv.diagonal().asDiagonal()),
-                      1e-11));
+      CompareMatrices(D, Eigen::MatrixXd(D.diagonal().asDiagonal()), 1e-11));
+  EXPECT_TRUE(CompareMatrices(
+      Dinv, Eigen::MatrixXd(Dinv.diagonal().asDiagonal()), 1e-11));
 
   // Check that Dinv is, in fact, the inverse of D.
   EXPECT_TRUE(CompareMatrices(D.inverse(), Dinv, 1e-10));

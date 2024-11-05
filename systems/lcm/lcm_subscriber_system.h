@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/drake_throw.h"
 #include "drake/lcm/drake_lcm_interface.h"
 #include "drake/systems/framework/basic_vector.h"
@@ -17,6 +16,12 @@
 namespace drake {
 namespace systems {
 namespace lcm {
+
+#ifndef DRAKE_DOXYGEN_CXX
+namespace internal {
+class LcmSystemGraphviz;
+}  // namespace internal
+#endif
 
 /**
  * Receives LCM messages from a given channel and outputs them to a
@@ -47,7 +52,7 @@ namespace lcm {
  */
 class LcmSubscriberSystem : public LeafSystem<double> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmSubscriberSystem)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LcmSubscriberSystem);
 
   /**
    * Factory method that returns a subscriber System that provides
@@ -156,6 +161,10 @@ class LcmSubscriberSystem : public LeafSystem<double> {
 
   EventStatus Initialize(const Context<double>&, State<double>* state) const;
 
+  typename LeafSystem<double>::GraphvizFragment DoGetGraphvizFragment(
+      const typename LeafSystem<double>::GraphvizFragmentParams& params)
+      const final;
+
   // The channel on which to receive LCM messages.
   const std::string channel_;
 
@@ -188,6 +197,9 @@ class LcmSubscriberSystem : public LeafSystem<double> {
 
   // A timeout in seconds.
   const double wait_for_message_on_initialization_timeout_;
+
+  // Graphviz support (for DoGetGraphvizFragment).
+  const std::unique_ptr<internal::LcmSystemGraphviz> graphviz_;
 };
 
 }  // namespace lcm

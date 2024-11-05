@@ -2,7 +2,6 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/multibody/inverse_kinematics/test/inverse_kinematics_test_utilities.h"
 
 using drake::systems::Context;
@@ -72,8 +71,8 @@ void TestComPositionConstraint(
   AutoDiffVecXd x_autodiff = math::InitializeAutoDiff(x);
   AutoDiffVecXd y_autodiff;
   constraint.Eval(x_autodiff, &y_autodiff);
-  plant_autodiff->GetMutablePositions(plant_context_autodiff) =
-      x_autodiff.head(plant->num_positions());
+  plant_autodiff->SetPositions(plant_context_autodiff,
+                               x_autodiff.head(plant->num_positions()));
   std::vector<ModelInstanceIndex> model_instances_val;
   if (model_instances.has_value()) {
     model_instances_val = model_instances.value();
@@ -96,8 +95,8 @@ void TestComPositionConstraint(
     x_grad(i, 1) = -0.2 * i - 0.5;
   }
   x_autodiff = math::InitializeAutoDiff(x, x_grad);
-  plant_autodiff->GetMutablePositions(plant_context_autodiff) =
-      x_autodiff.head(plant->num_positions());
+  plant_autodiff->SetPositions(plant_context_autodiff,
+                               x_autodiff.head(plant->num_positions()));
   constraint.Eval(x_autodiff, &y_autodiff);
   y_autodiff_expected = EvalComPositionConstraintAutoDiff(
       *plant_context_autodiff, *plant_autodiff, model_instances_val,
@@ -123,11 +122,10 @@ TEST_F(IiwaKinematicConstraintTest,
 }
 
 GTEST_TEST(DualIiwaTest, ComPositionConstraint_model_instance) {
-  const std::string iiwa_path = FindResourceOrThrow(
-      "drake/manipulation/models/iiwa_description/sdf/"
-      "iiwa14_no_collision.sdf");
+  const std::string iiwa_url =
+      "package://drake_models/iiwa_description/sdf/iiwa14_no_collision.sdf";
   auto plant =
-      ConstructIiwaPlant(iiwa_path, 0.1 /* time step */, 2 /* num_iiwa */);
+      ConstructIiwaPlant(iiwa_url, 0.1 /* time step */, 2 /* num_iiwa */);
   auto plant_context = plant->CreateDefaultContext();
 
   auto plant_autodiff = systems::System<double>::ToAutoDiffXd(*plant);

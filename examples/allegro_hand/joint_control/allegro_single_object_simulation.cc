@@ -90,11 +90,11 @@ void DoMain() {
   std::string hand_model_url;
   if (FLAGS_use_right_hand) {
     hand_model_url =
-        "package://drake/manipulation/models/"
+        "package://drake_models/"
         "allegro_hand_description/sdf/allegro_hand_description_right.sdf";
   } else {
     hand_model_url =
-        "package://drake/manipulation/models/"
+        "package://drake_models/"
         "allegro_hand_description/sdf/allegro_hand_description_left.sdf";
   }
 
@@ -165,8 +165,7 @@ void DoMain() {
   DRAKE_DEMAND(plant.num_actuators() == 16);
   // N.B. This change MUST be performed before Finalize() in order to take
   // effect.
-  for (JointActuatorIndex actuator_index(0);
-       actuator_index < plant.num_actuators(); ++actuator_index) {
+  for (JointActuatorIndex actuator_index : plant.GetJointActuatorIndices()) {
     JointActuator<double>& actuator =
         plant.get_mutable_joint_actuator(actuator_index);
     actuator.set_default_rotor_inertia(rotor_inertia);
@@ -257,12 +256,12 @@ void DoMain() {
   diagram->SetDefaultContext(diagram_context.get());
 
   // Set the position of object
-  const multibody::Body<double>& hand = plant.GetBodyByName("hand_root");
+  const multibody::RigidBody<double>& hand = plant.GetBodyByName("hand_root");
   systems::Context<double>& plant_context =
       diagram->GetMutableSubsystemContext(plant, diagram_context.get());
 
   // Initialize the mug pose to be right in the middle between the fingers.
-  const multibody::Body<double>& mug = plant.GetBodyByName("simple_mug");
+  const multibody::RigidBody<double>& mug = plant.GetBodyByName("simple_mug");
   const Eigen::Vector3d& p_WHand =
       plant.EvalBodyPoseInWorld(plant_context, hand).translation();
   RigidTransformd X_WM(

@@ -1,15 +1,23 @@
 #include "drake/geometry/read_obj.h"
 
+#include <filesystem>
 #include <unordered_set>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
+#include "drake/common/test_utilities/diagnostic_policy_test_base.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 
 namespace drake {
 namespace geometry {
 namespace internal {
 namespace {
+
+std::filesystem::path FindPathOrThrow(const std::string& resource_file) {
+  return FindResourceOrThrow(resource_file);
+}
 
 // Check if the set of vertices match (not caring about the order).
 void CheckVertices(
@@ -28,12 +36,25 @@ void CheckVertices(
   }
 }
 
-GTEST_TEST(ReadObjFile, QuadCube) {
-  // TODO(hongkai.dai): add the test with triangulate=true.
-  for (const double scale : {1., 0.5, 1.5}) {
+// We want to simply confirm that triangulate is propagating through. We rely
+// on tinyobj to triangulate correctly. We'll just confirm that quads become
+// triangles upon request.
+GTEST_TEST(ReadObjTest, Triangulate) {
+  for (const bool triangulate : {true, false}) {
     const auto [vertices, faces, num_faces] =
-        ReadObjFile(FindResourceOrThrow("drake/geometry/test/quad_cube.obj"),
-                    scale, false /*triangulate */);
+        ReadObj(FindPathOrThrow("drake/geometry/test/quad_cube.obj"),
+                /* scale= */ 1, triangulate);
+    EXPECT_EQ(vertices->size(), 8);
+    EXPECT_EQ(num_faces, triangulate ? 12 : 6);
+  }
+}
+
+// Performs the test over multiple scales to make sure scale is included.
+GTEST_TEST(ReadObjTest, QuadCube) {
+  for (const double scale : {0.5, 1.5}) {
+    const auto [vertices, faces, num_faces] =
+        ReadObj(FindPathOrThrow("drake/geometry/test/quad_cube.obj"), scale,
+                /* triangulate= */ false);
     EXPECT_EQ(vertices->size(), 8);
     EXPECT_EQ(num_faces, 6);
     Eigen::Matrix<double, 8, 3> vertices_expected;
@@ -73,13 +94,13 @@ GTEST_TEST(ReadObjFile, QuadCube) {
   }
 }
 
-GTEST_TEST(ReadObjFile, Octahedron) {
-  // TODO(hongkai.dai): add the test with triangulate=true. With triangulation,
-  // the vertices and faces should be the same as triangulate=false.
-  for (const double scale : {1., 0.5, 1.5}) {
+// The octahedron.obj is comprised only of triangles; we should get the same
+// result regardless of whether triangulate is true or false.
+GTEST_TEST(ReadObjTest, TriangulatingNoop) {
+  for (const bool triangulate : {true, false}) {
     const auto [vertices, faces, num_faces] =
-        ReadObjFile(FindResourceOrThrow("drake/geometry/test/octahedron.obj"),
-                    scale, false /*triangulate */);
+        ReadObj(FindPathOrThrow("drake/geometry/test/octahedron.obj"),
+                /* scale= */ 1.0, triangulate);
     EXPECT_EQ(vertices->size(), 6u);
     Eigen::Matrix<double, 6, 3> vertices_expected;
     // clang-format off
@@ -90,7 +111,6 @@ GTEST_TEST(ReadObjFile, Octahedron) {
                          0, 0, std::sqrt(2),
                          0, 0, -std::sqrt(2);
     // clang-format on
-    vertices_expected *= scale;
     CheckVertices(vertices, vertices_expected.transpose(), 1E-5);
     EXPECT_EQ(num_faces, 8);
     // Each face has 3 vertices, so faces.size() = num_faces * (1 + 3).
@@ -98,43 +118,202 @@ GTEST_TEST(ReadObjFile, Octahedron) {
   }
 }
 
-GTEST_TEST(ReadObjFile, NonconvexMesh) {
-  for (const double scale : {1., 0.5, 1.5}) {
-    const auto [vertices, faces, num_faces] = ReadObjFile(
-        FindResourceOrThrow("drake/geometry/test/non_convex_mesh.obj"), scale,
-        false /*triangulate */);
-    Eigen::Matrix<double, 5, 3> vertices_expected;
-    // clang-format off
-    vertices_expected << 0.0, 0.0, 0.0,
-                         1.0, 0.0, 0.0,
-                         0.0, 1.0, 0.0,
-                         0.0, 0.0, 1.0,
-                         0.2, 0.2, 0.2;
-    // clang-format on
-    vertices_expected *= scale;
-    CheckVertices(vertices, vertices_expected.transpose(), 1E-12);
-    // Now check the faces.
-    EXPECT_EQ(num_faces, 6);
-    EXPECT_EQ(faces->size(), num_faces * 4);
-    // The expected face include these vertices (directly copied from
-    // non_convex_mesh.obj which uses 1-index).
-    // (1, 2, 4)
-    // (1, 4, 3)
-    // (1, 3, 2)
-    // (2, 3, 5)
-    // (3, 4, 5)
-    // (4, 2, 5)
-    const std::set<std::set<int>> faces_expected{
-        {{1, 2, 4}, {1, 4, 3}, {1, 3, 2}, {2, 3, 5}, {3, 4, 5}, {4, 2, 5}}};
-    for (int i = 0; i < num_faces; ++i) {
-      // obj file uses 1-index, so we add 1 for each index stored in `faces`.
-      EXPECT_NE(faces_expected.find(std::set<int>({(*faces)[4 * i + 1] + 1,
-                                                   (*faces)[4 * i + 2] + 1,
-                                                   (*faces)[4 * i + 3] + 1})),
-                faces_expected.end());
-    }
+// Simply tests that multiple objects are supported. Scale and triangulate have
+// been tested elsewhere.
+GTEST_TEST(ReadObjTest, MultipleObjects) {
+  const auto [vertices, faces, num_faces] = ReadObj(
+      FindPathOrThrow("drake/geometry/test/two_cube_objects.obj"), 1.0,
+      /* triangulate= */ false);
+  Eigen::Matrix<double, 16, 3> vertices_expected;
+  // clang-format off
+    vertices_expected << 1, -1, -1,  // Cube 1 vertices.
+                         1, -1, -1,
+                         -1, -1, 1,
+                         -1, -1, -1,
+                         1, 1, -1,
+                         1, 1, 1,
+                         -1, 1, 1,
+                         -1, 1, -1,
+                         5, -1, -1,  // Cube 2 vertices.
+                         5, -1, 1,
+                         3, -1, 1,
+                         3, -1, -1,
+                         5, 1, -1,
+                         5, 1, 1,
+                         3, 1, 1,
+                         3, 1, -1;
+  // clang-format on
+  CheckVertices(vertices, vertices_expected.transpose(), 1E-12);
+  // Now check the faces - six quads per cube --> 12 faces.
+  EXPECT_EQ(num_faces, 12);
+  // A face includes size and vertex indices. 5 ints per quad face.
+  EXPECT_EQ(faces->size(), num_faces * 5);
+  // The expected faces, as defined by indexes to the face's vertices. This
+  // uses the 1-indexed values taken directly from two_cube_objects.obj.
+  const std::set<std::set<int>> faces_expected{{{1, 2, 3, 4},  // Cube 1.
+                                                {5, 8, 7, 6},
+                                                {1, 5, 6, 2},
+                                                {2, 6, 7, 3},
+                                                {3, 7, 8, 4},
+                                                {5, 1, 4, 8},
+                                                {9, 10, 11, 12},  // Cube 2.
+                                                {13, 16, 15, 14},
+                                                {9, 13, 14, 10},
+                                                {10, 14, 15, 11},
+                                                {11, 15, 16, 12},
+                                                {13, 9, 12, 16}}};
+  for (int i = 0; i < num_faces; ++i) {
+    // obj file uses 1-index, so we add 1 for each index stored in `faces`.
+    ASSERT_NE(faces_expected.find(std::set<int>(
+                  {(*faces)[5 * i + 1] + 1, (*faces)[5 * i + 2] + 1,
+                   (*faces)[5 * i + 3] + 1, (*faces)[5 * i + 4] + 1})),
+              faces_expected.end());
   }
 }
+
+// A quick reality check that we can successfully invoke with a MeshSource.
+// Previous tests have relied on implicit conversion from path to source.
+GTEST_TEST(ReadObjTest, MeshSourceRegression) {
+  // In-memory source.
+  {
+    const MeshSource source(InMemoryMesh{MemoryFile(R"""(v 0 0 0
+                                                         v 0 1 0
+                                                         v 1 0 0
+                                                         v 1 1 0
+                                                         f 1 2 3 4
+                                                       )""",
+                                                    ".obj", "test")});
+    const auto [vertices, faces, num_faces] =
+        ReadObj(source, 2.0, /* triangulate= */ true);
+    EXPECT_EQ(vertices->size(), 4);
+    EXPECT_EQ(faces->size(), 8);  // Two encoded triangles, 4 ints per tri.
+  }
+
+  // File path source.
+  {
+    const MeshSource source(
+        FindPathOrThrow("drake/geometry/test/quad_cube.obj"));
+    const auto [vertices, faces, num_faces] =
+        ReadObj(source, 2.0, /* triangulate= */ false);
+    EXPECT_EQ(vertices->size(), 8);
+    EXPECT_EQ(faces->size(), 30);  // Six encoded quads, 5 ints per quad.
+  }
+}
+
+// When requesting only vertices, we get only vertices. In fact, we can get the
+// vertices from an obj that would ordinarily throw if we asked for the face
+// data (see ErrorModes, below).
+GTEST_TEST(ReadObjTest, VertexOnly) {
+  const MeshSource source(InMemoryMesh{MemoryFile(R"""(v 0 0 0
+                                                       v 0 1 0
+                                                       v 1 0 0
+                                                       v 1 1 0
+                                                     )""",
+                                                  ".obj", "no_faces")});
+  const auto [vertices, faces, num_faces] =
+      ReadObj(source, 2.0, /* triangulate= */ true, /* vertices_only= */ true);
+  EXPECT_EQ(vertices->size(), 4);
+  EXPECT_EQ(faces->size(), 0);
+  EXPECT_EQ(num_faces, 0);
+}
+
+class ReadObjDiagnosticsTest : public test::DiagnosticPolicyTestBase {};
+
+// Problems parsing the requested source.
+TEST_F(ReadObjDiagnosticsTest, ErrorModes) {
+  // tinyobj errors broadcast as diagnostic errors. Without providing a
+  // diagnostic policy, it throws.
+  {
+    const std::string bad_index_obj = R"""(
+    v 0 0 0
+    v 1 0 0
+    v 0 1 0
+    # Zero-indexed vertex indices.
+    f 0 1 2
+    )""";
+    const MeshSource source(
+        InMemoryMesh{MemoryFile(bad_index_obj, ".obj", "bad indices")});
+    auto [verts, _1, _2] =
+        ReadObj(source, 2.0, /* triangulate= */ false,
+                /* vertices_only= */ true, diagnostic_policy_);
+    EXPECT_EQ(verts, nullptr);
+    EXPECT_THAT(TakeError(), testing::HasSubstr("zero value for vertex"));
+    DRAKE_EXPECT_THROWS_MESSAGE(ReadObj(source, 2.0, /* triangulate= */ false,
+                                        /* vertices_only= */ true),
+                                "[^]*zero value for vertex[^]*");
+  }
+
+  // tinyobj warnings broadcast as diagnostic warnings. Without providing a
+  // diagnostic policy, a mesh is returned.
+  {
+    const std::string bad_index_obj = R"""(
+    v 0 0 0
+    v 1 0 0
+    v 0 1 0
+    # A vertex too high causes a warning.
+    f 1 2 4
+    )""";
+    const MeshSource source(
+        InMemoryMesh{MemoryFile(bad_index_obj, ".obj", "group")});
+    auto [verts, _1, _2] =
+        ReadObj(source, 2.0, /* triangulate= */ false,
+                /* vertices_only= */ true, diagnostic_policy_);
+    EXPECT_EQ(verts->size(), 3);
+    EXPECT_THAT(TakeWarning(),
+                testing::HasSubstr("Vertex indices out of bounds"));
+    // This will write a warning to the console.
+    EXPECT_NO_THROW(ReadObj(source, 2.0, /* triangulate= */ false,
+                            /* vertices_only= */ true));
+  }
+
+  // There are no faces in an otherwise valid .obj.
+  const std::string no_face_obj = R"""(
+  v 0 0 0
+  v 0 1 0
+  v 1 0 0
+  v 1 1 0
+  )""";
+  {
+    const MeshSource source(
+        InMemoryMesh{MemoryFile(no_face_obj, ".obj", "no_faces")});
+    auto [verts, _1, _2] =
+        ReadObj(source, 2.0, /* triangulate= */ false,
+                /* vertices_only= */ false, diagnostic_policy_);
+    EXPECT_EQ(verts, nullptr);
+    EXPECT_THAT(TakeError(), testing::HasSubstr("no objects"));
+    DRAKE_EXPECT_THROWS_MESSAGE(ReadObj(source, 2.0, /* triangulate= */ false,
+                                        /* vertices_only= */ false),
+                                ".*no objects.*");
+  }
+
+  // Not an .obj - from memory.
+  {
+    const MeshSource source(
+        InMemoryMesh{MemoryFile(no_face_obj, ".bad", "wrong_extension")});
+    auto [verts, _1, _2] =
+        ReadObj(source, 2.0, /* triangulate= */ false,
+                /* vertices_only= */ true, diagnostic_policy_);
+    EXPECT_EQ(verts, nullptr);
+    EXPECT_THAT(TakeError(), testing::HasSubstr("wrong extension: '.bad'"));
+    DRAKE_EXPECT_THROWS_MESSAGE(ReadObj(source, 2.0, /* triangulate= */ false,
+                                        /* vertices_only= */ false),
+                                ".*wrong extension.*");
+  }
+
+  // Not an .obj - from disk.
+  {
+    const MeshSource source("some_file.bad");
+    auto [verts, _1, _2] =
+        ReadObj(source, 2.0, /* triangulate= */ false,
+                /* vertices_only= */ true, diagnostic_policy_);
+    EXPECT_EQ(verts, nullptr);
+    EXPECT_THAT(TakeError(), testing::HasSubstr("wrong extension: '.bad'"));
+    DRAKE_EXPECT_THROWS_MESSAGE(ReadObj(source, 2.0, /* triangulate= */ false,
+                                        /* vertices_only= */ false),
+                                ".*wrong extension.*");
+  }
+}
+
 }  // namespace
 }  // namespace internal
 }  // namespace geometry

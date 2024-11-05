@@ -31,8 +31,7 @@ constexpr int kNumQuads = QuadratureType::num_quadrature_points;
 using AutoDiffIsoparametricElement =
     internal::LinearSimplexElement<AutoDiffXd, kNaturalDimension,
                                    kSpatialDimension, kNumQuads>;
-using AutoDiffConstitutiveModel =
-    internal::LinearConstitutiveModel<AutoDiffXd, kNumQuads>;
+using AutoDiffConstitutiveModel = internal::LinearConstitutiveModel<AutoDiffXd>;
 using AutoDiffElement =
     VolumetricElement<AutoDiffIsoparametricElement, QuadratureType,
                       AutoDiffConstitutiveModel>;
@@ -40,8 +39,7 @@ using AutoDiffElement =
 using DoubleIsoparametricElement =
     internal::LinearSimplexElement<double, kNaturalDimension, kSpatialDimension,
                                    kNumQuads>;
-using DoubleConstitutiveModel =
-    internal::LinearConstitutiveModel<double, kNumQuads>;
+using DoubleConstitutiveModel = internal::LinearConstitutiveModel<double>;
 using DoubleElement =
     VolumetricElement<DoubleIsoparametricElement, QuadratureType,
                       DoubleConstitutiveModel>;
@@ -159,7 +157,9 @@ TEST_F(VolumetricModelTest, TangentMatrixIsResidualDerivative) {
   unique_ptr<FemState<AutoDiffXd>> autodiff_state =
       MakeDeformedFemState(model_);
   VectorX<AutoDiffXd> residual(autodiff_state->num_dofs());
-  model_.CalcResidual(*autodiff_state, &residual);
+  const systems::LeafContext<AutoDiffXd> dummy_context;
+  const FemPlantData<AutoDiffXd> dummy_data{dummy_context, {}};
+  model_.CalcResidual(*autodiff_state, dummy_data, &residual);
 
   VolumetricModel<DoubleElement> double_model;
   AddBoxToModel(&double_model);
@@ -230,6 +230,29 @@ TEST_F(VolumetricModelTest, ElasticEnergy) {
                                 0.5 * lambda * strain.trace() * strain.trace();
   const double expected_energy = energy_density * volume;
   EXPECT_DOUBLE_EQ(energy, expected_energy);
+}
+
+TEST_F(VolumetricModelTest, Clone) {
+  using DoubleModel = VolumetricModel<DoubleElement>;
+  DoubleModel double_model;
+  AddBoxToModel(&double_model);
+
+  std::unique_ptr<FemModel<double>> clone = double_model.Clone();
+  const DoubleModel* double_clone =
+      dynamic_cast<const DoubleModel*>(clone.get());
+  ASSERT_NE(double_clone, nullptr);
+
+  std::unique_ptr<FemState<double>> state = MakeDeformedFemState(double_model);
+  std::unique_ptr<FemState<double>> clone_state =
+      MakeDeformedFemState(*double_clone);
+
+  EXPECT_EQ(state->GetPositions(), clone_state->GetPositions());
+  EXPECT_EQ(state->GetPreviousStepPositions(),
+            clone_state->GetPreviousStepPositions());
+  EXPECT_EQ(state->GetVelocities(), clone_state->GetVelocities());
+  EXPECT_EQ(state->GetAccelerations(), clone_state->GetAccelerations());
+  EXPECT_EQ(state->num_dofs(), clone_state->num_dofs());
+  EXPECT_EQ(state->num_nodes(), clone_state->num_nodes());
 }
 
 }  // namespace

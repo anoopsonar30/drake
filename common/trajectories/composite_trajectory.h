@@ -24,13 +24,14 @@ class CompositeTrajectory final : public trajectories::PiecewiseTrajectory<T> {
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(CompositeTrajectory);
 
   /** Constructs a composite trajectory from a list of Trajectories.
+  @pre ∀i, `segments[i].get() != nullptr`.
   @pre ∀i, `segments[i+1].start_time() == segments[i].end_time()`.
   @pre ∀i, `segments[i].rows() == segments[0].rows()` and segments[i].cols() ==
   segments[0].cols()`. */
   explicit CompositeTrajectory(
       std::vector<copyable_unique_ptr<Trajectory<T>>> segments);
 
-  virtual ~CompositeTrajectory() = default;
+  ~CompositeTrajectory() final;
 
   std::unique_ptr<trajectories::Trajectory<T>> Clone() const final;
 
@@ -52,6 +53,14 @@ class CompositeTrajectory final : public trajectories::PiecewiseTrajectory<T> {
     return *segments_[segment_index];
   }
 
+  /** Constructs a composite trajectory from a list of trajectories whose start
+  and end times may not coincide, by translating their start and end times.
+  @pre ∀i, `segments[i].get() != nullptr`.
+  @pre ∀i, `segments[i].rows() == segments[0].rows()` and segments[i].cols() ==
+  segments[0].cols()`. */
+  static CompositeTrajectory<T> AlignAndConcatenate(
+      const std::vector<copyable_unique_ptr<Trajectory<T>>>& segments);
+
  private:
   bool do_has_derivative() const final;
 
@@ -67,4 +76,4 @@ class CompositeTrajectory final : public trajectories::PiecewiseTrajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::CompositeTrajectory)
+    class drake::trajectories::CompositeTrajectory);

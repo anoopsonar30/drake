@@ -18,6 +18,7 @@
 #include "drake/common/never_destroyed.h"
 #include "drake/math/fast_pose_composition_functions.h"
 #include "drake/math/roll_pitch_yaw.h"
+#include "drake/math/unit_vector.h"
 
 namespace drake {
 namespace math {
@@ -26,7 +27,7 @@ namespace internal {
 // This is used to select a non-initializing constructor for use by
 // RigidTransform.
 struct DoNotInitializeMemberFields {};
-}
+}  // namespace internal
 
 /// This class represents a 3x3 rotation matrix between two arbitrary frames
 /// A and B and helps ensure users create valid rotation matrices.  This class
@@ -56,7 +57,7 @@ struct DoNotInitializeMemberFields {};
 template <typename T>
 class RotationMatrix {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RotationMatrix)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RotationMatrix);
 
   /// Constructs a 3x3 identity %RotationMatrix -- which corresponds to
   /// aligning two frames (so that unit vectors Ax = Bx, Ay = By, Az = Bz).
@@ -101,13 +102,45 @@ class RotationMatrix {
   /// R that is built from `theta_lambda` fails IsValid(R).  For example, an
   /// exception is thrown if `lambda` is zero or contains a NaN or infinity.
   explicit RotationMatrix(const Eigen::AngleAxis<T>& theta_lambda) {
-    // TODO(mitiguy) Consider adding an optional second argument if `lambda` is
-    // known to be normalized apriori or calling site does not want
-    // normalization.
-    const Vector3<T>& lambda = theta_lambda.axis();
-    const T norm = lambda.norm();
+    using std::cos;
+    using std::sin;
+    // TODO(mitiguy) Consider adding an optional second argument if lambda is
+    // known to be normalized apriori or the caller does not want normalization.
     const T& theta = theta_lambda.angle();
-    set(Eigen::AngleAxis<T>(theta, lambda / norm).toRotationMatrix());
+    const Vector3<T>& lambda = theta_lambda.axis();
+    // We won't use AngleAxis<T>::toRotationMatrix because somtimes it is
+    // miscompiled by Clang 15. Instead, we'll follow the derivation here:
+    // https://www.euclideanspace.com/maths/geometry/rotations/conversions/angleToMatrix/index.htm
+    const T norm = lambda.norm();
+    const T x = lambda.x() / norm;
+    const T y = lambda.y() / norm;
+    const T z = lambda.z() / norm;
+    const T s = sin(theta);
+    const T c = cos(theta);
+    const T t = 1 - c;     // 1 - cos(θ)
+    const T sx = s * x;    // sin(θ) x
+    const T sy = s * y;    // sin(θ) y
+    const T sz = s * z;    // sin(θ) z
+    const T tx = t * x;    // (1 - cos(θ)) x
+    const T ty = t * y;    // (1 - cos(θ)) y
+    const T tz = t * z;    // (1 - cos(θ)) z
+    const T txx = tx * x;  // (1 - cos(θ)) x²
+    const T tyy = ty * y;  // (1 - cos(θ)) y²
+    const T tzz = tz * z;  // (1 - cos(θ)) z²
+    const T txy = tx * y;  // (1 - cos(θ)) x y
+    const T txz = tx * z;  // (1 - cos(θ)) x z
+    const T tyz = ty * z;  // (1 - cos(θ)) y z
+    Matrix3<T> R;
+    R.coeffRef(0, 0) = txx + c;   // (1 - cos(θ)) x² + cos(θ)
+    R.coeffRef(1, 1) = tyy + c;   // (1 - cos(θ)) y² + cos(θ)
+    R.coeffRef(2, 2) = tzz + c;   // (1 - cos(θ)) z² + cos(θ)
+    R.coeffRef(0, 1) = txy - sz;  // (1 - cos(θ)) x y - sin(θ) z
+    R.coeffRef(1, 0) = txy + sz;  // (1 - cos(θ)) x y + sin(θ) z
+    R.coeffRef(0, 2) = txz + sy;  // (1 - cos(θ)) x z + sin(θ) y
+    R.coeffRef(2, 0) = txz - sy;  // (1 - cos(θ)) x z - sin(θ) y
+    R.coeffRef(1, 2) = tyz - sx;  // (1 - cos(θ)) y z - sin(θ) x
+    R.coeffRef(2, 1) = tyz + sx;  // (1 - cos(θ)) y z + sin(θ) x
+    set(R);
   }
 
   /// Constructs a %RotationMatrix from an %RollPitchYaw.  In other words,
@@ -145,6 +178,14 @@ class RotationMatrix {
   /// form a RollPitchYaw from a rotation matrix.
   explicit RotationMatrix(const RollPitchYaw<T>& rpy);
 
+  /// (Advanced) Makes a %RotationMatrix from a Matrix3. No check is performed
+  /// to test whether or not the parameter R is a valid rotation matrix.
+  static RotationMatrix<T> MakeUnchecked(const Matrix3<T>& R) {
+    RotationMatrix<T> result(internal::DoNotInitializeMemberFields{});
+    result.R_AB_ = R;
+    return result;
+  }
+
   /// (Advanced) Makes the %RotationMatrix `R_AB` from right-handed orthogonal
   /// unit vectors `Bx`, `By`, `Bz` so the columns of `R_AB` are `[Bx, By, Bz]`.
   /// @param[in] Bx first unit vector in right-handed orthogonal set.
@@ -158,8 +199,9 @@ class RotationMatrix {
   /// The rows of `R_AB` are Ax, Ay, Az expressed in frame B (i.e.,`Ax_B`,
   /// `Ay_B`, `Az_B`).  The columns of `R_AB` are Bx, By, Bz expressed in
   /// frame A (i.e., `Bx_A`, `By_A`, `Bz_A`).
-  static RotationMatrix<T> MakeFromOrthonormalColumns(
-      const Vector3<T>& Bx, const Vector3<T>& By, const Vector3<T>& Bz) {
+  static RotationMatrix<T> MakeFromOrthonormalColumns(const Vector3<T>& Bx,
+                                                      const Vector3<T>& By,
+                                                      const Vector3<T>& Bz) {
     RotationMatrix<T> R(internal::DoNotInitializeMemberFields{});
     R.SetFromOrthonormalColumns(Bx, By, Bz);
     return R;
@@ -178,8 +220,9 @@ class RotationMatrix {
   /// The rows of `R_AB` are Ax, Ay, Az expressed in frame B (i.e.,`Ax_B`,
   /// `Ay_B`, `Az_B`).  The columns of `R_AB` are Bx, By, Bz expressed in
   /// frame A (i.e., `Bx_A`, `By_A`, `Bz_A`).
-  static RotationMatrix<T> MakeFromOrthonormalRows(
-      const Vector3<T>& Ax, const Vector3<T>& Ay, const Vector3<T>& Az) {
+  static RotationMatrix<T> MakeFromOrthonormalRows(const Vector3<T>& Ax,
+                                                   const Vector3<T>& Ay,
+                                                   const Vector3<T>& Az) {
     RotationMatrix<T> R(internal::DoNotInitializeMemberFields{});
     R.SetFromOrthonormalRows(Ax, Ay, Az);
     return R;
@@ -241,9 +284,9 @@ class RotationMatrix {
   ///   b_A contains a NaN or infinity or |b_A| < 1.0E-10.
   /// @see MakeFromOneUnitVector() if b_A is known to already be unit length.
   /// @retval R_AB the rotation matrix with properties as described above.
-  static RotationMatrix<T> MakeFromOneVector(
-      const Vector3<T>& b_A, int axis_index) {
-    const Vector3<T> u_A = NormalizeOrThrow(b_A, __func__);
+  static RotationMatrix<T> MakeFromOneVector(const Vector3<T>& b_A,
+                                             int axis_index) {
+    const Vector3<T> u_A = math::internal::NormalizeOrThrow(b_A, __func__);
     return MakeFromOneUnitVector(u_A, axis_index);
   }
 
@@ -254,10 +297,10 @@ class RotationMatrix {
   /// @param[in] axis_index The index ∈ {0, 1, 2} of the unit vector associated
   ///  with u_A, 0 means u_A is Bx, 1 means u_A is By, and 2 means u_A is Bz.
   /// @pre axis_index is 0 or 1 or 2.
-  /// @throws std::exception in Debug builds if u_A is not a unit vector, i.e.,
-  /// |u_A| is not within a tolerance of 4ε ≈ 8.88E-16 to 1.0.
-  /// @note This method is designed for maximum performance and does not verify
-  ///  u_A as a unit vector in Release builds.  Consider MakeFromOneVector().
+  /// @throws std::exception if u_A is not a unit vector, i.e., |u_A| is not
+  /// within a tolerance of 4ε ≈ 8.88E-16 to 1.0.
+  /// @note This method is designed for speed and does not normalize u_A to
+  ///  ensure it is a unit vector. Alternatively, consider MakeFromOneVector().
   /// @retval R_AB the rotation matrix whose properties are described in
   /// MakeFromOneVector().
   static RotationMatrix<T> MakeFromOneUnitVector(const Vector3<T>& u_A,
@@ -274,7 +317,7 @@ class RotationMatrix {
   /// @retval R_AB the rotation matrix with properties as described above.
   static RotationMatrix<T> MakeClosestRotationToIdentityFromUnitZ(
       const Vector3<T>& u_A) {
-    ThrowIfNotUnitLength(u_A, __func__);
+    math::internal::ThrowIfNotUnitVector(u_A, __func__);
     const Vector3<T>& Bz = u_A;
     const Vector3<T> Az = Vector3<T>(0, 0, 1);
     // The rotation axis of the Axis-Angle representation of the resulting
@@ -302,7 +345,9 @@ class RotationMatrix {
   /// %Matrix3 that underlies this %RotationMatrix.  For example, Eigen
   /// currently allows cast from type double to AutoDiffXd, but not vice-versa.
   template <typename U>
-  RotationMatrix<U> cast() const {
+  RotationMatrix<U> cast() const
+    requires is_default_scalar<U>
+  {  // NOLINT(whitespace/braces)
     // TODO(Mitiguy) Make the RotationMatrix::cast() method more robust.  It is
     // currently limited by Eigen's cast() for the matrix underlying this class.
     // Consider the following logic to improve casts (and address issue #11785).
@@ -314,8 +359,7 @@ class RotationMatrix {
     //    underlying call to a RotationMatrix constructor. Perhaps create
     //    specialized code to return a reference if casting to the same type,
     //    e.g., casting from `<double>` to `<double>' should be inexpensive.
-    const Matrix3<U> m = R_AB_.template cast<U>();
-    return RotationMatrix<U>(m, true);
+    return RotationMatrix<U>::MakeUnchecked(R_AB_.template cast<U>());
   }
 
   /// Sets `this` %RotationMatrix from a Matrix3.
@@ -323,7 +367,7 @@ class RotationMatrix {
   /// @throws std::exception in debug builds if R fails IsValid(R).
   void set(const Matrix3<T>& R) {
     DRAKE_ASSERT_VOID(ThrowIfNotValid(R));
-    SetUnchecked(R);
+    R_AB_ = R;
   }
 
   /// Returns the 3x3 identity %RotationMatrix.
@@ -405,7 +449,12 @@ class RotationMatrix {
     if constexpr (std::is_same_v<T, double>) {
       internal::ComposeRR(*this, other, this);
     } else {
-      SetUnchecked(matrix() * other.matrix());
+      // The result of matrix multiplication is not checked with
+      // ThrowIfNotValid() because the overhead would make this highly-used
+      // function very expensive. However, both arguments to this function and
+      // its result should be valid rotation matrices unless earlier validity
+      // checks are by-passed, e.g., with RotationMatrix::MakeUnchecked().
+      R_AB_ = matrix() * other.matrix();
     }
     return *this;
   }
@@ -602,12 +651,12 @@ class RotationMatrix {
   /// - [Dahleh] "Lectures on Dynamic Systems and Controls: Electrical
   /// Engineering and Computer Science, Massachusetts Institute of Technology"
   /// https://ocw.mit.edu/courses/electrical-engineering-and-computer-science/6-241j-dynamic-systems-and-control-spring-2011/readings/MIT6_241JS11_chap04.pdf
-  static RotationMatrix<T>
-  ProjectToRotationMatrix(const Matrix3<T>& M, T* quality_factor = nullptr) {
+  static RotationMatrix<T> ProjectToRotationMatrix(
+      const Matrix3<T>& M, T* quality_factor = nullptr) {
     const Matrix3<T> M_orthonormalized =
         ProjectMatrix3ToOrthonormalMatrix3(M, quality_factor);
     ThrowIfNotValid(M_orthonormalized);
-    return RotationMatrix<T>(M_orthonormalized, true);
+    return RotationMatrix<T>::MakeUnchecked(M_orthonormalized);
   }
 
   /// Returns an internal tolerance that checks rotation matrix orthonormality.
@@ -652,7 +701,7 @@ class RotationMatrix {
   /// Utility method to return the Vector4 associated with ToQuaternion(M).
   /// @param[in] M 3x3 matrix to be made into a quaternion.
   /// @see ToQuaternion().
-  static Vector4<T> ToQuaternionAsVector4(const Matrix3<T>& M)  {
+  static Vector4<T> ToQuaternionAsVector4(const Matrix3<T>& M) {
     const Eigen::Quaternion<T> q = ToQuaternion(M);
     return Vector4<T>(q.w(), q.x(), q.y(), q.z());
   }
@@ -696,18 +745,6 @@ class RotationMatrix {
   static constexpr double kInternalToleranceForOrthonormality{
       128 * std::numeric_limits<double>::epsilon()};
 
-  // Constructs a %RotationMatrix from a Matrix3.  No check is performed to test
-  // whether or not the parameter R is a valid rotation matrix.
-  // @param[in] R an allegedly valid rotation matrix.
-  // @note The second parameter is just a dummy to distinguish this constructor
-  // from any of the other constructors.
-  RotationMatrix(const Matrix3<T>& R, bool) : R_AB_(R) {}
-
-  // Sets `this` %RotationMatrix from a Matrix3.  No check is performed to
-  // test whether or not the parameter R is a valid rotation matrix.
-  // @param[in] R an allegedly valid rotation matrix.
-  void SetUnchecked(const Matrix3<T>& R) { R_AB_ = R; }
-
   // Sets `this` %RotationMatrix `R_AB` from right-handed orthogonal unit
   // vectors `Bx`, `By`, `Bz` so that the columns of `this` are `[Bx, By, Bz]`.
   // @param[in] Bx first unit vector in right-handed orthogonal basis.
@@ -718,8 +755,7 @@ class RotationMatrix {
   // orthogonal unit vectors, namely `Ax`, `Ay`, `Az` and `Bx`, `By`, `Bz`.
   // The rows of `R_AB` are `Ax`, `Ay`, `Az` whereas the
   // columns of `R_AB` are `Bx`, `By`, `Bz`.
-  void SetFromOrthonormalColumns(const Vector3<T>& Bx,
-                                 const Vector3<T>& By,
+  void SetFromOrthonormalColumns(const Vector3<T>& Bx, const Vector3<T>& By,
                                  const Vector3<T>& Bz) {
     R_AB_.col(0) = Bx;
     R_AB_.col(1) = By;
@@ -734,8 +770,7 @@ class RotationMatrix {
   // @param[in] Az third unit vector in right-handed orthogonal basis.
   // @throws std::exception in debug builds if `R_AB` fails R_AB.IsValid().
   // @see SetFromOrthonormalColumns() for additional notes.
-  void SetFromOrthonormalRows(const Vector3<T>& Ax,
-                              const Vector3<T>& Ay,
+  void SetFromOrthonormalRows(const Vector3<T>& Ax, const Vector3<T>& Ay,
                               const Vector3<T>& Az) {
     R_AB_.row(0) = Ax;
     R_AB_.row(1) = Ay;
@@ -762,8 +797,7 @@ class RotationMatrix {
   // matrix elements in R and `other`.
   // @returns `true` if `‖R - `other`‖∞ <= tolerance`.
   static boolean<T> IsNearlyEqualTo(const Matrix3<T>& R,
-                                    const Matrix3<T>& other,
-                                    double tolerance) {
+                                    const Matrix3<T>& other, double tolerance) {
     const T R_max_difference = GetMaximumAbsoluteDifference(R, other);
     return R_max_difference <= tolerance;
   }
@@ -810,8 +844,8 @@ class RotationMatrix {
   // - [Dahleh] "Lectures on Dynamic Systems and Controls: Electrical
   // Engineering and Computer Science, Massachusetts Institute of Technology"
   // https://ocw.mit.edu/courses/electrical-engineering-and-computer-science/6-241j-dynamic-systems-and-control-spring-2011/readings/MIT6_241JS11_chap04.pdf
-  static Matrix3<T> ProjectMatrix3ToOrthonormalMatrix3(
-      const Matrix3<T>& M, T* quality_factor);
+  static Matrix3<T> ProjectMatrix3ToOrthonormalMatrix3(const Matrix3<T>& M,
+                                                       T* quality_factor);
 
   // This is a helper method for RotationMatrix::ToQuaternion that returns a
   // Quaternion that is neither sign-canonicalized nor magnitude-normalized.
@@ -873,6 +907,7 @@ class RotationMatrix {
   static std::enable_if_t<!scalar_predicate<S>::is_bool, Eigen::Quaternion<S>>
   RotationMatrixToUnnormalizedQuaternion(
       const Eigen::Ref<const Matrix3<S>>& M) {
+    // clang-format off
     const T M00 = M(0, 0); const T M01 = M(0, 1); const T M02 = M(0, 2);
     const T M10 = M(1, 0); const T M11 = M(1, 1); const T M12 = M(1, 2);
     const T M20 = M(2, 0); const T M21 = M(2, 1); const T M22 = M(2, 2);
@@ -899,6 +934,7 @@ class RotationMatrix {
           M12 + M21,
           1.0 - (trace - 2 * M22),
         })));
+    // clang-format on
     return Eigen::Quaternion<T>(wxyz(0), wxyz(1), wxyz(2), wxyz(3));
   }
 
@@ -919,28 +955,6 @@ class RotationMatrix {
   static Matrix3<T> QuaternionToRotationMatrix(
       const Eigen::Quaternion<T>& quaternion, const T& two_over_norm_squared);
 
-  // Throws an exception if the vector v does not have a measurable magnitude
-  // within 4ε of 1 (where machine epsilon ε ≈ 2.22E-16).
-  // @param[in] v The vector to test.
-  // @param[in] function_name The name of the calling function; included in the
-  //   exception message.
-  // @throws std::exception if |v| cannot be verified to be within 4ε of 1.
-  //   An exception is thrown if v contains nonfinite numbers (NaN or infinity).
-  // @note no exception is thrown if v is a symbolic type.
-  static void ThrowIfNotUnitLength(const Vector3<T>& v,
-                                   const char* function_name);
-
-  // Returns the unit vector in the direction of v or throws an exception if v
-  // cannot be "safely" normalized.
-  // @param[in] v The vector to normalize.
-  // @param[in] function_name The name of the calling function; included in the
-  //   exception message.
-  // @throws std::exception if v contains nonfinite numbers (NaN or infinity)
-  //   or |v| < 1E-10.
-  // @note no exception is thrown if v is a symbolic type.
-  static Vector3<T> NormalizeOrThrow(const Vector3<T>& v,
-                                     const char* function_name);
-
   // Stores the underlying rotation matrix relating two frames (e.g. A and B).
   // For speed, `R_AB_` is uninitialized (public constructors set its value).
   // The elements are stored in column-major order, per Eigen's default,
@@ -950,7 +964,8 @@ class RotationMatrix {
 
 // To enable low-level optimizations we insist that RotationMatrix<double> is
 // packed into 9 consecutive doubles, with no extra alignment padding.
-static_assert(sizeof(RotationMatrix<double>) == 9 * sizeof(double),
+static_assert(
+    sizeof(RotationMatrix<double>) == 9 * sizeof(double),
     "Low-level optimizations depend on RotationMatrix<double> being stored as "
     "9 sequential doubles in memory, with no extra memory alignment padding.");
 
@@ -1006,12 +1021,11 @@ using RotationMatrixd = RotationMatrix<double>;
 /// </pre>
 /// @see GlobalInverseKinematics for an usage of this function.
 double ProjectMatToRotMatWithAxis(const Eigen::Matrix3d& M,
-                                  const Eigen::Vector3d& axis,
-                                  double angle_lb,
+                                  const Eigen::Vector3d& axis, double angle_lb,
                                   double angle_ub);
 
 }  // namespace math
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::math::RotationMatrix)
+    class ::drake::math::RotationMatrix);

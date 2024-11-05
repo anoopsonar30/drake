@@ -25,11 +25,11 @@ std::string CanonicalizeStringName(const std::string& name);
 template <typename K, typename V>
 class MapKeyRange {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MapKeyRange)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(MapKeyRange);
 
   class ConstIterator {
    public:
-    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ConstIterator)
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ConstIterator);
 
     /* In order to be able to instantiate an std::vector from a MapKeyRange,
      e.g.,
@@ -86,10 +86,22 @@ inline const Vector3<double>& convert_to_double(const Vector3<double>& vec) {
 }
 
 template <class T>
-Vector3<double> convert_to_double(
-    const Vector3<T>& vec) {
+Vector3<double> convert_to_double(const Vector3<T>& vec) {
   Vector3<double> result;
   for (int r = 0; r < 3; ++r) {
+    result(r) = ExtractDoubleOrThrow(vec(r));
+  }
+  return result;
+}
+
+inline const VectorX<double>& convert_to_double(const VectorX<double>& vec) {
+  return vec;
+}
+
+template <class T>
+VectorX<double> convert_to_double(const VectorX<T>& vec) {
+  VectorX<double> result(vec.size());
+  for (int r = 0; r < vec.size(); ++r) {
     result(r) = ExtractDoubleOrThrow(vec(r));
   }
   return result;
@@ -119,7 +131,6 @@ inline math::RigidTransformd convert_to_double(
   return math::RigidTransform<double>(
       ExtractDoubleOrThrow(X_AB.GetAsMatrix34()));
 }
-
 
 //@}
 

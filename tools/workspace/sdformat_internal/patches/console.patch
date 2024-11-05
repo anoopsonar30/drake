@@ -7,6 +7,7 @@ Remove all configuration options for sdf::Console logging.  All of them make
   thread-unsafe uses of globals, and Drake doesn't call them in any case.
 Add "color" to sdfdbg messages to help communicate the log level.
 
+Reasoning for not upstreaming this patch: Drake-specific build option.
 
 diff --git include/sdf/Console.hh include/sdf/Console.hh
 index 04856e90..0f379ab2 100644
@@ -154,12 +155,13 @@ diff --git src/Console.cc src/Console.cc
 index c0f4c4ed..a2f82f5d 100644
 --- src/Console.cc
 +++ src/Console.cc
-@@ -26,12 +26,15 @@
+@@ -26,21 +26,25 @@
  #include "sdf/Types.hh"
  #include "sdf/sdf_config.h"
  
+-#include <gz/utils/Environment.hh>
 +#include "drake/common/text_logging.h"
-+
+ 
  using namespace sdf;
  
  /// Static pointer to the console.
@@ -167,11 +169,7 @@ index c0f4c4ed..a2f82f5d 100644
  static std::mutex g_instance_mutex;
  
 +#if 0
- /// \todo Output disabled for windows, to allow tests to pass. We should
- /// disable output just for tests on windows.
- #ifndef _WIN32
-@@ -41,10 +44,13 @@ static bool g_quiet = true;
- #endif
+ static bool g_quiet = false;
  
  static Console::ConsoleStream g_NullStream(nullptr);
 +#endif

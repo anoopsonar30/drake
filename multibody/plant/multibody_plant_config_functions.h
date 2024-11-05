@@ -16,6 +16,15 @@ AddMultibodyPlantSceneGraphResult<double> AddMultibodyPlant(
     const MultibodyPlantConfig& config,
     systems::DiagramBuilder<double>* builder);
 
+/// Adds a new MultibodyPlant and SceneGraph to the given `builder`.  The
+/// plant's settings such as `time_step` are set using the given
+/// `plant_config`. The scene graph's settings are set using the given
+/// `scene_graph_config`.
+AddMultibodyPlantSceneGraphResult<double> AddMultibodyPlant(
+    const MultibodyPlantConfig& plant_config,
+    const geometry::SceneGraphConfig& scene_graph_config,
+    systems::DiagramBuilder<double>* builder);
+
 /// Applies settings given in `config` to an existing `plant`. The `time_step`
 /// is the one value in `config` that cannot be updated -- it can only be set
 /// in the MultibodyPlant constructor. Consider using AddMultibodyPlant() or
@@ -50,6 +59,11 @@ DiscreteContactSolver GetDiscreteContactSolverFromString(
 // value for a discrete contact solver type.
 std::string GetStringFromDiscreteContactSolver(
     DiscreteContactSolver discrete_contact_solver);
+
+DiscreteContactApproximation GetDiscreteContactApproximationFromString(
+    std::string_view discrete_contact_approximation);
+std::string GetStringFromDiscreteContactApproximation(
+    DiscreteContactApproximation discrete_contact_approximation);
 
 // (Exposed for unit testing only.)
 // Parses a string name for a contact representation and returns the enumerated

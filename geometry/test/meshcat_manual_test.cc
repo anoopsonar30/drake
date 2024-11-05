@@ -1,8 +1,11 @@
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+
+#include <gflags/gflags.h>
 
 #include "drake/common/find_resource.h"
 #include "drake/common/find_runfiles.h"
@@ -26,26 +29,99 @@ then follow the instructions on your console. */
 
 namespace drake {
 namespace geometry {
+namespace {
 
-using Eigen::Vector3d;
 using common::MaybePauseForUser;
+using Eigen::Vector3d;
 using math::RigidTransformd;
 using math::RotationMatrixd;
+
+namespace fs = std::filesystem;
+
+// Returns an offset pointer inside message that skips over leading newlines.
+const char* ltrim(const char* message) {
+  while (*message == '\n') {
+    ++message;
+  }
+  return message;
+}
+
+// Loads the textured cuboctahedron with hole into an in-memory Mesh.
+Mesh GetCuboctahedronInMemory(double scale) {
+  const fs::path obj_path = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+  const fs::path obj_dir = obj_path.parent_path();
+  string_map<FileSource> supporting_files;
+  for (const auto* f : {"cuboctahedron_with_hole.mtl", "rainbow_checker.png"}) {
+    supporting_files.emplace(f, MemoryFile::Make(std::move(obj_dir / f)));
+  }
+  return Mesh(
+      InMemoryMesh{MemoryFile::Make(obj_path), std::move(supporting_files)},
+      scale);
+}
+
+// Loads the fully_textured_pyramid.gltf file as an in-memory mesh.
+Mesh GetPyramidInMemory(double scale = 1.0) {
+  const fs::path gltf_path = FindResourceOrThrow(
+      "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf");
+  const fs::path gltf_dir = gltf_path.parent_path();
+  string_map<FileSource> supporting_files;
+  // These are _all_ the files referenced in fully_textured_pyramid.gltf. Only
+  // the ktx2 images will render, but the console will complain about not being
+  // able to find the .png images if we don't include them as supporting files.
+  // We'll add the ktx2 files as path FileSources to test both representations
+  // (MemoryFile and path).
+  bool have_paths = false;
+  for (const auto* f :
+       {"fully_textured_pyramid_emissive.png",
+        "fully_textured_pyramid_normal.png", "fully_textured_pyramid_omr.png",
+        "fully_textured_pyramid_base_color.png",
+        "fully_textured_pyramid_emissive.ktx2",
+        "fully_textured_pyramid_normal.ktx2", "fully_textured_pyramid_omr.ktx2",
+        "fully_textured_pyramid_base_color.ktx2",
+        "fully_textured_pyramid.bin"}) {
+    const std::string f_name(f);
+    if (f_name.ends_with(".ktx2")) {
+      supporting_files.emplace(f, gltf_dir / f);
+      have_paths = true;
+    } else {
+      supporting_files.emplace(f, MemoryFile::Make(std::move(gltf_dir / f)));
+    }
+  }
+  // Make sure there's not some erroneous logic in putting the ktx2 files in as
+  // path FileSource.
+  DRAKE_DEMAND(have_paths);
+
+  return Mesh(
+      InMemoryMesh{MemoryFile::Make(gltf_path), std::move(supporting_files)},
+      scale);
+}
 
 int do_main() {
   auto meshcat = std::make_shared<Meshcat>();
 
-  // For every two items we add to the initial array, decrement start_x by one
+  // For every items we add to the initial array, decrement start_x by one half
   // to keep things centered.
   // Use ++x as the x-position of new items.
-  const double start_x = -8;
+  const double start_x = -8.5;
   double x = start_x;
 
   Vector3d sphere_home{++x, 0, 0};
-  meshcat->SetObject("sphere", Sphere(0.25), Rgba(1.0, 0, 0, 1));
-  meshcat->SetTransform("sphere", RigidTransformd(sphere_home));
+  // The weird name for the sphere is to confirm that meshcat collapses
+  // redundant slashes. We'll subsequently refer to it without the slash to
+  // make sure they're equivalent.
+  meshcat->SetObject("sphere//scoped_name", Sphere(0.25), Rgba(1.0, 0, 0, 1));
+  meshcat->SetTransform("sphere/scoped_name", RigidTransformd(sphere_home));
+  // Note: this isn't the preferred means for setting opacity, but it is the
+  // simplest way to exercise chained property names.
+  meshcat->SetProperty("sphere/scoped_name/<object>", "material.opacity", 0.5);
+  meshcat->SetProperty("sphere/scoped_name/<object>", "material.transparent",
+                       true);
 
-  meshcat->SetObject("cylinder", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
+  // The weird name for the cylinder is to confirm that meshcat elides terminal
+  // slashes. We'll subsequently refer to it without the slash to make sure
+  // they're equivalent.
+  meshcat->SetObject("cylinder/", Cylinder(0.25, 0.5), Rgba(0.0, 1.0, 0, 1));
   meshcat->SetTransform("cylinder", RigidTransformd(Vector3d{++x, 0, 0}));
 
   // For animation, we'll aim the camera between the cylinder and ellipsoid.
@@ -59,6 +135,16 @@ int do_main() {
   meshcat->SetObject("box", Box(0.25, 0.25, 0.5), Rgba(0, 0, 1, 1));
   meshcat->SetTransform("box", RigidTransformd(box_home));
 
+  const std::string polytope_with_hole = FindResourceOrThrow(
+      "drake/examples/scene_graph/cuboctahedron_with_hole.obj");
+  meshcat->SetObject("obj_as_convex", Convex(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_convex", RigidTransformd(Vector3d{++x, 0, 0}));
+
+  meshcat->SetObject("obj_as_mesh", Mesh(polytope_with_hole, 0.25),
+                     Rgba(0.8, 0.4, 0.1, 1.0));
+  meshcat->SetTransform("obj_as_mesh", RigidTransformd(Vector3d{x, 1, 0}));
+
   meshcat->SetObject("capsule", Capsule(0.25, 0.5), Rgba(0, 1, 1, 1));
   meshcat->SetTransform("capsule", RigidTransformd(Vector3d{++x, 0, 0}));
 
@@ -69,10 +155,15 @@ int do_main() {
   // The color and shininess properties come from PBR materials.
   meshcat->SetObject(
       "gltf",
-      Mesh(FindResourceOrThrow("drake/geometry/render/test/meshes/cube.gltf"),
-           0.25));
+      Mesh(FindResourceOrThrow(
+               "drake/geometry/render/test/meshes/fully_textured_pyramid.gltf"),
+           0.5));
   const Vector3d gltf_pose{++x, 0, 0};
   meshcat->SetTransform("gltf", RigidTransformd(gltf_pose));
+
+  meshcat->SetObject("gltf_in_memory", GetPyramidInMemory(0.5));
+  meshcat->SetTransform("gltf_in_memory",
+                        RigidTransformd(gltf_pose + Vector3d(0, 1.5, 0)));
 
   auto mustard_obj =
       FindRunfile("drake_models/ycb/meshes/006_mustard_bottle_textured.obj")
@@ -124,8 +215,8 @@ int do_main() {
         {0, 0, 0}, {0.5, 0, 0}, {0.5, 0.5, 0}, {0, 0.5, 0.5}};
     std::vector<Vector3d> vertices;
     for (int v = 0; v < 4; ++v) vertices.emplace_back(vertex_data[v]);
-    TriangleSurfaceMesh<double> surface_mesh(
-        std::move(faces), std::move(vertices));
+    TriangleSurfaceMesh<double> surface_mesh(std::move(faces),
+                                             std::move(vertices));
     meshcat->SetObject("triangle_mesh", surface_mesh, Rgba(0.9, 0, 0.9, 1.0));
     meshcat->SetTransform("triangle_mesh",
                           RigidTransformd(Vector3d{++x, -0.25, 0}));
@@ -175,18 +266,63 @@ int do_main() {
                           RigidTransformd(Vector3d{++x, -0.25, 0}));
   }
 
-  std::cout << R"""(
-Open up your browser to the URL above.
+  std::cout << "\nDo *not* open up your browser to the URL above. Instead use "
+            << "the following URL\n\n"
+            << meshcat->web_url() << "?tracked_camera=on\n\n";
 
+  MaybePauseForUser();
+
+  // Note: this tests that the parameter on the html page is enough to enable
+  // camera tracking. Full camera tracking protocols are tested in
+  // meshcat_camera_tracking_test.py.
+  if (meshcat->GetTrackedCameraPose() == std::nullopt) {
+    std::cout << "Meshcat isn't receiving tracked camera poses from your "
+              << "browser. Are you sure your browser is using the full URL?\n"
+              << "\n    " << meshcat->web_url() << "?tracked_camera=on\n\n"
+              << "If not, use the url with the 'tracked_camera' parameter.\n\n";
+
+    MaybePauseForUser();
+
+    if (meshcat->GetTrackedCameraPose() == std::nullopt) {
+      std::cout << "  !!! ERROR !!! It appears that camera tracking isn't "
+                << "working!\n";
+      return 1;
+    } else {
+      std::cout << "That did it. Now we can move on.\n";
+    }
+  }
+
+  std::cout << ltrim(R"""(
+Open the developer tools of your browser (F12) and within that panel switch to
+the "Console" tab.
+
+Keep that panel visible throughout the entire testing process. Any errors or
+warnings displayed in that Console most likely indicate a bug in our code and
+should be fixed. (If you are running this test as part of a pull request code
+review, be sure to post the message as a Reviewable discussion.)
+
+Less severe Console messages (info, debug, etc.) are not bugs and can be
+ignored.
+
+Caveat: At the moment, you might see Console warnings related to deprecations.
+Ignore those for now; we'll need to circle back and fix them later.
+)""");
+  MaybePauseForUser();
+
+  std::cout << ltrim(R"""(
 - The background should be grey.
 - From left to right along the x axis, you should see:
-  - a red sphere
+  - a slightly transparent red sphere
   - a green cylinder (with the long axis in z)
   - a pink semi-transparent ellipsoid (long axis in z)
   - a blue box (long axis in z)
+  - an orange polytope (with a similary shaped textured polytope behind it).
+    The textured shape has a hole through. The orange polytope is its convex
+    hull.
   - a teal capsule (long axis in z)
   - a red cone (expanding in +z, twice as wide in y than in x)
-  - a shiny, green, dented cube (created with a PBR material)
+  - two shiny, textured pyramids (created with PBR materials); one read from
+    disk, the other loaded from memory.
   - a yellow mustard bottle w/ label
   - a dense rainbow point cloud in a box (long axis in z)
   - a blue line coiling up (in z).
@@ -195,7 +331,7 @@ Open up your browser to the URL above.
   - the same purple triangle mesh drawn as a wireframe.
   - the same triangle mesh drawn in multicolor.
   - a blue mesh plot of the function z = y*sin(5*x).
-)""";
+)""");
   MaybePauseForUser();
 
   std::cout << "Calling meshcat.Flush(), which will block until all clients "
@@ -210,21 +346,22 @@ Open up your browser to the URL above.
                "geometries:\n";
   MeshcatAnimation animation;
   std::cout << "- the red sphere should move up and down in z.\n";
-  animation.SetTransform(0, "sphere", RigidTransformd(sphere_home));
-  animation.SetTransform(20, "sphere", RigidTransformd(sphere_home +
-                                                       Vector3d::UnitZ()));
-  animation.SetTransform(40, "sphere", RigidTransformd(sphere_home));
+  animation.SetTransform(0, "sphere/scoped_name",
+                         RigidTransformd(sphere_home));
+  animation.SetTransform(20, "sphere/scoped_name",
+                         RigidTransformd(sphere_home + Vector3d::UnitZ()));
+  animation.SetTransform(40, "sphere/scoped_name",
+                         RigidTransformd(sphere_home));
 
   std::cout << "- the blue box should spin clockwise about the +z axis.\n";
-  animation.SetTransform(0, "box",
-                         RigidTransformd(RotationMatrixd::MakeZRotation(0),
-                                         box_home));
-  animation.SetTransform(20, "box",
-                         RigidTransformd(RotationMatrixd::MakeZRotation(M_PI),
-                                         box_home));
   animation.SetTransform(
-      40, "box", RigidTransformd(RotationMatrixd::MakeZRotation(2 * M_PI),
-                                 box_home));
+      0, "box", RigidTransformd(RotationMatrixd::MakeZRotation(0), box_home));
+  animation.SetTransform(
+      20, "box",
+      RigidTransformd(RotationMatrixd::MakeZRotation(M_PI), box_home));
+  animation.SetTransform(
+      40, "box",
+      RigidTransformd(RotationMatrixd::MakeZRotation(2 * M_PI), box_home));
   animation.set_repetitions(4);
 
   std::cout << "- the green cylinder should appear and disappear.\n";
@@ -245,8 +382,8 @@ Open up your browser to the URL above.
   std::cout << "You can review/replay the animation from the controls menu.\n";
   MaybePauseForUser();
 
-  meshcat->Set2dRenderMode(math::RigidTransform(Vector3d{0, -3, 0}), -4,
-                           4, -2, 2);
+  meshcat->Set2dRenderMode(math::RigidTransform(Vector3d{0, -3, 0}), -4, 4, -2,
+                           2);
 
   std::cout << "- The scene should have switched to 2D rendering mode.\n";
   MaybePauseForUser();
@@ -291,15 +428,24 @@ Open up your browser to the URL above.
 
   std::cout << "- An environment map has been loaded from a png -- the Cornell "
             << "box.\n"
-            << "  The dented green box should reflect it (the camera has moved "
-               "to focus on the box).\n";
+            << "  The shiny pyramids should reflect it (the camera has moved "
+            << "to focus on the pyramids). This may not be apparent until "
+            << "after you move the mouse.\n";
   MaybePauseForUser();
 
   meshcat->SetEnvironmentMap(
       FindResourceOrThrow("drake/geometry/test/env_256_brick_room.jpg"));
 
   std::cout << "- The Cornell box has been replaced by a room with brick walls "
-            << "loaded from a jpg.\n";
+            << "loaded from a jpg. Again, the change may not be apparent "
+            << "until after you move the mouse.\n";
+  MaybePauseForUser();
+
+  std::cout << ltrim(R"""(
+- Reloading the page should always succeed. Force a complete reload now using
+  Ctrl-Shift-R and confirm you still see same objects, the animation, the brick
+  walls, etc.
+)""");
   MaybePauseForUser();
 
   meshcat->SetEnvironmentMap("");
@@ -363,9 +509,9 @@ Open up your browser to the URL above.
     auto [plant, scene_graph] =
         multibody::AddMultibodyPlantSceneGraph(&builder, 0.001);
     multibody::Parser parser(&plant);
-    parser.AddModels(
-        FindResourceOrThrow("drake/manipulation/models/iiwa_description/urdf/"
-                            "iiwa14_spheres_collision.urdf"));
+    parser.AddModelsFromUrl(
+        "package://drake_models/iiwa_description/urdf/"
+        "iiwa14_spheres_collision.urdf");
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("base"));
     parser.AddModels(FindResourceOrThrow(
         "drake/examples/kuka_iiwa_arm/models/table/"
@@ -373,6 +519,11 @@ Open up your browser to the URL above.
     const double table_height = 0.7645;
     plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("link"),
                      RigidTransformd(Vector3d{0, 0, -table_height - 0.01}));
+    parser.AddModelsFromUrl(
+        "package://drake_models/ycb/006_mustard_bottle.sdf");
+    plant.WeldFrames(plant.world_frame(),
+                     plant.GetFrameByName("base_link_mustard"),
+                     RigidTransformd(Vector3d{0, -0.3, 0.01}));
     plant.Finalize();
 
     builder.ExportInput(plant.get_actuation_input_port(), "actuation_input");
@@ -392,7 +543,8 @@ Open up your browser to the URL above.
 
     diagram->ForcedPublish(*context);
     std::cout
-        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph)"
+        << "- Now you should see a kuka model (from MultibodyPlant/SceneGraph) "
+           "and a mustard bottle lying on its side, with the label facing up."
         << std::endl;
 
     MaybePauseForUser();
@@ -416,34 +568,44 @@ Open up your browser to the URL above.
     MaybePauseForUser();
   }
 
+  std::cout << "Now we'll add back some elements in preparation for testing\n"
+               "the standalone HTML download:\n"
+               "  - an environment map\n"
+               "  - reposition the camera\n"
+               "  - add an in-memory glTF file (textured pyramid)\n"
+               "  - add an in-memory obj file (textured cuboctahedron)\n"
+               "\n";
+
   meshcat->SetEnvironmentMap(
       FindResourceOrThrow("drake/geometry/test/env_256_cornell_box.png"));
   meshcat->SetCameraTarget(Vector3d{-0.4, 0, 0});
-  const std::string html_filename(temp_directory() + "/meshcat_static.html");
-  std::ofstream html_file(html_filename);
-  html_file << meshcat->StaticHtml();
-  html_file.close();
-  meshcat->SetEnvironmentMap("");
-  meshcat->SetCameraPose(Vector3d{-1.0, -1.0, 1.5}, Vector3d{0, 0, 0.5});
 
-  std::cout << "A standalone HTML file capturing this scene. In addition the "
-               "standalone file includes:\n"
-               "   - the animation shown here\n"
-               "   - an additional environment map (not shown here)\n"
-               "   - the camera moved to focus on the contact point between "
-               "robot and table\n"
-               "The file has been written to:\n"
-            << "  file://" << html_filename
-            << "\nOpen that location in your browser now and confirm that "
-               "the iiwa is visible, the animation plays, the environment map "
-               "is present, and the camera is positioned as indicated."
-            << std::endl;
+  meshcat->SetObject("gltf_in_memory", GetPyramidInMemory(0.1));
+  meshcat->SetTransform("gltf_in_memory",
+                        RigidTransformd(Vector3d(0.25, 0.3, 0.1)));
+  meshcat->SetObject("obj_in_memory", GetCuboctahedronInMemory(0.1));
+  meshcat->SetTransform("obj_in_memory",
+                        RigidTransformd(Vector3d(-0.25, 0.3, 0.1)));
+
+  std::cout
+      << "Now we'll check the standalone HTML file capturing this scene.\n"
+         "Open this link to download an HTML file:\n\n"
+      << "  " << meshcat->web_url() << "/download\n\n"
+      << "Open the downloaded file in a new browser tab confirm that:\n"
+         "- the camera is focused on the contact point between the robot and "
+         "table,\n"
+         "- the iiwa is visible,\n"
+         "- the mustard bottle visible including its texture (front label),\n"
+         "- the animation plays,\n"
+         "- the environment map is present, and\n"
+         "- the browser Console has no warnings nor errors\n"
+         "  (use F12 to open the panel with the Console).\n\n";
+  std::cout << "When you're done, close the browser tab.\n";
 
   MaybePauseForUser();
 
-  std::remove(html_filename.c_str());
-  std::cout
-      << "Note: I've deleted the temporary HTML file (it's several Mb).\n\n";
+  meshcat->SetEnvironmentMap("");
+  meshcat->SetCameraPose(Vector3d{-1.0, -1.0, 1.5}, Vector3d{0, 0, 0.5});
 
   meshcat->AddButton("ButtonTest");
   meshcat->AddButton("Press t Key");
@@ -470,7 +632,8 @@ Open up your browser to the URL above.
             << "Got " << meshcat->GetButtonClicks("Press t Key")
             << " clicks on \"Press t Key\".\n"
             << "Got " << meshcat->GetSliderValue("SliderTest")
-            << " value for SliderTest.\n\n" << std::endl;
+            << " value for SliderTest.\n\n"
+            << std::endl;
 
   std::cout << "Next, we'll test gamepad (i.e., joystick) features.\n\n";
   std::cout
@@ -508,11 +671,62 @@ Open up your browser to the URL above.
     }
   }
 
+  std::cout << "\n";
+  std::cout << "Now we'll test the WebXR functionality.\n";
+  std::cout << "In a new browser window, open the URL:\n  "
+            << meshcat->web_url() << "?webxr=vr&controller=on\n";
+  std::cout << "If you don't have VR hardware installed on your machine, "
+               "you'll have to install the WebXR API emulator appropriate to "
+               "your browser. For Google Chrome "
+               "see:\n  https://chrome.google.com/webstore/detail/"
+               "webxr-api-emulator/mjddjgeghkdijejnciaefnkjmkafnnje\n"
+               "If you are using Firefox see:\n "
+               "https://addons.mozilla.org/de/firefox/addon/"
+               "webxr-api-emulator/";
+  std::cout << "\nIf the emulator is installed properly, you should see a "
+               "button at the bottom that says \"Enter VR\".\n";
+  std::cout << "Open the developer tools of your browser (F12). At the top "
+               "of the developer tools windows click on the double arrows icon "
+               "and a new tab should be available saying \" WebXR \". "
+               "Make sure to select a device with controllers from the top "
+               "drop-down menu (e.g., Oculus Quest). Click the "
+               "\"Enter VR\" button. You should see the following:\n"
+            << "  - The rendering screen is now split into two images.\n"
+            << "  - The meshcat controls are gone (there is a message in the "
+               "console informing you of this).\n"
+            << "  - You should be able to manipulate the view in the WebXR "
+               "emulator to affect what you see."
+            << "  - Clicking on the headset/controller "
+               "mesh for the first time in "
+               "the emulator window will bring up colored arrows which you can "
+               "use to move the mesh. Click a second time on the mesh to "
+               "switch to rotation mode."
+            << "When you're done, close the browser window.\n\n";
+
+  MaybePauseForUser();
+
+  std::cout << "\nNow we'll try it again with *augmented* reality.\n"
+            << "In yet another browser window, open:\n"
+            << meshcat->web_url() << "?webxr=ar&controller=on\n"
+            << "This should be the same as before but with two differences:\n"
+            << "  - The button reads \"Enter XR\"\n"
+            << "  - When you click the button, the background becomes white. "
+               "If you have an actual AR device, you should see the camera's "
+               "image as the background.\n"
+            << "When you're done, close the browser window.\n\n";
+
+  MaybePauseForUser();
+
   std::cout << "Exiting..." << std::endl;
   return 0;
-}
+}  // NOLINT(readability/fn_size)
 
+}  // namespace
 }  // namespace geometry
 }  // namespace drake
 
-int main() { return drake::geometry::do_main(); }
+int main(int argc, char* argv[]) {
+  // This enables ":add_text_logging_gflags" to control the spdlog level.
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  return drake::geometry::do_main();
+}

@@ -3,7 +3,6 @@
 #include <cmath>
 
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/eigen_types.h"
 #include "drake/geometry/geometry_ids.h"
 
@@ -23,7 +22,7 @@ namespace geometry {
  */
 template <typename T>
 struct SignedDistanceToPoint {
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SignedDistanceToPoint)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SignedDistanceToPoint);
   SignedDistanceToPoint() = default;
 
   /** Constructs SignedDistanceToPoint struct from calculated results.

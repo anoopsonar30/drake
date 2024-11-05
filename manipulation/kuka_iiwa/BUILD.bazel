@@ -1,10 +1,10 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(
     default_visibility = ["//visibility:public"],
@@ -99,7 +99,7 @@ drake_cc_library(
     name = "iiwa_driver_functions",
     srcs = ["iiwa_driver_functions.cc"],
     hdrs = ["iiwa_driver_functions.h"],
-    interface_deps = [
+    deps = [
         ":iiwa_driver",
         "//common:essential",
         "//multibody/parsing:model_instance_info",
@@ -107,7 +107,7 @@ drake_cc_library(
         "//systems/framework:diagram_builder",
         "//systems/lcm:lcm_buses",
     ],
-    deps = [
+    implementation_deps = [
         ":build_iiwa_control",
         "//manipulation/util:make_arm_controller_model",
         "//systems/primitives:shared_pointer_system",
@@ -193,12 +193,11 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "build_iiwa_control_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":build_iiwa_control",
         ":iiwa_constants",
-        "//common:find_resource",
         "//lcm",
         "//manipulation/util:make_arm_controller_model",
         "//multibody/parsing:model_instance_info",
@@ -215,9 +214,9 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "iiwa_driver_functions_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
-        "//manipulation/models/wsg_50_description:models",
         "//manipulation/util:test_directives",
+        "@drake_models//:iiwa_description",
+        "@drake_models//:wsg_50_description",
     ],
     deps = [
         ":iiwa_driver_functions",
@@ -237,7 +236,7 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "sim_iiwa_driver_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":iiwa_constants",

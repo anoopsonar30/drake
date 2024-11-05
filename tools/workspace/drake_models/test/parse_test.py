@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Iterator
 import unittest
 
-from bazel_tools.tools.python.runfiles import runfiles
+from python import runfiles
 
 from pydrake.planning import RobotDiagramBuilder
 
@@ -60,15 +60,26 @@ class TestDrakeModels(unittest.TestCase):
             # TODO(#19992) for tracking these warnings.
             "package://drake_models/atlas/atlas_convex_hull.urdf",
             "package://drake_models/atlas/atlas_minimal_contact.urdf",
-            "package://drake_models/atlas/robotiq_simple.urdf",
+            # We don't have any tracking issue for fixing the allegro models,
+            # because we don't use them for anything we care about. If someone
+            # wants to fix the warnings, be our guest.
+            "package://drake_models/allegro_hand_description/urdf/allegro_hand_description_left.urdf",  # noqa
+            "package://drake_models/allegro_hand_description/urdf/allegro_hand_description_right.urdf",  # noqa
+            # TODO(jwnimmer-tri) Fix these warnings.
+            "package://drake_models/jaco_description/urdf/j2n6s300_col.urdf",
+            # We don't have any tracking issue for fixing the PR2 models,
+            # because we don't use them for anything we care about. If someone
+            # wants to fix the warnings, be our guest.
+            "package://drake_models/pr2_description/urdf/pr2_simplified.urdf",
+            "package://drake_models/wsg_50_description/sdf/schunk_wsg_50_deformable_bubble.sdf"  # noqa
         ]
         self.assertFalse(set(models_with_warnings) - set(all_models))
 
         # Allow errors on these models until they are repaired.
         models_with_errors = [
-            # TODO(#19992) for tracking these errors.
-            "package://drake_models/atlas/robotiq.urdf",
-            "package://drake_models/atlas/robotiq_tendons.urdf",
+            # This file is not designed to be loaded independently from its
+            # parent file `homecart.dmd.yaml`; it will always error out.
+            "package://drake_models/tri_homecart/homecart_grippers.dmd.yaml",
         ]
         self.assertFalse(set(models_with_errors) - set(all_models))
         self.assertFalse(set(models_with_warnings) & set(models_with_errors))

@@ -10,7 +10,9 @@
 
 #include "drake/common/drake_copyable.h"
 #include "drake/common/name_value.h"
+#include "drake/common/timer.h"
 #include "drake/geometry/meshcat_animation.h"
+#include "drake/geometry/meshcat_params.h"
 #include "drake/geometry/proximity/triangle_surface_mesh.h"
 #include "drake/geometry/rgba.h"
 #include "drake/geometry/shape_specification.h"
@@ -21,51 +23,12 @@
 namespace drake {
 namespace geometry {
 
-/** The set of parameters for configuring Meshcat. */
-struct MeshcatParams {
-  /** Passes this object to an Archive.
-  Refer to @ref yaml_serialization "YAML Serialization" for background. */
-  template <typename Archive>
-  void Serialize(Archive* a) {
-    a->Visit(DRAKE_NVP(host));
-    a->Visit(DRAKE_NVP(port));
-    a->Visit(DRAKE_NVP(web_url_pattern));
-    a->Visit(DRAKE_NVP(show_stats_plot));
-  }
-
-  /** Meshcat will listen only on the given hostname (e.g., "localhost").
-  If "*" is specified, then it will listen on all interfaces.
-  If empty, an appropriate default value will be chosen (currently "*"). */
-  std::string host{"*"};
-
-  /** Meshcat will listen on the given http `port`. If no port is specified,
-  then it will listen on the first available port starting at 7000 (up to 7999).
-  If port 0 is specified, it will listen on an arbitrary "ephemeral" port.
-  @pre We require `port` == 0 || `port` >= 1024. */
-  std::optional<int> port{std::nullopt};
-
-  /** The `web_url_pattern` may be used to change the web_url() (and therefore
-  the ws_url()) reported by Meshcat. This may be useful in case %Meshcat sits
-  behind a firewall or proxy.
-
-  The pattern follows the
-  <a href="https://en.cppreference.com/w/cpp/utility/format">std::format</a>
-  specification language, except that `arg-id` substitutions are performed
-  using named arguments instead of positional indices.
-
-  There are two arguments available to the pattern:
-  - `{port}` will be substituted with the %Meshcat server's listen port number;
-  - `{host}` will be substituted with this params structure's `host` field, or
-    else with "localhost" in case the `host` was one of the placeholders for
-    "all interfaces".
-  */
-  std::string web_url_pattern{"http://{host}:{port}"};
-
-  /** Determines whether or not to display the stats plot widget in the Meshcat
-  user interface. This plot including realtime rate and WebGL render
-  statistics. */
-  bool show_stats_plot{true};
-};
+// Forward-declare a helper class from meshcat_recording_internal.h.
+#ifndef DRAKE_DOXYGEN_CXX
+namespace internal {
+class MeshcatRecording;
+}  // namespace internal
+#endif
 
 /** Provides an interface to %Meshcat (https://github.com/meshcat-dev/meshcat).
 
@@ -129,6 +92,42 @@ in the visualizer.
 Delete(). You are welcome to use absolute paths to organize your data, but the
 burden on tracking and cleaning them up lie on you.
 
+@section meshcat_url_parameters Parameters for the hosted Meshcat page
+
+%Meshcat has an *experimental* AR/VR option (using WebXR). It can be enabled
+through url parameters. For example, for a meshcat url `http://localhost:7000`,
+the following will enable the VR mode:
+
+    http://localhost:7000?webxr=vr
+
+To to use augmented reality (where the meshcat background is replaced with your
+device's camera image), use:
+
+    http://localhost:7000?webxr=ar
+
+If augmented reality is not available, it will fallback to VR mode.
+
+Some notes on using the AR/VR modes:
+
+  - Before starting the WebXR session, position the interactive camera to be
+    approximately where you want the origin of the head set's origin to be.
+  - The meshcat scene controls are disabled while the WebXR session is active.
+  - WebXR sessions can only be run with *perspective* cameras.
+  - The controllers can be *visualized* but currently can't interact with the
+    Drake simulation physically. To visualize the controllers append the
+    additional url parameter `controller=on` as in
+    `http://localhost:7000?webxr=vr&controller=on`.
+
+If you do not have AR/VR hardware, you can use an emulator in your browser to
+experiment with the mode. Use an browser plugin like WebXR API Emulator (i.e.,
+for
+[Chrome](https://chrome.google.com/webstore/detail/webxr-api-emulator/mjddjgeghkdijejnciaefnkjmkafnnje)
+or
+[Firefox](https://addons.mozilla.org/en-US/firefox/addon/webxr-api-emulator/)).
+
+The AR/VR mode is not currently supported in offline mode (i.e., when saving as
+StaticHtml()).
+
 @section network_access Network access
 
 See MeshcatParams for options to control the hostname and port to bind to.
@@ -137,7 +136,7 @@ See \ref allow_network "DRAKE_ALLOW_NETWORK" for an environment variable
 option to deny %Meshcat entirely. */
 class Meshcat {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Meshcat)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Meshcat);
 
   // Defines which side of faces will be rendered - front, back or both.
   // From https://github.com/mrdoob/three.js/blob/dev/src/constants.js
@@ -474,6 +473,36 @@ class Meshcat {
   void SetCameraPose(const Eigen::Vector3d& camera_in_world,
                      const Eigen::Vector3d& target_in_world);
 
+  /** Returns the most recently received camera pose.
+
+   A meshcat browser session can be configured to transmit its camera pose.
+   It is enabled by appending a url parameter. For example, if the url for the
+   meshcat server is:
+
+       http://localhost:7000
+
+   A particular browser can be configured to transmit its camera pose back to
+   Drake by supplying the following url:
+
+       http://localhost:7000/?tracked_camera=on
+
+   It is possible to use that URL in multiple browsers simultaneously. A
+   particular view will only transmit its camera position when its camera
+   position actually *changes*. As such, the returned camera pose will reflect
+   the pose of the camera from that most-recently manipulated browser.
+
+   std::nullopt is returned if:
+
+     - No meshcat session has transmitted its camera pose.
+     - The meshcat session that last transmitted its pose is no longer
+       connected.
+     - The meshcat session transmitting has an orthographic camera.
+
+  <!-- Note to developer. This logic is tested in the python test
+   meshcat_camera_tracking_test.py. -->
+   */
+  std::optional<math::RigidTransformd> GetTrackedCameraPose() const;
+
   // TODO(SeanCurtis-TRI): Consider the API:
   //  void SetCameraPose(const RigidTransformd& X_WC, bool target_distance = 1);
   // We'll have to confirm that picking arbitrary rotations R_WC doesn't
@@ -494,9 +523,9 @@ class Meshcat {
 
   @pydrake_mkdoc_identifier{RigidTransform}
   */
-  void SetTransform(
-      std::string_view path, const math::RigidTransformd& X_ParentPath,
-      const std::optional<double>& time_in_recording = std::nullopt);
+  void SetTransform(std::string_view path,
+                    const math::RigidTransformd& X_ParentPath,
+                    std::optional<double> time_in_recording = std::nullopt);
 
   /** Set the homogeneous transform for a given path in the scene tree relative
   to its parent path. An object's pose is the concatenation of all of the
@@ -523,21 +552,90 @@ class Meshcat {
   See @ref meshcat_path for the detailed semantics of deletion. */
   void Delete(std::string_view path = "");
 
-  // TODO(#16486): add low-pass filter to smooth the Realtime plot
-  /** Sets the realtime rate that is displayed in the meshcat visualizer stats
-   strip chart. This rate is the ratio between sim time and real
-   world time. 1 indicates the simulator is the same speed as real time. 2
-   indicates running twice as fast as real time, 0.5 is half speed, etc.
-  @see drake::systems::Simulator::set_target_realtime_rate()
-  @param rate the realtime rate value to be displayed, will be converted to a
+  /** @group Realtime Rate Reporting
+
+   %Meshcat can be used to visualize the realtime rate of a simulation's
+   computation in the meshcat visualizer webpage. Meshcat broadcasts a realtime
+   rate message that is received and displayed by the browser in a
+   <a href="https://github.com/mrdoob/stats.js">stats strip chart</a>
+
+   Advancing the simulation's time requires a certain amount of real world
+   compute time. The realtime rate, a non-negative real value, is the ratio of
+   the sim time to real world time. A value of one indicates that the simulation
+   is advancing at the same rate as the real world clock. Higher values indicate
+   faster simulations. Lower values indicate slower simulations.
+
+   The realtime rate value can be broadcast to the visualizer in one of two
+   ways:
+
+     - Throttled - Meshcat is configured to broadcast realtime rate data
+       in a "smoothed" manner, so that the visualization doesn't fluctuate at
+       arbitrarily high rates and possibly make the value difficult to read.
+       See SetSimulationTime(). This is the preferred means of reporting real
+       time rate.
+     - Immediate - a %Meshcat user _can_ compute realtime rate themselves and
+       simply ask %Meshcat to dispatch a message with that computed value.
+       See SetRealtimeRate(). This is not recommended and the user is
+       responsible for computing the value and controlling the frequency at
+       which this is done.
+   */
+  //@{
+
+  /** Updates %Meshcat's knowledge of simulation time. Changes to simulation
+   time *may* trigger a realtime rate message to the meshcat visualizer client
+   based on the configured value in MeshcatParams::realtime_rate_period value.
+
+   Invoking this method _may_ dispatch a message to clients. The following rules
+   apply to invocations and messages:
+
+     - The first invocation is necessary to _initialize_ the calculation; it
+       defines the the starting point from which all calculations are performed
+       (for both wall clock time as well as simulation time). As no interval can
+       be measured from a single invocation, no rate can be computed. Therefore,
+       the first invocation will *never* broadcast the message.
+     - Wall clock time must advance at least MeshcatParams::realtime_rate_period
+       seconds for a message to be sent.
+     - Meshcat promises to broadcast one message per elapsed period -- starting
+       from initialization -- regardless of the frequency at which
+       SetSimulationTime() actually gets invoked. If the elapsed time between
+       invocations exceeds MeshcatParams::realtime_rate_period, multiple
+       messages will be broadcast; one for each complete period.
+       - This implies that each column of pixels in the realtime rate chart in
+         the client visualizer represents a fixed amount of wall clock time.
+
+   When the realtime rate is broadcast, that value will be reported by
+   GetRealtimeRate().
+
+   The realtime rate calculation can be "reset" by passing a simulation time
+   value that is *strictly less* than the value of the previous invocation. This
+   has the effect of re-initializing the calculation with the passed time and
+   the wall clock time of the invocation. So, if the simulation's context gets
+   reset to `time = 0`, calls to this method passing the context time will
+   implicitly reset realtime rate calculations accordingly. Resetting the
+   calculator will reset the value reported by GetRealtimeRate() to zero.
+
+   This function is safe to be called redundantly with the same simulation time.
+   Redundant calls are a no-op.
+
+   @param sim_time  The *absolute* sim time being visualized.
+
+   @see drake::systems::Simulator::set_target_realtime_rate() */
+  void SetSimulationTime(double sim_time);
+
+  /** Gets the last time value passed to SetSimulationTime(). */
+  double GetSimulationTime() const;
+
+  /** Immediately broadcasts the given realtime rate to all connected clients.
+  @param rate the realtime rate value to broadcast, will be converted to a
   percentage (multiplied by 100) */
   void SetRealtimeRate(double rate);
 
-  /** Gets the realtime rate that is displayed in the meshcat visualizer stats
-   strip chart. See SetRealtimeRate(). Note that this value might be a smoothing
-   function across multiple calls to SetRealtimeRate() rather than the most
-   recent argument value, in case this class ever adds smoothing capability. */
+  /** Gets the realtime rate that was last broadcast by this instance
+   (typically, the value displayed in the meshcat visualizer stats chart).
+   See SetRealtimeRate(). */
   double GetRealtimeRate() const;
+
+  //@}
 
   /** Sets a single named property of the object at the given path. For example,
   @verbatim
@@ -557,9 +655,8 @@ class Meshcat {
 
   @pydrake_mkdoc_identifier{bool}
   */
-  void SetProperty(
-      std::string_view path, std::string property, bool value,
-      const std::optional<double>& time_in_recording = std::nullopt);
+  void SetProperty(std::string_view path, std::string property, bool value,
+                   std::optional<double> time_in_recording = std::nullopt);
 
   /** Sets a single named property of the object at the given path. For example,
   @verbatim
@@ -579,9 +676,8 @@ class Meshcat {
 
   @pydrake_mkdoc_identifier{double}
   */
-  void SetProperty(
-      std::string_view path, std::string property, double value,
-      const std::optional<double>& time_in_recording = std::nullopt);
+  void SetProperty(std::string_view path, std::string property, double value,
+                   std::optional<double> time_in_recording = std::nullopt);
 
   /** Sets a single named property of the object at the given path. For example,
   @verbatim
@@ -601,10 +697,9 @@ class Meshcat {
 
   @pydrake_mkdoc_identifier{vector_double}
   */
-  void SetProperty(
-      std::string_view path, std::string property,
-      const std::vector<double>& value,
-      const std::optional<double>& time_in_recording = std::nullopt);
+  void SetProperty(std::string_view path, std::string property,
+                   const std::vector<double>& value,
+                   std::optional<double> time_in_recording = std::nullopt);
 
   /** Sets the *environment* texture. For objects with physically-based
    rendering (PBR) material properties (e.g., metallic surfaces), this defines
@@ -672,8 +767,10 @@ class Meshcat {
   int GetButtonClicks(std::string_view name) const;
 
   /** Removes the button `name` from the GUI.
-   @throws std::exception if `name` is not a registered button. */
-  void DeleteButton(std::string name);
+   @returns true iff the button was removed.
+   @throws std::exception if `strict` is true and `name` is not a registered
+           button. */
+  bool DeleteButton(std::string name, bool strict = true);
 
   /** Adds a slider with the label `name` to the meshcat browser controls GUI.
    The slider range is given by [`min`, `max`]. `step` is the smallest
@@ -707,8 +804,10 @@ class Meshcat {
   std::vector<std::string> GetSliderNames() const;
 
   /** Removes the slider `name` from the GUI.
-   @throws std::exception if `name` is not a registered slider. */
-  void DeleteSlider(std::string name);
+   @returns true iff the slider was removed.
+   @throws std::exception if `strict` is true and `name` is not a registered
+           slider. */
+  bool DeleteSlider(std::string name, bool strict = true);
 
   /** Removes all buttons and sliders from the GUI that have been registered by
    this Meshcat instance. It does *not* clear the default GUI elements set in
@@ -795,7 +894,10 @@ class Meshcat {
   way to save and share your 3D content.
 
   Note that controls (e.g. sliders and buttons) are not included in the HTML
-  output, because their usefulness relies on a connection to the server. */
+  output, because their usefulness relies on a connection to the server.
+
+  You can also use your browser to download this file, by typing "/download"
+  on the end of the URL (i.e., accessing `web_url() + "/download"`). */
   std::string StaticHtml();
 
   /** Sets a flag indicating that subsequent calls to SetTransform and
@@ -812,12 +914,12 @@ class Meshcat {
   the visualizer immediately (because meshcat animations do not support
   SetObject).
   */
-  void StartRecording(double frames_per_second = 32.0,
+  void StartRecording(double frames_per_second = 64.0,
                       bool set_visualizations_while_recording = true);
 
   /** Sets a flag to pause/stop recording.  When stopped, publish events will
   not add frames to the animation. */
-  void StopRecording() { recording_ = false; }
+  void StopRecording();
 
   /** Sends the recording to Meshcat as an animation. The published animation
   only includes transforms and properties; the objects that they modify must be
@@ -830,16 +932,16 @@ class Meshcat {
   *not* currently remove the animation from Meshcat. */
   void DeleteRecording();
 
-  /** Returns a mutable pointer to this Meshcat's unique MeshcatAnimation
-  object, if it exists, in which the frames will be recorded. This pointer can
-  be used to set animation properties (like autoplay, the loop mode, number of
-  repetitions, etc).
+  /** Returns a const reference to this Meshcat's MeshcatAnimation object. This
+  can be used to check animation properties (e.g., autoplay). The return value
+  will only remain valid for the lifetime of `this` or until DeleteRecording()
+  is called. */
+  const MeshcatAnimation& get_recording() const;
 
-  The MeshcatAnimation object will only remain valid for the lifetime of `this`
-  or until DeleteRecording() is called.
-
-  @throws std::exception if meshcat does not have a recording.
-  */
+  /** Returns a mutable reference to this Meshcat's MeshcatAnimation object.
+  This can be used to set animation properties (like autoplay, the loop mode,
+  number of repetitions, etc). The return value will only remain valid for the
+  lifetime of `this` or until DeleteRecording() is called. */
   MeshcatAnimation& get_mutable_recording();
 
   /* These remaining public methods are intended to primarily for testing. These
@@ -873,6 +975,14 @@ class Meshcat {
                                 std::string property) const;
 
 #ifndef DRAKE_DOXYGEN_CXX
+  /* (Internal use for unit testing only) Injects a websocket message as if it
+  came from a web browser. Note that this skips the entire network stack, so the
+  `ws` pointer will be null during message handling; some messages (e.g., slider
+  controls) do not allow a null pointer. This function blocks until the message
+  has been handled. Search meshcat_test for uses of `msgpack::pack` for examples
+  of how to prepare the `message` bytes. */
+  void InjectWebsocketMessage(std::string_view message);
+
   /* (Internal use for unit testing only) Causes the websocket worker thread to
   exit with an error, which will spit out an exception from the next Meshcat
   main thread function that gets called. The fault_number selects which fault to
@@ -883,6 +993,10 @@ class Meshcat {
   /* (Internal use for unit testing only) The max value (inclusive) for
   fault_number, above. */
   static constexpr int kMaxFaultNumber = 3;
+
+  /* (Internal use for unit testing only) Used to mock the monotonic wall time
+   source to control time during unit testing.  */
+  void InjectMockTimer(std::unique_ptr<Timer>);
 #endif
 
  private:
@@ -897,14 +1011,8 @@ class Meshcat {
   // impl() accessors are always used.
   void* const impl_{};
 
-  /* MeshcatAnimation object for recording. It must be mutable to allow the set
-  methods to be otherwise const. */
-  std::unique_ptr<MeshcatAnimation> animation_;
-
-  /* Recording status.  True means that each new Publish event will record a
-  frame in the animation. */
-  bool recording_{false};
-  bool set_visualizations_while_recording_{true};
+  /* Encapsulated recording logic. The value is never nullptr. */
+  std::unique_ptr<internal::MeshcatRecording> recording_;
 };
 
 }  // namespace geometry

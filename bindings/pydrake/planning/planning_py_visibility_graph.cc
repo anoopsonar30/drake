@@ -1,4 +1,5 @@
 #include "drake/bindings/pydrake/documentation_pybind.h"
+#include "drake/bindings/pydrake/planning/planning_py.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 #include "drake/planning/visibility_graph.h"
 
@@ -13,7 +14,7 @@ void DefinePlanningVisibilityGraph(py::module m) {
 
   m.def("VisibilityGraph", &planning::VisibilityGraph, py::arg("checker"),
       py::arg("points"), py::arg("parallelize") = true,
-      doc.VisibilityGraph.doc);
+      py::call_guard<py::gil_scoped_release>(), doc.VisibilityGraph.doc);
 }
 
 }  // namespace internal

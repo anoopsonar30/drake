@@ -61,7 +61,7 @@ struct ScsSolverDetails {
 
 class ScsSolver final : public SolverBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ScsSolver)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(ScsSolver);
 
   /// Type of details stored in MathematicalProgramResult.
   using Details = ScsSolverDetails;
@@ -85,8 +85,9 @@ class ScsSolver final : public SolverBase {
   using SolverBase::Solve;
 
  private:
-  void DoSolve(const MathematicalProgram&, const Eigen::VectorXd&,
-               const SolverOptions&, MathematicalProgramResult*) const final;
+  void DoSolve2(const MathematicalProgram&, const Eigen::VectorXd&,
+                internal::SpecificOptions*,
+                MathematicalProgramResult*) const final;
 };
 
 }  // namespace solvers

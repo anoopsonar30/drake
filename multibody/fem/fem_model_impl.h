@@ -70,8 +70,15 @@ class FemModelImpl : public FemModel<typename Element::T> {
   /** Returns the cache index for the per-element data in this model. */
   systems::CacheIndex element_data_index() const { return element_data_index_; }
 
+  /** Copies all data members, except those modified in DeclareCacheEntries(),
+   from the `other` FemModelImpl to `this` FemModelImpl . */
+  void SetFrom(const FemModelImpl<Element>& other) {
+    elements_ = other.elements_;
+  }
+
  private:
   void DoCalcResidual(const FemState<T>& fem_state,
+                      const FemPlantData<T>& plant_data,
                       EigenPtr<VectorX<T>> residual) const final {
     /* The values are accumulated in the residual, so it is important to clear
      the old data. */
@@ -86,10 +93,9 @@ class FemModelImpl : public FemModel<typename Element::T> {
       /* residual = Ma-fₑ(x)-fᵥ(x, v)-fₑₓₜ. */
       /* The Ma-fₑ(x)-fᵥ(x, v) term. */
       elements_[e].CalcInverseDynamics(element_data[e], &element_residual);
-      /* The -fₑₓₜ term. Currently the only type of external force is gravity.
-       */
-      elements_[e].AddScaledGravityForce(
-          element_data[e], -1.0, this->gravity_vector(), &element_residual);
+      /* The -fₑₓₜ term. */
+      elements_[e].AddScaledExternalForces(element_data[e], plant_data, -1.0,
+                                           &element_residual);
       const std::array<FemNodeIndex, Element::num_nodes>& element_node_indices =
           elements_[e].node_indices();
       for (int a = 0; a < Element::num_nodes; ++a) {

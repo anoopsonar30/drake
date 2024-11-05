@@ -6,15 +6,10 @@ def ros_xacro_internal_repository(
     github_archive(
         name = name,
         repository = "ros/xacro",
-        # N.B. Even though 1.14.x series might not be the highest-numbered
-        # release, we are using it here because it aligns with the ROS Noetic
-        # version released for Ubuntu 20.04.  See:
-        # https://index.ros.org/p/xacro/github-ros-xacro/#noetic
-        commit = "1.14.16",
-        sha256 = "8031a544dded557c9c32345a3fceff416f703b615f9082b2c3aefe1b7612ad90",  # noqa
+        commit = "2.0.11",
+        sha256 = "0c9b1619f1cdcf863e5a29fe8c034ae5c310e39722ff089d5d1e440c4e41967f",  # noqa
         build_file = ":package.BUILD.bazel",
         patches = [
-            ":patches/disable-console-print.patch",
             ":patches/disable-import-warning.patch",
         ],
         mirrors = mirrors,

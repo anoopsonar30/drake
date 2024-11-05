@@ -28,7 +28,7 @@ namespace multibody {
 template <typename T>
 class PrismaticJoint final : public Joint<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PrismaticJoint)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(PrismaticJoint);
 
   template <typename Scalar>
   using Context = systems::Context<Scalar>;
@@ -71,18 +71,18 @@ class PrismaticJoint final : public Joint<T> {
       double pos_upper_limit = std::numeric_limits<double>::infinity(),
       double damping = 0);
 
+  ~PrismaticJoint() override;
+
   const std::string& type_name() const override;
 
   /// Returns the axis of translation for `this` joint as a unit vector.
   /// Since the measures of this axis in either frame F or M are the same (see
   /// this class's documentation for frame definitions) then,
   /// `axis = axis_F = axis_M`.
-  const Vector3<double>& translation_axis() const {
-    return axis_;
-  }
+  const Vector3<double>& translation_axis() const { return axis_; }
 
-  /// Returns `this` joint's damping constant in N⋅s/m.
-  double damping() const { return this->damping_vector()[0]; }
+  /// Returns `this` joint's default damping constant in N⋅s/m.
+  double default_damping() const { return this->default_damping_vector()[0]; }
 
   /// Sets the default value of viscous damping for this joint, in N⋅s/m.
   /// @throws std::exception if damping is negative.
@@ -143,9 +143,9 @@ class PrismaticJoint final : public Joint<T> {
   /// @param[in] translation
   ///   The desired translation in meters to be stored in `context`.
   /// @returns a constant reference to `this` joint.
-  const PrismaticJoint<T>& set_translation(
-      Context<T>* context, const T& translation) const {
-    get_mobilizer()->set_translation(context, translation);
+  const PrismaticJoint<T>& set_translation(Context<T>* context,
+                                           const T& translation) const {
+    get_mobilizer()->SetTranslation(context, translation);
     return *this;
   }
 
@@ -170,8 +170,27 @@ class PrismaticJoint final : public Joint<T> {
   /// @returns a constant reference to `this` joint.
   const PrismaticJoint<T>& set_translation_rate(
       Context<T>* context, const T& translation_dot) const {
-    get_mobilizer()->set_translation_rate(context, translation_dot);
+    get_mobilizer()->SetTranslationRate(context, translation_dot);
     return *this;
+  }
+
+  /// Returns the Context dependent damping coefficient stored as a parameter in
+  /// `context`. Refer to default_damping() for details.
+  /// @param[in] context The context storing the state and parameters for the
+  /// model to which `this` joint belongs.
+  const T& GetDamping(const Context<T>& context) const {
+    return this->GetDampingVector(context)[0];
+  }
+
+  /// Sets the value of the viscous damping coefficient for this joint, stored
+  /// as a parameter in `context`. Refer to default_damping() for details.
+  /// @param[out] context The context storing the state and parameters for the
+  /// model to which `this` joint belongs.
+  /// @param[in] damping The damping value.
+  /// @throws std::exception if `damping` is negative.
+  void SetDamping(Context<T>* context, const T& damping) const {
+    DRAKE_THROW_UNLESS(damping >= 0);
+    this->SetDampingVector(context, Vector1<T>(damping));
   }
 
   /// @}
@@ -202,10 +221,8 @@ class PrismaticJoint final : public Joint<T> {
   /// positive in the direction along this joint's axis.
   /// That is, a positive force causes a positive translational acceleration
   /// along the joint's axis.
-  void AddInForce(
-      const systems::Context<T>& context,
-      const T& force,
-      MultibodyForces<T>* multibody_forces) const {
+  void AddInForce(const systems::Context<T>& context, const T& force,
+                  MultibodyForces<T>* multibody_forces) const {
     DRAKE_DEMAND(multibody_forces != nullptr);
     DRAKE_DEMAND(
         multibody_forces->CheckHasRightSizeForModel(this->get_parent_tree()));
@@ -221,11 +238,9 @@ class PrismaticJoint final : public Joint<T> {
   /// child (according to the prismatic joint's constructor) at the origin of
   /// the child frame (which is coincident with the origin of the parent frame
   /// at all times).
-  void DoAddInOneForce(
-      const systems::Context<T>&,
-      int joint_dof,
-      const T& joint_tau,
-      MultibodyForces<T>* forces) const final {
+  void DoAddInOneForce(const systems::Context<T>&, int joint_dof,
+                       const T& joint_tau,
+                       MultibodyForces<T>* forces) const final {
     // Right now we assume all the forces in joint_tau go into a single
     // mobilizer.
     Eigen::Ref<VectorX<T>> tau_mob =
@@ -237,10 +252,12 @@ class PrismaticJoint final : public Joint<T> {
   /// Joint<T> override called through public NVI, Joint::AddInDamping().
   /// Therefore arguments were already checked to be valid.
   /// This method adds into `forces` a dissipative force according to the
-  /// viscous law `f = -d⋅v`, with d the damping coefficient (see damping()).
+  /// viscous law `f = -d⋅v`, with d the damping coefficient (see
+  /// default_damping()).
   void DoAddInDamping(const systems::Context<T>& context,
                       MultibodyForces<T>* forces) const override {
-    const T damping_force = -this->damping() * get_translation_rate(context);
+    const T damping_force =
+        -this->GetDamping(context) * get_translation_rate(context);
     AddInForce(context, damping_force, forces);
   }
 
@@ -281,14 +298,17 @@ class PrismaticJoint final : public Joint<T> {
   }
 
   // Joint<T> finals:
-  std::unique_ptr<typename Joint<T>::BluePrint>
-  MakeImplementationBlueprint() const final {
+  std::unique_ptr<typename Joint<T>::BluePrint> MakeImplementationBlueprint(
+      const internal::SpanningForest::Mobod& mobod) const final {
     auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
+    const auto [inboard_frame, outboard_frame] =
+        this->tree_frames(mobod.is_reversed());
+    // TODO(sherm1) The mobilizer needs to be reversed, not just the frames.
     auto prismatic_mobilizer =
         std::make_unique<internal::PrismaticMobilizer<T>>(
-            this->frame_on_parent(), this->frame_on_child(), axis_);
+            mobod, *inboard_frame, *outboard_frame, axis_);
     prismatic_mobilizer->set_default_position(this->default_positions());
-    blue_print->mobilizers_.push_back(std::move(prismatic_mobilizer));
+    blue_print->mobilizer = std::move(prismatic_mobilizer);
     return blue_print;
   }
 
@@ -304,26 +324,27 @@ class PrismaticJoint final : public Joint<T> {
   // Make PrismaticJoint templated on every other scalar type a friend of
   // PrismaticJoint<T> so that CloneToScalar<ToAnyOtherScalar>() can access
   // private members of PrismaticJoint<T>.
-  template <typename> friend class PrismaticJoint;
+  template <typename>
+  friend class PrismaticJoint;
 
   // Returns the mobilizer implementing this joint.
   // The internal implementation of this joint could change in a future version.
   // However its public API should remain intact.
   const internal::PrismaticMobilizer<T>* get_mobilizer() const {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    // This implementation should always use a mobilizer.
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     const internal::PrismaticMobilizer<T>* mobilizer =
         dynamic_cast<const internal::PrismaticMobilizer<T>*>(
-            this->get_implementation().mobilizers_[0]);
+            this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
 
   internal::PrismaticMobilizer<T>* get_mutable_mobilizer() {
-    // This implementation should only have one mobilizer.
-    DRAKE_DEMAND(this->get_implementation().num_mobilizers() == 1);
+    // This implementation should always use a mobilizer.
+    DRAKE_DEMAND(this->get_implementation().has_mobilizer());
     auto* mobilizer = dynamic_cast<internal::PrismaticMobilizer<T>*>(
-        this->get_implementation().mobilizers_[0]);
+        this->get_implementation().mobilizer);
     DRAKE_DEMAND(mobilizer != nullptr);
     return mobilizer;
   }
@@ -338,10 +359,11 @@ class PrismaticJoint final : public Joint<T> {
   Vector3<double> axis_;
 };
 
-template <typename T> const char PrismaticJoint<T>::kTypeName[] = "prismatic";
+template <typename T>
+const char PrismaticJoint<T>::kTypeName[] = "prismatic";
 
 }  // namespace multibody
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::PrismaticJoint)
+    class ::drake::multibody::PrismaticJoint);

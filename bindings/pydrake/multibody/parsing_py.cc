@@ -1,5 +1,6 @@
 #include "drake/bindings/pydrake/common/deprecation_pybind.h"
 #include "drake/bindings/pydrake/common/serialize_pybind.h"
+#include "drake/bindings/pydrake/common/sorted_pair_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 #include "drake/multibody/parsing/package_map.h"
@@ -23,6 +24,25 @@ PYBIND11_MODULE(parsing, m) {
   constexpr auto& doc = pydrake_doc.drake.multibody;
 
   py::module::import("pydrake.common.schema");
+  py::module::import("pydrake.multibody.tree");
+
+  // CollisionFilterGroups
+  {
+    using Class = CollisionFilterGroups;
+    constexpr auto& cls_doc = doc.CollisionFilterGroups;
+    auto cls = py::class_<Class>(m, "CollisionFilterGroups", cls_doc.doc);
+    cls  // BR
+        .def(py::init<>(), cls_doc.ctor.doc)
+        .def("AddGroup", &Class::AddGroup, py::arg("name"), py::arg("members"),
+            cls_doc.AddGroup.doc)
+        .def("AddExclusionPair", &Class::AddExclusionPair, py::arg("pair"),
+            cls_doc.AddExclusionPair.doc)
+        .def("empty", &Class::empty, cls_doc.empty.doc)
+        .def("groups", &Class::groups, cls_doc.groups.doc)
+        .def("exclusion_pairs", &Class::exclusion_pairs,
+            cls_doc.exclusion_pairs.doc)
+        .def("__str__", &Class::to_string, cls_doc.to_string.doc);
+  }
 
   // PackageMap
   {
@@ -64,6 +84,8 @@ PYBIND11_MODULE(parsing, m) {
               return self.GetPath(package_name);
             },
             py::arg("package_name"), cls_doc.GetPath.doc)
+        .def("ResolveUrl", &Class::ResolveUrl, py::arg("url"),
+            cls_doc.ResolveUrl.doc)
         .def("PopulateFromFolder", &Class::PopulateFromFolder, py::arg("path"),
             cls_doc.PopulateFromFolder.doc)
         .def("PopulateFromEnvironment", &Class::PopulateFromEnvironment,
@@ -119,20 +141,9 @@ PYBIND11_MODULE(parsing, m) {
         .def("SetAutoRenaming", &Class::SetAutoRenaming, py::arg("value"),
             cls_doc.SetAutoRenaming.doc)
         .def("GetAutoRenaming", &Class::GetAutoRenaming,
-            cls_doc.GetAutoRenaming.doc);
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-    cls  // BR
-        .def("AddAllModelsFromFile",
-            WrapDeprecated(cls_doc.AddAllModelsFromFile.doc_deprecated,
-                &Class::AddAllModelsFromFile),
-            py::arg("file_name"))
-        .def("AddModelFromFile",
-            WrapDeprecated(cls_doc.AddModelFromFile.doc_deprecated,
-                &Class::AddModelFromFile),
-            py::arg("file_name"), py::arg("model_name") = "");
-#pragma GCC diagnostic pop
+            cls_doc.GetAutoRenaming.doc)
+        .def("GetCollisionFilterGroups", &Class::GetCollisionFilterGroups,
+            cls_doc.GetCollisionFilterGroups.doc);
   }
 
   // Model Directives
@@ -239,6 +250,17 @@ PYBIND11_MODULE(parsing, m) {
             cls_doc.model_instance.doc);
   }
 
+  m.def(
+      "FlattenModelDirectives",
+      [](const parsing::ModelDirectives& directives,
+          const multibody::PackageMap& package_map) {
+        parsing::ModelDirectives out;
+        parsing::FlattenModelDirectives(directives, package_map, &out);
+        return out;
+      },
+      py::arg("directives"), py::arg("package_map"),
+      doc.parsing.FlattenModelDirectives.doc);
+
   m.def("ProcessModelDirectives",
       py::overload_cast<const parsing::ModelDirectives&, Parser*>(
           &parsing::ProcessModelDirectives),
@@ -262,6 +284,12 @@ PYBIND11_MODULE(parsing, m) {
       py::return_value_policy::reference,
       py::keep_alive<0, 1>(),  // `return` keeps `plant` alive.
       doc.parsing.GetScopedFrameByName.doc);
+
+  m.def("GetScopedFrameByNameMaybe", &parsing::GetScopedFrameByNameMaybe,
+      py::arg("plant"), py::arg("full_name"),
+      py::return_value_policy::reference,
+      py::keep_alive<0, 1>(),  // `return` keeps `plant` alive.
+      doc.parsing.GetScopedFrameByNameMaybe.doc);
 }
 
 }  // namespace pydrake

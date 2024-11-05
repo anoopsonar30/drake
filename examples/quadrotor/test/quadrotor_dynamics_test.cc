@@ -23,9 +23,9 @@ using Eigen::VectorXd;
 using Eigen::Vector3d;
 using math::RigidTransformd;
 using math::RollPitchYawd;
-using multibody::Body;
 using multibody::MultibodyPlant;
 using multibody::Parser;
+using multibody::RigidBody;
 using multibody::SpatialVelocity;
 using systems::ConstantVectorSource;
 using systems::Context;
@@ -110,7 +110,7 @@ class MultibodyQuadrotor: public Diagram<double> {
     auto owned_plant = std::make_unique<MultibodyPlant<double>>(0.0);
     plant_ = owned_plant.get();
     Parser(plant_).AddModelsFromUrl(
-        "package://drake/examples/quadrotor/quadrotor.urdf");
+        "package://drake_models/skydio_2/quadrotor.urdf");
     plant_->Finalize();
     body_ = &plant_->GetBodyByName("base_link");
     DiagramBuilder<double> builder;
@@ -162,7 +162,7 @@ class MultibodyQuadrotor: public Diagram<double> {
 
  private:
   MultibodyPlant<double>* plant_{};
-  const Body<double>* body_{};
+  const RigidBody<double>* body_{};
 };
 
 void TestPassiveBehavior(const VectorXd& x0) {

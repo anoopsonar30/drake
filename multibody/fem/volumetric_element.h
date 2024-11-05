@@ -61,7 +61,12 @@ struct VolumetricElementData {
   Vector<T, num_dofs> element_q0;
   Vector<T, num_dofs> element_v;
   Vector<T, num_dofs> element_a;
-  typename ConstitutiveModelType::Data deformation_gradient_data;
+  /* The current locations of the quadrature points in the world frame. */
+  std::array<Vector<T, 3>, num_quadrature_points> quadrature_positions;
+
+  using DeformationGradientData = typename ConstitutiveModelType::Data;
+  std::array<DeformationGradientData, num_quadrature_points>
+      deformation_gradient_data;
   /* The elastic energy density evaluated at quadrature points. Note that this
    is energy per unit of "reference" volume. */
   std::array<T, num_quadrature_points> Psi;
@@ -107,11 +112,6 @@ struct FemElementTraits<VolumetricElement<
           IsoparametricElementType::num_sample_locations,
       "The number of quadrature points of the quadrature rule must be the same "
       "as the number of evaluation locations in the isoparametric element.");
-  static_assert(
-      QuadratureType::num_quadrature_points ==
-          ConstitutiveModelType::num_locations,
-      "The number of quadrature points must be the same as the number of "
-      "locations at which the constitutive model is evaluated.");
   /* Check that the natural dimensions are compatible. */
   static_assert(IsoparametricElementType::natural_dimension ==
                     QuadratureType::natural_dimension,
@@ -232,7 +232,6 @@ class VolumetricElement
       dSdX_transpose_[q] = dSdX[q].transpose();
     }
     mass_matrix_ = PrecomputeMassMatrix();
-    lumped_mass_ = mass_matrix_.rowwise().sum().eval();
   }
 
   /* Calculates the elastic potential energy (in joules) stored in this element
@@ -243,21 +242,6 @@ class VolumetricElement
       elastic_energy += reference_volume_[q] * data.Psi[q];
     }
     return elastic_energy;
-  }
-
-  /* Computes the scaled gravity force on each node in the element using the
-   pre-calculated mass matrix with the given `gravity_vector`. */
-  void AddScaledGravityForce(const Data&, const T& scale,
-                             const Vector3<T>& gravity_vector,
-                             EigenPtr<Vector<T, num_dofs>> force) const {
-    constexpr int kDim = 3;
-    for (int a = 0; a < num_nodes; ++a) {
-      /* The following computation is equivalent to performing the matrix-vector
-       multiplication of the mass matrix and the stacked gravity vector. */
-      force->template segment<kDim>(kDim * a) +=
-          scale * lumped_mass_.template segment<kDim>(kDim * a).cwiseProduct(
-                      gravity_vector);
-    }
   }
 
  private:
@@ -416,16 +400,59 @@ class VolumetricElement
         this->ExtractElementDofs(state.GetPreviousStepPositions());
     data.element_v = this->ExtractElementDofs(state.GetVelocities());
     data.element_a = this->ExtractElementDofs(state.GetAccelerations());
-    data.deformation_gradient_data.UpdateData(
-        CalcDeformationGradient(data.element_q),
-        CalcDeformationGradient(data.element_q0));
-    this->constitutive_model().CalcElasticEnergyDensity(
-        data.deformation_gradient_data, &data.Psi);
-    this->constitutive_model().CalcFirstPiolaStress(
-        data.deformation_gradient_data, &data.P);
-    this->constitutive_model().CalcFirstPiolaStressDerivative(
-        data.deformation_gradient_data, &data.dPdF);
+    const auto& element_q_reshaped =
+        Eigen::Map<const Eigen::Matrix<T, 3, num_nodes>>(data.element_q.data(),
+                                                         3, num_nodes);
+    data.quadrature_positions =
+        isoparametric_element_.template InterpolateNodalValues<3>(
+            element_q_reshaped);
+
+    std::array<Matrix3<T>, num_quadrature_points> F =
+        CalcDeformationGradient(data.element_q);
+    std::array<Matrix3<T>, num_quadrature_points> F0 =
+        CalcDeformationGradient(data.element_q0);
+
+    for (int q = 0; q < num_quadrature_points; ++q) {
+      data.deformation_gradient_data[q].UpdateData(F[q], F0[q]);
+      this->constitutive_model().CalcElasticEnergyDensity(
+          data.deformation_gradient_data[q], &(data.Psi[q]));
+      this->constitutive_model().CalcFirstPiolaStress(
+          data.deformation_gradient_data[q], &(data.P[q]));
+      this->constitutive_model().CalcFirstPiolaStressDerivative(
+          data.deformation_gradient_data[q], &(data.dPdF[q]));
+    }
     return data;
+  }
+
+  void DoAddScaledExternalForces(const Data& data,
+                                 const FemPlantData<T>& plant_data,
+                                 const T& scale,
+                                 EigenPtr<Vector<T, num_dofs>> result) const {
+    const std::array<Vector<T, 3>, num_quadrature_points>&
+        quadrature_positions = data.quadrature_positions;
+    const std::array<Vector<T, num_nodes>, num_quadrature_points>& S =
+        isoparametric_element_.GetShapeFunctions();
+    for (int q = 0; q < num_quadrature_points; ++q) {
+      const Matrix3<T>& deformation_gradient =
+          data.deformation_gradient_data[q].deformation_gradient();
+      Vector3<T> scaled_force = Vector3<T>::Zero();
+      for (const multibody::ForceDensityField<T>* force_density :
+           plant_data.force_density_fields) {
+        DRAKE_ASSERT(force_density != nullptr);
+        const T change_of_volume =
+            force_density->density_type() ==
+                    multibody::ForceDensityType::kPerReferenceVolume
+                ? 1.0
+                : deformation_gradient.determinant();
+        scaled_force += scale *
+                        force_density->EvaluateAt(plant_data.plant_context,
+                                                  quadrature_positions[q]) *
+                        reference_volume_[q] * change_of_volume;
+      }
+      for (int n = 0; n < num_nodes; ++n) {
+        result->template segment<3>(3 * n) += scaled_force * S[q](n);
+      }
+    }
   }
 
   /* Calculates the deformation gradient at all quadrature points in this
@@ -515,9 +542,6 @@ class VolumetricElement
   T density_;
   /* Precomputed mass matrix. */
   Eigen::Matrix<T, num_dofs, num_dofs> mass_matrix_;
-  /* The diagonal of the lumped mass matrix (sum over each row). Only used for
-   calculating gravity forces at the moment. */
-  Vector<T, num_dofs> lumped_mass_;
 };
 
 }  // namespace internal

@@ -3,7 +3,6 @@
 #include <utility>
 
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/eigen_types.h"
 #include "drake/geometry/geometry_ids.h"
 
@@ -30,7 +29,7 @@ namespace geometry {
  */
 template <typename T>
 struct SignedDistancePair {
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SignedDistancePair)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SignedDistancePair);
   SignedDistancePair() = default;
 
   // TODO(DamrongGuoy): When we have a full implementation of computing

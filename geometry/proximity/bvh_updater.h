@@ -15,15 +15,12 @@ namespace internal {
  to the BVH which compares its current configuration against the underlying
  mesh data, updating the BVH state to maintain correct spatial culling.
 
- This will frequently be combined with a MeshDeformer so that when a mesh is
- updated, the corresponding Bvh can likewise be updated.
-
  This current incarnation only supports Bvhs constructed with axis-aligned
  bounding boxes.
 
  This class cannot be moved or copied. It is assumed upon creation that it will
  be permanently associated with *specific* MeshType and Bvh instances and
- maintain those associations for its entire lifetime (see DeformableVolumeMesh
+ maintain those associations for its entire lifetime (see DeformableMeshWithBvh
  as an example).
 
  @tparam MeshType TriangleSurfaceMesh<T> or VolumeMesh<T> where T is double or
@@ -31,7 +28,7 @@ namespace internal {
 template <typename MeshType>
 class BvhUpdater {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BvhUpdater)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(BvhUpdater);
 
   /* Constructs a %BvhUpdater for the given BVH and its corresponding mesh.
    Both the mesh and the bvh must remain alive at least as long as this

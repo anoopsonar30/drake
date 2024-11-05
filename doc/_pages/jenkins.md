@@ -37,7 +37,7 @@ it, in the lower-right corner of the "Review discussion" box.
 # Scheduling an On-Demand Build
 
 There are a number of Jenkins builds that do not normally run pre-merge, but do
-run post-merge, nightly, or weekly. These builds include lower-priority
+run post-merge or nightly. These builds include lower-priority
 platforms (e.g., macOS), and specialized options (e.g.,
 [UndefinedBehaviorSanitizer](https://releases.llvm.org/6.0.0/tools/clang/docs/UndefinedBehaviorSanitizer.html)).
 Members of the RobotLocomotion organization can manually schedule these builds
@@ -53,11 +53,11 @@ where ``<job-name>`` is the name of an
 
 For example:
 
-* ``@drake-jenkins-bot mac-x86-monterey-clang-bazel-experimental-release please.``
-* ``@drake-jenkins-bot linux-focal-clang-bazel-experimental-valgrind-memcheck please``
+* ``@drake-jenkins-bot mac-arm-sonoma-clang-bazel-experimental-release please``
+* ``@drake-jenkins-bot linux-jammy-clang-bazel-experimental-valgrind-memcheck please``
 
-A list of Jenkins bot commands that cover the full set of continuous, nightly
-and weekly production jobs are available for
+A list of Jenkins bot commands that cover the full set of continuous and nightly
+production jobs are available for
 [provisioned](https://github.com/RobotLocomotion/drake/blob/jenkins-jobs-experimental/request-jobs-provisioned.txt)
 and
 [unprovisioned](https://github.com/RobotLocomotion/drake/blob/jenkins-jobs-experimental/request-jobs-unprovisioned.txt)
@@ -80,10 +80,9 @@ in the ``RobotLocomotion/drake`` repository:
 The list of experimental builds includes builds that automatically run on opened
 and updated pull requests, as well as numerous other builds for on-demand use.
 To help identify the on-demand build you want to run, you can consult the lists
-of [continuous](https://drake-jenkins.csail.mit.edu/view/Continuous/),
-[nightly](https://drake-jenkins.csail.mit.edu/view/Nightly/), and
-[weekly](https://drake-jenkins.csail.mit.edu/view/Weekly/) builds,
-but you should not schedule continuous, nightly, or weekly builds directly.
+of [continuous](https://drake-jenkins.csail.mit.edu/view/Continuous/), and
+[nightly](https://drake-jenkins.csail.mit.edu/view/Nightly/)
+but you should not schedule continuous or nightly builds directly.
 
 ## Updating Installation Prerequisites
 
@@ -111,8 +110,8 @@ When updating prerequisites with these scripts, the normal experimental CI will
 most likely fail. To test new prerequisites, you should first request
 unprovisioned experimental builds, e.g.:
 
-* ``@drake-jenkins-bot linux-focal-unprovisioned-gcc-bazel-experimental-release please``
-* ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-bazel-experimental-release please.``
+* ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-bazel-experimental-release please``
+* ``@drake-jenkins-bot mac-arm-sonoma-unprovisioned-clang-bazel-experimental-release please``
 
 After this has passed, go through normal review. Once normal review is done,
 add `@BetsyMcPhail` for review and request that the provisioned instances be
@@ -126,10 +125,8 @@ To schedule an "experimental" build of a [binary package](/from_binary.html)
 or [debian package](/apt.html), comment on an open pull request using one or
 more of these commands:
 
-* ``@drake-jenkins-bot linux-focal-unprovisioned-gcc-bazel-experimental-packaging please``
 * ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-bazel-experimental-packaging please``
-* ``@drake-jenkins-bot mac-arm-monterey-unprovisioned-clang-bazel-experimental-packaging please``
-* ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-bazel-experimental-packaging please``
+* ``@drake-jenkins-bot mac-arm-sonoma-unprovisioned-clang-bazel-experimental-packaging please``
 
 or follow the [instructions above](#scheduling-builds-via-the-jenkins-user-interface)
 to schedule a build of one of the [Packaging](https://drake-jenkins.csail.mit.edu/view/Packaging/)
@@ -152,24 +149,43 @@ build (click on "Console Output" then "Full Log") and search for the text
 To schedule an "experimental" build of a [wheel package](/pip.html),
 comment on an open pull request using one or more of these commands:
 
-* ``@drake-jenkins-bot linux-focal-unprovisioned-gcc-wheel-experimental-release``
-* ``@drake-jenkins-bot mac-arm-monterey-unprovisioned-clang-wheel-experimental-release``
-* ``@drake-jenkins-bot mac-x86-monterey-unprovisioned-clang-wheel-experimental-release``
+* ``@drake-jenkins-bot linux-jammy-unprovisioned-gcc-wheel-experimental-release please``
+* ``@drake-jenkins-bot mac-arm-sonoma-unprovisioned-clang-wheel-experimental-release please``
 
 or follow the [instructions above](#scheduling-builds-via-the-jenkins-user-interface)
 to schedule a build of one of the [Wheel](https://drake-jenkins.csail.mit.edu/view/Wheel/)
 jobs with **experimental** in its name.
 
-To download the built wheel, open the Jenkins console log for the completed
-build (click on "Console Output" then "Full Log") and search for the text
-"Upload complete" to find the download URL.  For example:
+To download or install the built wheel, open the Jenkins console log for the
+completed build (click on "Details" for a wheel build in the pull request's
+list of checks, then "Console Output") and search for the text "Artifacts
+uploaded to AWS" to find the download URL (usually about a screen's-worth of
+text above the end of the log).  For example:
 
 ```
 ...
-[12:42:41 PM]  -- Upload complete: https://drake-packages.csail.mit.edu/drake/experimental/drake-0.0.2023.4.24.18.52.8%2Bgit51c87b29-cp310-cp310-manylinux_2_31_x86_64.whl
+[12:00:00 AM]  -- Artifacts uploaded to AWS:
+[12:00:00 AM]  https://drake-packages.csail.mit.edu/drake/experimental/drake-0.0.1999.1.1.0.0.0%2Bgitffffffff-cp310-cp310-manylinux_2_31_x86_64.whl
 ...
 ```
 
 Note that there might be multiple wheel files uploaded for different versions
 of Python. Be sure to match the Python ``M.NN`` version you will be using to
 the ``-cpMNN-`` substring in the URL.
+
+(In some cases, it may be necessary to click the "Full Log" and search for the
+text "Upload complete", particularly if you wish to also find the checksum
+URLs.)
+
+To download the wheel, simply click the link or use your favorite HTTP
+retrieval tool (e.g. ``wget`` or ``curl``).
+
+Wheels may also be installed locally for testing without downloading the wheel
+as a separate step:
+
+```bash
+python3 -m venv env
+env/bin/pip install --upgrade pip
+env/bin/pip install <url-of-experimental-wheel>
+source env/bin/activate
+```

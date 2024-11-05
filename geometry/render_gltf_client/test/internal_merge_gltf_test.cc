@@ -21,6 +21,8 @@ namespace render_gltf_client {
 namespace internal {
 namespace {
 
+namespace fs = std::filesystem;
+
 using nlohmann::json;
 using std::string;
 using std::vector;
@@ -575,7 +577,10 @@ class MergeTest : public testing::TestWithParam<MergeCase> {
 
   static vector<MergeCase> MergeBuffersCases() {
     vector<MergeCase> cases;
-    VerbatimCopy(&cases, "buffers", MergeBuffers);
+    auto merge = [](json* j1, json&& j2) {
+      MergeBuffers(j1, std::move(j2));
+    };
+    VerbatimCopy(&cases, "buffers", merge);
     return cases;
   }
 
@@ -589,8 +594,11 @@ class MergeTest : public testing::TestWithParam<MergeCase> {
 
   static vector<MergeCase> MergeImageCases() {
     vector<MergeCase> cases;
-    BumpIndex(&cases, "images", "bufferViews", "bufferView", MergeImages);
-    VerbatimCopy(&cases, "images", MergeImages);
+    auto merge = [](json* j1, json&& j2) {
+      MergeImages(j1, std::move(j2));
+    };
+    BumpIndex(&cases, "images", "bufferViews", "bufferView", merge);
+    VerbatimCopy(&cases, "images", merge);
     return cases;
   }
 
@@ -815,11 +823,11 @@ TEST_P(MergeFailureTest, Evaluate) {
 
 /* Simply call MergeGltf on real glTF files and makes sure it doesn't throw. */
 GTEST_TEST(MergeGltf, Smoke) {
-  json target = ReadJsonFile(FindResourceOrThrow(
-      "drake/geometry/render_gltf_client/test/red_box.gltf"));
+  json target = ReadJsonFile(fs::path(FindResourceOrThrow(
+      "drake/geometry/render_gltf_client/test/red_box.gltf")));
 
-  json source = ReadJsonFile(FindResourceOrThrow(
-      "drake/geometry/render_gltf_client/test/textured_green_box.gltf"));
+  json source = ReadJsonFile(fs::path(FindResourceOrThrow(
+      "drake/geometry/render_gltf_client/test/textured_green_box.gltf")));
 
   MergeRecord record("test_target");
   EXPECT_NO_THROW(
@@ -831,7 +839,7 @@ GTEST_TEST(MergeGltf, Smoke) {
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     /* target now contains the merged result. */
     json& merged = target;
-    std::ofstream f(std::filesystem::path(dir) / "merged.gltf");
+    std::ofstream f(fs::path(dir) / "merged.gltf");
     // Set the stream so the json gets "pretty-formatted" with a 2-space
     // indent.
     f << std::setw(2);

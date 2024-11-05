@@ -142,6 +142,27 @@ std::unique_ptr<ContextBase> LeafSystem<T>::DoAllocateContext() const {
 }
 
 template <typename T>
+void LeafSystem<T>::SetDefaultParameters(
+    const Context<T>& context, Parameters<T>* parameters) const {
+  this->ValidateContext(context);
+  this->ValidateCreatedForThisSystem(parameters);
+  for (int i = 0; i < parameters->num_numeric_parameter_groups(); i++) {
+    BasicVector<T>& p = parameters->get_mutable_numeric_parameter(i);
+    auto model_vector = model_numeric_parameters_.CloneVectorModel<T>(i);
+    if (model_vector != nullptr) {
+      p.SetFrom(*model_vector);
+    } else {
+      p.SetFromVector(VectorX<T>::Constant(p.size(), 1.0));
+    }
+  }
+  for (int i = 0; i < parameters->num_abstract_parameters(); i++) {
+    AbstractValue& p = parameters->get_mutable_abstract_parameter(i);
+    auto model_value = model_abstract_parameters_.CloneModel(i);
+    p.SetFrom(*model_value);
+  }
+}
+
+template <typename T>
 void LeafSystem<T>::SetDefaultState(
     const Context<T>& context, State<T>* state) const {
   this->ValidateContext(context);
@@ -168,27 +189,6 @@ void LeafSystem<T>::SetDefaultState(
 
   AbstractValues& xa = state->get_mutable_abstract_state();
   xa.SetFrom(AbstractValues(model_abstract_states_.CloneAllModels()));
-}
-
-template <typename T>
-void LeafSystem<T>::SetDefaultParameters(
-    const Context<T>& context, Parameters<T>* parameters) const {
-  this->ValidateContext(context);
-  this->ValidateCreatedForThisSystem(parameters);
-  for (int i = 0; i < parameters->num_numeric_parameter_groups(); i++) {
-    BasicVector<T>& p = parameters->get_mutable_numeric_parameter(i);
-    auto model_vector = model_numeric_parameters_.CloneVectorModel<T>(i);
-    if (model_vector != nullptr) {
-      p.SetFrom(*model_vector);
-    } else {
-      p.SetFromVector(VectorX<T>::Constant(p.size(), 1.0));
-    }
-  }
-  for (int i = 0; i < parameters->num_abstract_parameters(); i++) {
-    AbstractValue& p = parameters->get_mutable_abstract_parameter(i);
-    auto model_value = model_abstract_parameters_.CloneModel(i);
-    p.SetFrom(*model_value);
-  }
 }
 
 template <typename T>
@@ -397,30 +397,6 @@ void LeafSystem<T>::DoCalcNextUpdateTime(
   }
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-template <typename T>
-void LeafSystem<T>::GetGraphvizInputPortToken(
-    const InputPort<T>& port, int max_depth, std::stringstream* dot) const {
-  unused(max_depth);
-  DRAKE_DEMAND(&port.get_system() == this);
-  // N.B. Calling GetGraphvizId() will print the deprecation console warning.
-  *dot << this->GetGraphvizId() << ":u" << port.get_index();
-}
-#pragma GCC diagnostic pop
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-template <typename T>
-void LeafSystem<T>::GetGraphvizOutputPortToken(
-    const OutputPort<T>& port, int max_depth, std::stringstream* dot) const {
-  unused(max_depth);
-  DRAKE_DEMAND(&port.get_system() == this);
-  // N.B. Calling GetGraphvizId() will print the deprecation console warning.
-  *dot << this->GetGraphvizId() << ":y" << port.get_index();
-}
-#pragma GCC diagnostic pop
-
 template <typename T>
 std::unique_ptr<ContinuousState<T>> LeafSystem<T>::AllocateContinuousState()
     const {
@@ -489,24 +465,6 @@ int LeafSystem<T>::DeclareAbstractParameter(const AbstractValue& model_value) {
   model_abstract_parameters_.AddModel(index, model_value.Clone());
   this->AddAbstractParameter(index);
   return index;
-}
-
-template <typename T>
-void LeafSystem<T>::DeclarePeriodicPublishNoHandler(
-    double period_sec, double offset_sec) {
-  DeclarePeriodicEvent(period_sec, offset_sec, PublishEvent<T>());
-}
-
-template <typename T>
-void LeafSystem<T>::DeclarePeriodicDiscreteUpdateNoHandler(
-    double period_sec, double offset_sec) {
-  DeclarePeriodicEvent(period_sec, offset_sec, DiscreteUpdateEvent<T>());
-}
-
-template <typename T>
-void LeafSystem<T>::DeclarePeriodicUnrestrictedUpdateNoHandler(
-    double period_sec, double offset_sec) {
-  DeclarePeriodicEvent(period_sec, offset_sec, UnrestrictedUpdateEvent<T>());
 }
 
 template <typename T>
@@ -655,17 +613,17 @@ LeafOutputPort<T>& LeafSystem<T>::DeclareVectorOutputPort(
 template <typename T>
 LeafOutputPort<T>& LeafSystem<T>::DeclareAbstractOutputPort(
     std::variant<std::string, UseDefaultName> name,
-    typename LeafOutputPort<T>::AllocCallback alloc_function,
-    typename LeafOutputPort<T>::CalcCallback calc_function,
+    typename LeafOutputPort<T>::AllocCallback alloc,
+    typename LeafOutputPort<T>::CalcCallback calc,
     std::set<DependencyTicket> prerequisites_of_calc) {
-  auto calc = [captured_calc = std::move(calc_function)](
+  auto calc_function = [captured_calc = std::move(calc)](
       const ContextBase& context_base, AbstractValue* result) {
     const Context<T>& context = dynamic_cast<const Context<T>&>(context_base);
     return captured_calc(context, result);
   };
   auto& port = CreateAbstractLeafOutputPort(
       NextOutputPortName(std::move(name)),
-      ValueProducer(std::move(alloc_function), std::move(calc)),
+      ValueProducer(std::move(alloc), std::move(calc_function)),
       std::move(prerequisites_of_calc));
   return port;
 }
@@ -764,37 +722,6 @@ SystemConstraintIndex LeafSystem<T>::DeclareInequalityConstraint(
 }
 
 template <typename T>
-void LeafSystem<T>::DoPublish(
-    const Context<T>& context,
-    const std::vector<const PublishEvent<T>*>&) const {
-  // Sets this flag to indicate that the derived System did not override
-  // our default method. See DispatchPublishHandler() for how this is used.
-  context.set_use_default_implementation(true);
-}
-
-template <typename T>
-void LeafSystem<T>::DoCalcDiscreteVariableUpdates(
-    const Context<T>& context,
-    const std::vector<const DiscreteUpdateEvent<T>*>&,
-    DiscreteValues<T>*) const {
-  // Sets this flag to indicate that the derived System did not override
-  // our default method. See DispatchDiscreteVariableUpdateHandler() for how
-  // this is used.
-  context.set_use_default_implementation(true);
-}
-
-template <typename T>
-void LeafSystem<T>::DoCalcUnrestrictedUpdate(
-    const Context<T>& context,
-    const std::vector<const UnrestrictedUpdateEvent<T>*>&,
-    State<T>*) const {
-  // Sets this flag to indicate that the derived System did not override
-  // our default method. See DispatchUnrestrictedUpdateHandler() for how
-  // this is used.
-  context.set_use_default_implementation(true);
-}
-
-template <typename T>
 std::unique_ptr<AbstractValue> LeafSystem<T>::DoAllocateInput(
     const InputPort<T>& input_port) const {
   std::unique_ptr<AbstractValue> model_result =
@@ -849,24 +776,13 @@ EventStatus LeafSystem<T>::DispatchPublishHandler(
   // This function shouldn't have been called if no publish events.
   DRAKE_DEMAND(leaf_events.HasEvents());
 
-  // Determine whether the derived System overloaded DoPublish(). If so, this
-  // flag will remain false; the default implementation sets it to true.
-  context.set_use_default_implementation(false);
-  this->DoPublish(context, leaf_events.get_events());
-  if (!context.get_use_default_implementation()) {
-    // Derived system overrode the dispatcher and did not invoke the base class
-    // implementation so there is nothing else to do.
-    return EventStatus::Succeeded();
-  }
-
-  // Use our default dispatch policy.
   EventStatus overall_status = EventStatus::DidNothing();
   for (const PublishEvent<T>* event : leaf_events.get_events()) {
     const EventStatus per_event_status = event->handle(*this, context);
     overall_status.KeepMoreSevere(per_event_status);
-    // Unlike the discrete & unrestricted event policy, we don't stop
-    // handling publish events when one fails; we just report the first failure
-    // after all the publishes are done.
+    // Unlike the discrete & unrestricted event policy, we don't stop handling
+    // publish events when one fails; we just report the first failure after all
+    // the publishes are done.
   }
   return overall_status;
 }
@@ -885,19 +801,6 @@ EventStatus LeafSystem<T>::DispatchDiscreteVariableUpdateHandler(
   // Must initialize the output argument with current discrete state contents.
   discrete_state->SetFrom(context.get_discrete_state());
 
-  // Determine whether the derived System overloaded
-  // DoCalcDiscreteVariableUpdates(). If so, this flag will remain false; the
-  // default implementation sets it to true.
-  context.set_use_default_implementation(false);
-  this->DoCalcDiscreteVariableUpdates(context, leaf_events.get_events(),
-      discrete_state);  // in/out
-  if (!context.get_use_default_implementation()) {
-    // Derived system overrode the dispatcher and did not invoke the base class
-    // implementation so there is nothing else to do.
-    return EventStatus::Succeeded();
-  }
-
-  // Use our default dispatch policy.
   EventStatus overall_status = EventStatus::DidNothing();
   for (const DiscreteUpdateEvent<T>* event : leaf_events.get_events()) {
     const EventStatus per_event_status =
@@ -932,21 +835,11 @@ EventStatus LeafSystem<T>::DispatchUnrestrictedUpdateHandler(
   DRAKE_DEMAND(leaf_events.HasEvents());
 
   // Must initialize the output argument with current state contents.
+  // TODO(sherm1) Shouldn't require preloading of the output state; better to
+  //  note just the changes since usually only a small subset will be changed by
+  //  the callback function.
   state->SetFrom(context.get_state());
 
-  // Determine whether the derived System overloaded
-  // DoCalcUnrestrictedUpdate(). If so, this flag will remain false; the
-  // default implementation sets it to true.
-  context.set_use_default_implementation(false);
-  this->DoCalcUnrestrictedUpdate(context, leaf_events.get_events(),
-                                        state);  // in/out
-  if (!context.get_use_default_implementation()) {
-    // Derived system overrode the dispatcher and did not invoke the base class
-    // implementation so there is nothing else to do.
-    return EventStatus::Succeeded();
-  }
-
-  // Use our default dispatch policy.
   EventStatus overall_status = EventStatus::DidNothing();
   for (const UnrestrictedUpdateEvent<T>* event : leaf_events.get_events()) {
     const EventStatus per_event_status = event->handle(*this, context, state);
@@ -1158,4 +1051,4 @@ void LeafSystem<T>::MaybeDeclareVectorBaseInequalityConstraint(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::LeafSystem)
+    class ::drake::systems::LeafSystem);

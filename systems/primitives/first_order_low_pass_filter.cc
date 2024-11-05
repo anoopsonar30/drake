@@ -19,7 +19,8 @@ template <typename T>
 FirstOrderLowPassFilter<T>::FirstOrderLowPassFilter(
     const VectorX<double>& time_constants)
     : VectorSystem<T>(SystemTypeTag<FirstOrderLowPassFilter>{},
-                      time_constants.size(), time_constants.size()),
+                      time_constants.size(), time_constants.size(),
+                      /* direct_feedthrough = */ false),
       time_constants_(time_constants) {
   DRAKE_DEMAND(time_constants.size() > 0);
   DRAKE_DEMAND((time_constants.array() > 0).all());
@@ -53,6 +54,7 @@ const VectorX<double>& FirstOrderLowPassFilter<T>::get_time_constants_vector()
 template <typename T>
 void FirstOrderLowPassFilter<T>::set_initial_output_value(
     Context<T>* context, const Eigen::Ref<const VectorX<T>>& z0) const {
+  this->ValidateContext(context);
   VectorBase<T>& state_vector = context->get_mutable_continuous_state_vector();
   // Asserts that the input value is a column vector of the appropriate size.
   DRAKE_DEMAND(z0.rows() == state_vector.size() && z0.cols() == 1);
@@ -80,4 +82,4 @@ void FirstOrderLowPassFilter<T>::DoCalcVectorOutput(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::FirstOrderLowPassFilter)
+    class ::drake::systems::FirstOrderLowPassFilter);

@@ -69,7 +69,7 @@ void CheckLagrangians(const VectorX<symbolic::Polynomial>& lagrangians,
                       const Eigen::MatrixXd& indeterminates_samples,
                       const VectorX<symbolic::Variable>& indeterminates) {
   for (int i = 0; i < lagrangians.rows(); ++i) {
-    if (redundant_indices.count(i) == 0) {
+    if (!redundant_indices.contains(i)) {
       CheckPositivePolynomialBySamples(lagrangians(i), indeterminates,
                                        indeterminates_samples.transpose());
     } else {
@@ -117,10 +117,10 @@ void CheckSeparationBySamples(
          ++plane_index) {
       const auto& plane =
           tester.cspace_free_polytope().separating_planes()[plane_index];
-      if (ignored_collision_pairs.count(SortedPair<geometry::GeometryId>(
+      if (!ignored_collision_pairs.contains(SortedPair<geometry::GeometryId>(
               plane.positive_side_geometry->id(),
-              plane.negative_side_geometry->id())) == 0 &&
-          a.count(plane_index) > 0 && b.count(plane_index) > 0) {
+              plane.negative_side_geometry->id())) &&
+          a.contains(plane_index) && b.contains(plane_index)) {
         Eigen::Vector3d a_val;
         for (int j = 0; j < 3; ++j) {
           a_val(j) = a.at(plane_index)(j).Evaluate(env);
@@ -492,7 +492,7 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenPolytopeSuccess) {
   solvers::MosekSolver solver;
   options.solver_id = solver.id();
   for (int num_threads : {1, kTestConcurrency}) {
-    options.num_threads = num_threads;
+    options.parallelism = num_threads;
 
     const auto certificates_result =
         tester.FindSeparationCertificateGivenPolytope(ignored_collision_pairs,
@@ -504,10 +504,10 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenPolytopeSuccess) {
       EXPECT_TRUE(certificate.has_value());
       const auto& plane = tester.cspace_free_polytope()
                               .separating_planes()[certificate->plane_index];
-      EXPECT_EQ(ignored_collision_pairs.count(SortedPair<geometry::GeometryId>(
-                    plane.positive_side_geometry->id(),
-                    plane.negative_side_geometry->id())),
-                0);
+      EXPECT_FALSE(
+          ignored_collision_pairs.contains(SortedPair<geometry::GeometryId>(
+              plane.positive_side_geometry->id(),
+              plane.negative_side_geometry->id())));
 
       CheckSeparationBySamples(tester, *diagram_, s_samples, C, d,
                                {{certificate->plane_index, certificate->a}},
@@ -576,7 +576,7 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenPolytopeFailure) {
   solvers::MosekSolver solver;
   options.solver_id = solver.id();
   for (int num_threads : {1, kTestConcurrency}) {
-    options.num_threads = num_threads;
+    options.parallelism = num_threads;
 
     const auto certificates_result =
         tester.FindSeparationCertificateGivenPolytope(ignored_collision_pairs,
@@ -620,11 +620,11 @@ TEST_F(CIrisToyRobotTest, FindSeparationCertificateGivenPolytopeFailure) {
       const SortedPair<geometry::GeometryId> geometry_pair(
           plane.positive_side_geometry->id(),
           plane.negative_side_geometry->id());
-      EXPECT_EQ(inseparable_geometries.count(geometry_pair), 0);
+      EXPECT_FALSE(inseparable_geometries.contains(geometry_pair));
     }
   }
   for (const auto& [geometry_pair, certificate] : certificates_map) {
-    EXPECT_EQ(inseparable_geometries.count(geometry_pair), 0);
+    EXPECT_FALSE(inseparable_geometries.contains(geometry_pair));
   }
 }
 
@@ -742,7 +742,7 @@ TEST_F(CIrisRobotPolytopicGeometryTest, InitializePolytopeSearchProgram) {
   options.verbose = false;
   solvers::MosekSolver solver;
   options.solver_id = solver.id();
-  options.num_threads = kTestConcurrency;
+  options.parallelism = kTestConcurrency;
   const auto certificates_result =
       tester.FindSeparationCertificateGivenPolytope(ignored_collision_pairs, C,
                                                     d, options);
@@ -855,7 +855,7 @@ class CIrisToyRobotInitializePolytopeSearchProgramTest
     options.solver_options = solvers::SolverOptions();
     options.solver_options->SetOption(
         solvers::CommonSolverOption::kPrintToConsole, 0);
-    options.num_threads = kTestConcurrency;
+    options.parallelism = kTestConcurrency;
     const auto certificates_result =
         tester.FindSeparationCertificateGivenPolytope(ignored_collision_pairs,
                                                       C, d, options);
@@ -944,7 +944,7 @@ TEST_F(CIrisToyRobotTest, FindPolytopeGivenLagrangian) {
   options.verbose = false;
   solvers::MosekSolver solver;
   options.solver_id = solver.id();
-  options.num_threads = kTestConcurrency;
+  options.parallelism = kTestConcurrency;
 
   const auto certificates_result =
       tester.FindSeparationCertificateGivenPolytope(ignored_collision_pairs, C,
@@ -1109,7 +1109,7 @@ TEST_F(CIrisToyRobotTest, SearchWithBilinearAlternation) {
   CspaceFreePolytope::BilinearAlternationOptions bilinear_alternation_options;
   bilinear_alternation_options.max_iter = 5;
   bilinear_alternation_options.convergence_tol = 1E-5;
-  bilinear_alternation_options.find_lagrangian_options.num_threads =
+  bilinear_alternation_options.find_lagrangian_options.parallelism =
       kTestConcurrency;
   bilinear_alternation_options.find_polytope_options.solver_options =
       solvers::SolverOptions();
@@ -1195,7 +1195,7 @@ TEST_F(CIrisToyRobotTest, BinarySearch) {
   options.scale_min = 1;
   options.scale_max = 100;
   options.convergence_tol = 1E-1;
-  options.find_lagrangian_options.num_threads = kTestConcurrency;
+  options.find_lagrangian_options.parallelism = kTestConcurrency;
   solvers::MosekSolver solver;
   const Eigen::Vector3d s_center(0.01, 0, 0.01);
   auto result = tester.cspace_free_polytope().BinarySearch(

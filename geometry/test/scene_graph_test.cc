@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "drake/common/find_resource.h"
 #include "drake/common/nice_type_name.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
@@ -15,6 +16,7 @@
 #include "drake/geometry/geometry_set.h"
 #include "drake/geometry/geometry_state.h"
 #include "drake/geometry/make_mesh_for_deformable.h"
+#include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/query_object.h"
 #include "drake/geometry/render/render_label.h"
 #include "drake/geometry/shape_specification.h"
@@ -34,6 +36,11 @@ namespace drake {
 namespace geometry {
 
 using internal::DummyRenderEngine;
+using internal::HydroelasticType;
+using internal::kComplianceType;
+using internal::kHydroGroup;
+using internal::kPointStiffness;
+using internal::kRezHint;
 using math::RigidTransformd;
 using std::make_unique;
 using std::unique_ptr;
@@ -95,13 +102,17 @@ class SceneGraphTester {
       const SceneGraph<T>& scene_graph, systems::Context<T>* context) {
     return scene_graph.mutable_geometry_state(context);
   }
+
+  template <typename T>
+  static int64_t ScalarConversionCount() {
+    return SceneGraph<T>::scalar_conversion_count_;
+  }
 };
 
 namespace {
 
 // Convenience function for making a geometry instance.
-std::unique_ptr<GeometryInstance> make_sphere_instance(
-    double radius = 1.0) {
+std::unique_ptr<GeometryInstance> make_sphere_instance(double radius = 1.0) {
   return make_unique<GeometryInstance>(RigidTransformd::Identity(),
                                        make_unique<Sphere>(radius), "sphere");
 }
@@ -226,8 +237,8 @@ TEST_F(SceneGraphTest, TopologyAfterAllocation) {
   FrameId old_frame_id =
       scene_graph_.RegisterFrame(id, GeometryFrame("old_frame"));
   // This geometry will be removed after allocation.
-  GeometryId old_geometry_id = scene_graph_.RegisterGeometry(id, old_frame_id,
-      make_sphere_instance());
+  GeometryId old_geometry_id =
+      scene_graph_.RegisterGeometry(id, old_frame_id, make_sphere_instance());
 
   CreateDefaultContext();
 
@@ -268,12 +279,15 @@ TEST_F(SceneGraphTest, TopologyAfterAllocation) {
 }
 
 // Confirms that the direct feedthrough logic is correct -- there is total
-// direct feedthrough.
+// direct feedthrough. Also confirm that feedthrough was calculated without the
+// need to fall back on SystemSymbolicInspector, and hence populate the
+// internal augmented model cache for T=Expression.
 TEST_F(SceneGraphTest, DirectFeedThrough) {
   scene_graph_.RegisterSource();
+  int64_t tare = SceneGraphTester::ScalarConversionCount<Expression>();
   EXPECT_EQ(scene_graph_.GetDirectFeedthroughs().size(),
-            scene_graph_.num_input_ports() *
-                scene_graph_.num_output_ports());
+            scene_graph_.num_input_ports() * scene_graph_.num_output_ports());
+  EXPECT_EQ(SceneGraphTester::ScalarConversionCount<Expression>(), tare);
 }
 
 // Test the functionality that accumulates the values from the input ports.
@@ -347,7 +361,100 @@ TEST_F(SceneGraphTest, RegisterUnsupportedDeformableGeometry) {
       scene_graph_.RegisterDeformableGeometry(
           s_id, scene_graph_.world_frame_id(), std::move(geometry_instance),
           kRezHint),
-      ".*don't yet generate deformable meshes.+ Cylinder.");
+      ".*don't yet generate deformable meshes.+ Cylinder.*");
+}
+
+// Test application of defaults during context allocation.
+TEST_F(SceneGraphTest, ApplyConfig) {
+  EXPECT_EQ(
+      scene_graph_.get_config().default_proximity_properties.compliance_type,
+      "undefined");
+  SourceId s_id = scene_graph_.RegisterSource();
+  auto geometry_instance = make_unique<GeometryInstance>(
+      RigidTransformd::Identity(), make_unique<Box>(1.0, 2.0, 3.0), "box");
+  geometry_instance->set_proximity_properties(ProximityProperties());
+  auto g_id = scene_graph_.RegisterGeometry(
+      s_id, scene_graph_.world_frame_id(), std::move(geometry_instance));
+  // Plain context.
+  CreateDefaultContext();
+  // No hydroelastic mesh available.
+  EXPECT_EQ(
+      query_object().inspector().maybe_get_hydroelastic_mesh(g_id).index(), 0);
+
+  SceneGraphConfig config;
+  config.default_proximity_properties.compliance_type = "compliant";
+  scene_graph_.set_config(config);
+  const auto& defaults = scene_graph_.get_config().default_proximity_properties;
+  EXPECT_EQ(defaults.compliance_type, "compliant");
+  // Hydroelastic-compliant configured context.
+  CreateDefaultContext();
+  // Volume hydroelastic mesh available.
+  EXPECT_EQ(
+      query_object().inspector().maybe_get_hydroelastic_mesh(g_id).index(), 2);
+
+  // The tests below demonstrate modifications to geometry directly on the
+  // context are subject to applying the default properties.
+
+  // Add a new shape into the context, with empty proximity role. The resulting
+  // registered geometry has proximity defaults applied.
+  geometry_instance = make_unique<GeometryInstance>(
+      RigidTransformd::Identity(), make_unique<Box>(1.0, 3.0, 5.0), "box2");
+  geometry_instance->set_proximity_properties(ProximityProperties());
+  g_id = scene_graph_.RegisterGeometry(
+      context_.get(), s_id, scene_graph_.world_frame_id(),
+      std::move(geometry_instance));
+  // Volume hydroelastic mesh available.
+  EXPECT_EQ(
+      query_object().inspector().maybe_get_hydroelastic_mesh(g_id).index(), 2);
+
+  // Add a new shape into the context, then assign an empty proximity role. The
+  // resulting properties have proximity defaults applied.
+  geometry_instance = make_unique<GeometryInstance>(
+      RigidTransformd::Identity(), make_unique<Box>(1.0, 1.0, 1.0), "box3");
+  g_id = scene_graph_.RegisterGeometry(
+      context_.get(), s_id, scene_graph_.world_frame_id(),
+      std::move(geometry_instance));
+  scene_graph_.AssignRole(context_.get(), s_id, g_id, ProximityProperties());
+  // Volume hydroelastic mesh available.
+  EXPECT_EQ(
+      query_object().inspector().maybe_get_hydroelastic_mesh(g_id).index(), 2);
+
+  // Replace the role, with a blank set of properties. The resulting properties
+  // are not empty, but have the defaults applied.
+  ASSERT_TRUE(scene_graph_.get_config(*context_)
+              .default_proximity_properties.resolution_hint.has_value());
+  scene_graph_.AssignRole(context_.get(), s_id, g_id, ProximityProperties(),
+                          RoleAssign::kReplace);
+  auto* props = query_object().inspector().GetProximityProperties(g_id);
+  EXPECT_TRUE(props->HasProperty(kHydroGroup, kRezHint));
+
+  // Replace the role, removing a defaulted property. The property does not
+  // get removed, because it is set in the context's scene graph config, and
+  // those settings get reapplied during AssignRole().
+  ASSERT_TRUE(scene_graph_.get_config(*context_)
+              .default_proximity_properties.resolution_hint.has_value());
+  ProximityProperties edit_props(
+      *query_object().inspector().GetProximityProperties(g_id));
+  edit_props.RemoveProperty(kHydroGroup, kRezHint);
+  scene_graph_.AssignRole(context_.get(), s_id, g_id, edit_props,
+                          RoleAssign::kReplace);
+  props = query_object().inspector().GetProximityProperties(g_id);
+  EXPECT_TRUE(props->HasProperty(kHydroGroup, kRezHint));
+
+  // Replace the role, removing a non-defaulted property. The property gets
+  // removed, because it is not set in the context's scene graph config, and
+  // reapplication during AssignRole() does not affect it.
+  ASSERT_FALSE(scene_graph_.get_config(*context_)
+              .default_proximity_properties.point_stiffness.has_value());
+  edit_props = *query_object().inspector().GetProximityProperties(g_id);
+  edit_props.RemoveProperty(kHydroGroup, kPointStiffness);
+  scene_graph_.AssignRole(context_.get(), s_id, g_id, edit_props,
+                          RoleAssign::kReplace);
+  props = query_object().inspector().GetProximityProperties(g_id);
+  // The whole group was not removed.
+  EXPECT_TRUE(props->HasGroup(kHydroGroup));
+  // The specific non-default property was removed.
+  EXPECT_FALSE(props->HasProperty(kHydroGroup, kPointStiffness));
 }
 
 template <typename T>
@@ -396,8 +503,8 @@ TYPED_TEST_P(TypedSceneGraphTest, TransmogrifyContext) {
   using U = TypeParam;
   SourceId s_id = this->scene_graph_.RegisterSource();
   // Register geometry that should be successfully transmogrified.
-  GeometryId g_id = this->scene_graph_.RegisterAnchoredGeometry(
-      s_id, make_sphere_instance());
+  GeometryId g_id =
+      this->scene_graph_.RegisterAnchoredGeometry(s_id, make_sphere_instance());
   this->CreateDefaultContext();
   const Context<double>& context_T = *this->context_;
   // This should transmogrify the internal *model*, so when I allocate the
@@ -432,11 +539,11 @@ TYPED_TEST_P(TypedSceneGraphTest, NonDoubleClone) {
   ASSERT_NE(copy, nullptr);
 }
 
-REGISTER_TYPED_TEST_SUITE_P(TypedSceneGraphTest,
-    TransmogrifyWithoutAllocation,
-    TransmogrifyPorts,
-    TransmogrifyContext,
-    NonDoubleClone);
+REGISTER_TYPED_TEST_SUITE_P(TypedSceneGraphTest,            //
+                            TransmogrifyWithoutAllocation,  //
+                            TransmogrifyPorts,              //
+                            TransmogrifyContext,            //
+                            NonDoubleClone);
 
 using NonDoubleScalarTypes = ::testing::Types<AutoDiffXd, Expression>;
 INSTANTIATE_TYPED_TEST_SUITE_P(My, TypedSceneGraphTest, NonDoubleScalarTypes);
@@ -503,7 +610,8 @@ TEST_F(SceneGraphTest, ModelInspector) {
 // configuration/introspection code. These tests are just smoke tests that the
 // functions work. It relies on GeometryState to properly unit test the
 // full behavior.
-TEST_F(SceneGraphTest, RendererSmokeTest) {
+TEST_F(SceneGraphTest, RendererInSceneGraphSmokeTest) {
+  // Test the renderer added to the SceneGraph.
   const std::string kRendererName = "bob";
 
   EXPECT_EQ(scene_graph_.RendererCount(), 0);
@@ -516,22 +624,73 @@ TEST_F(SceneGraphTest, RendererSmokeTest) {
   EXPECT_EQ(scene_graph_.RendererCount(), 1);
   EXPECT_EQ(scene_graph_.RegisteredRendererNames()[0], kRendererName);
   EXPECT_TRUE(scene_graph_.HasRenderer(kRendererName));
+
+  DRAKE_EXPECT_NO_THROW(scene_graph_.RemoveRenderer(kRendererName));
+  EXPECT_EQ(scene_graph_.RendererCount(), 0);
+  EXPECT_FALSE(scene_graph_.HasRenderer(kRendererName));
+}
+
+TEST_F(SceneGraphTest, RendererInContextSmokeTest) {
+  // Test the renderer added to the context
+  CreateDefaultContext();
+  const std::string kRendererName = "bob";
+
+  EXPECT_EQ(scene_graph_.RendererCount(*context_), 0);
+  EXPECT_EQ(scene_graph_.RegisteredRendererNames(*context_).size(), 0u);
+  EXPECT_FALSE(scene_graph_.HasRenderer(*context_, kRendererName));
+
+  DRAKE_EXPECT_NO_THROW(scene_graph_.AddRenderer(
+      context_.get(), kRendererName, make_unique<DummyRenderEngine>()));
+
+  EXPECT_EQ(scene_graph_.RendererCount(*context_), 1);
+  // No renderer inside SceneGraph since the renderer is added to the context.
+  EXPECT_EQ(scene_graph_.RendererCount(), 0);
+  EXPECT_EQ(scene_graph_.RegisteredRendererNames(*context_)[0], kRendererName);
+  EXPECT_TRUE(scene_graph_.HasRenderer(*context_, kRendererName));
+
+  DRAKE_EXPECT_NO_THROW(
+      scene_graph_.RemoveRenderer(context_.get(), kRendererName));
+  EXPECT_EQ(scene_graph_.RendererCount(*context_), 0);
+  EXPECT_FALSE(scene_graph_.HasRenderer(*context_, kRendererName));
 }
 
 // Query the type name of a render engine. This logic is unique to SceneGraph
 // so we test it here.
 TEST_F(SceneGraphTest, GetRendererTypeName) {
-  const std::string kRendererName = "bob";
+  const std::string kRendererName1 = "bob";
+  const std::string kRendererName2 = "alice";
 
+  CreateDefaultContext();
   DRAKE_EXPECT_NO_THROW(scene_graph_.AddRenderer(
-      kRendererName, make_unique<DummyRenderEngine>()));
+      kRendererName1, make_unique<DummyRenderEngine>()));
+  DRAKE_EXPECT_NO_THROW(scene_graph_.AddRenderer(
+      context_.get(), kRendererName2, make_unique<DummyRenderEngine>()));
 
   // If no renderer has the name, the type doesn't matter.
   EXPECT_EQ(scene_graph_.GetRendererTypeName("non-existent"), "");
+  EXPECT_EQ(scene_graph_.GetRendererTypeName(*context_, "non-existent"), "");
 
   // Get the expected name.
-  EXPECT_EQ(scene_graph_.GetRendererTypeName(kRendererName),
+  EXPECT_EQ(scene_graph_.GetRendererTypeName(kRendererName1),
             NiceTypeName::Get<DummyRenderEngine>());
+  EXPECT_EQ(scene_graph_.GetRendererTypeName(*context_, kRendererName2),
+            NiceTypeName::Get<DummyRenderEngine>());
+}
+
+TEST_F(SceneGraphTest, RemoveRenderer) {
+  const std::string kRendererName = "bob";
+
+  scene_graph_.AddRenderer(kRendererName, make_unique<DummyRenderEngine>());
+
+  EXPECT_TRUE(scene_graph_.HasRenderer(kRendererName));
+
+  scene_graph_.RemoveRenderer(kRendererName);
+
+  EXPECT_FALSE(scene_graph_.HasRenderer(kRendererName));
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      scene_graph_.RemoveRenderer("bad_name"),
+      ".* A renderer with the name 'bad_name' does not exist");
 }
 
 // SceneGraph provides a thin wrapper on the GeometryState role manipulation
@@ -579,24 +738,20 @@ TEST_F(SceneGraphTest, ChangeShape) {
       query_object().inspector();
 
   // Confirm the shape in the model and context is of the expected type.
-  ASSERT_EQ(ShapeName(sphere).name(),
-            ShapeName(model_inspector.GetShape(g_id)).name());
-  ASSERT_EQ(ShapeName(sphere).name(),
-            ShapeName(context_inspector.GetShape(g_id)).name());
+  ASSERT_EQ(sphere.type_name(), model_inspector.GetShape(g_id).type_name());
+  ASSERT_EQ(sphere.type_name(), context_inspector.GetShape(g_id).type_name());
 
   // Change shape without changing pose.
   const Box box(1.5, 2.5, 3.5);
 
   scene_graph_.ChangeShape(source_id, g_id, box);
-  EXPECT_EQ(ShapeName(box).name(),
-            ShapeName(model_inspector.GetShape(g_id)).name());
+  EXPECT_EQ(box.type_name(), model_inspector.GetShape(g_id).type_name());
   EXPECT_TRUE(
       CompareMatrices(X_WG_original.GetAsMatrix34(),
                       model_inspector.GetPoseInFrame(g_id).GetAsMatrix34()));
 
   scene_graph_.ChangeShape(context_.get(), source_id, g_id, box);
-  EXPECT_EQ(ShapeName(box).name(),
-            ShapeName(context_inspector.GetShape(g_id)).name());
+  EXPECT_EQ(box.type_name(), context_inspector.GetShape(g_id).type_name());
   EXPECT_TRUE(
       CompareMatrices(X_WG_original.GetAsMatrix34(),
                       context_inspector.GetPoseInFrame(g_id).GetAsMatrix34()));
@@ -609,15 +764,13 @@ TEST_F(SceneGraphTest, ChangeShape) {
   const RigidTransformd X_WG_new = X_WG_original * X_WG_original;
 
   scene_graph_.ChangeShape(source_id, g_id, cylinder, X_WG_new);
-  EXPECT_EQ(ShapeName(cylinder).name(),
-            ShapeName(model_inspector.GetShape(g_id)).name());
+  EXPECT_EQ(cylinder.type_name(), model_inspector.GetShape(g_id).type_name());
   EXPECT_TRUE(
       CompareMatrices(X_WG_new.GetAsMatrix34(),
                       model_inspector.GetPoseInFrame(g_id).GetAsMatrix34()));
 
   scene_graph_.ChangeShape(context_.get(), source_id, g_id, cylinder, X_WG_new);
-  EXPECT_EQ(ShapeName(cylinder).name(),
-            ShapeName(context_inspector.GetShape(g_id)).name());
+  EXPECT_EQ(cylinder.type_name(), context_inspector.GetShape(g_id).type_name());
   EXPECT_TRUE(
       CompareMatrices(X_WG_new.GetAsMatrix34(),
                       context_inspector.GetPoseInFrame(g_id).GetAsMatrix34()));
@@ -651,8 +804,8 @@ class GeometrySourceSystem : public systems::LeafSystem<double> {
       const VolumeMesh<double>* mesh_ptr =
           inspector.GetReferenceMesh(deformable_id);
       DRAKE_DEMAND(mesh_ptr != nullptr);
-      configurations_.set_value(deformable_id,
-          VectorX<double>::Zero(mesh_ptr->num_vertices() * 3));
+      configurations_.set_value(
+          deformable_id, VectorX<double>::Zero(mesh_ptr->num_vertices() * 3));
     }
 
     // Set up output pose port now that the frame is registered.
@@ -733,11 +886,11 @@ GTEST_TEST(SceneGraphConnectionTest, FullPositionUpdateConnected) {
   systems::DiagramBuilder<double> builder;
   auto scene_graph = builder.AddSystem<SceneGraph<double>>();
   scene_graph->set_name("scene_graph");
-  auto mixed_source = builder.AddSystem<GeometrySourceSystem>(
-      scene_graph, true);
+  auto mixed_source =
+      builder.AddSystem<GeometrySourceSystem>(scene_graph, true);
   mixed_source->set_name("mixed source");
-  auto nondeformable_source = builder.AddSystem<GeometrySourceSystem>(
-      scene_graph, false);
+  auto nondeformable_source =
+      builder.AddSystem<GeometrySourceSystem>(scene_graph, false);
   nondeformable_source->set_name("nondeformable_only_source");
   SourceId mixed_source_id = mixed_source->get_source_id();
   SourceId nondeformable_source_id = nondeformable_source->get_source_id();
@@ -821,7 +974,6 @@ GTEST_TEST(SceneGraphExpressionTest, InstantiateExpression) {
       QueryObjectTest::MakeNullQueryObject<Expression>();
   SceneGraphTester::GetQueryObjectPortValue(scene_graph, *context, &handle);
 }
-
 
 // Tests that exercise the Context-modifying API
 

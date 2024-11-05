@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <ostream>
 #include <string>
 #include <unordered_map>
@@ -56,12 +57,20 @@ namespace solvers {
  *
  * "OSQP" -- Parameter name and values as specified in OSQP Reference
  * https://osqp.org/docs/interfaces/solver_settings.html#solver-settings
+ *
+ * "Clarabel" -- Parameter name and values as specified in Clarabel
+ * https://oxfordcontrol.github.io/ClarabelDocs/stable/api_settings/
+ * Note that `direct_solve_method` is not supported in Drake yet.
+ * Clarabel's boolean options should be passed as integers (0 or 1).
+ *
+ * "CSDP" -- Parameter name and values as specified at
+ * https://manpages.ubuntu.com/manpages/focal/en/man1/csdp-randgraph.1.html
  */
 class SolverOptions {
  public:
   SolverOptions() = default;
 
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SolverOptions)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SolverOptions);
 
   /** The values stored in SolverOptions can be double, int, or string.
    * In the future, we might re-order or add more allowed types without any
@@ -118,6 +127,14 @@ class SolverOptions {
   /** Returns the kPrintToConsole set via CommonSolverOption, or else false if
    * the option has not been set. */
   bool get_print_to_console() const;
+
+  /** Returns the kStandaloneReproductionFileName set via CommonSolverOption, or
+   * else an empty string if the option has not been set. */
+  std::string get_standalone_reproduction_file_name() const;
+
+  /** Returns the kMaxThreads set via CommonSolverOption. Returns nullopt if
+   * kMaxThreads is unset. */
+  std::optional<int> get_max_threads() const;
 
   template <typename T>
   const std::unordered_map<std::string, T>& GetOptions(

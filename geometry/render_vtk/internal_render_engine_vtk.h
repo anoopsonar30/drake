@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -8,10 +9,8 @@
 
 // To ease build system upkeep, we annotate VTK includes with their deps.
 #include <vtkActor.h>                // vtkRenderingCore
-#include <vtkAutoInit.h>             // vtkCommonCore
 #include <vtkCommand.h>              // vtkCommonCore
 #include <vtkImageExport.h>          // vtkIOImage
-#include <vtkLight.h>                // vtkRenderingCore
 #include <vtkNew.h>                  // vtkCommonCore
 #include <vtkPolyDataAlgorithm.h>    // vtkCommonExecutionModel
 #include <vtkRenderWindow.h>         // vtkRenderingCore
@@ -20,32 +19,20 @@
 #include <vtkSmartPointer.h>         // vtkCommonCore
 #include <vtkWindowToImageFilter.h>  // vtkRenderingCore
 
+#include "drake/common/diagnostic_policy.h"
 #include "drake/common/drake_copyable.h"
 #include "drake/common/drake_export.h"
 #include "drake/common/reset_on_copy.h"
 #include "drake/geometry/render/render_engine.h"
 #include "drake/geometry/render/render_label.h"
 #include "drake/geometry/render/render_material.h"
+#include "drake/geometry/render/render_mesh.h"
 #include "drake/geometry/render_vtk/render_engine_vtk_params.h"
-
-#ifndef DRAKE_DOXYGEN_CXX
-// This, and the ModuleInitVtkRenderingOpenGL2, provide the basis for enabling
-// VTK's OpenGL2 infrastructure.
-VTK_AUTOINIT_DECLARE(vtkRenderingOpenGL2)
-#endif
 
 namespace drake {
 namespace geometry {
 namespace render_vtk {
 namespace internal {
-
-#ifndef DRAKE_DOXYGEN_CXX
-struct ModuleInitVtkRenderingOpenGL2 {
-  ModuleInitVtkRenderingOpenGL2() {
-    VTK_AUTOINIT_CONSTRUCT(vtkRenderingOpenGL2)
-  }
-};
-#endif
 
 // A callback class for setting uniform variables used in shader programs,
 // namely z_near and z_far, when vtkCommand::UpdateShaderEvent is caught.
@@ -87,7 +74,7 @@ enum ImageType {
 
 /* See documentation of MakeRenderEngineVtk().  */
 class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
-                                        private ModuleInitVtkRenderingOpenGL2 {
+                                        private ShapeReifier {
  public:
   /* @name Does not allow copy, move, or assignment  */
   //@{
@@ -107,12 +94,14 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   explicit RenderEngineVtk(
       const RenderEngineVtkParams& parameters = RenderEngineVtkParams());
 
+  ~RenderEngineVtk() override;
+
   /* @see RenderEngine::UpdateViewpoint().  */
   void UpdateViewpoint(const math::RigidTransformd& X_WR) override;
 
   /* @name    Shape reification  */
   //@{
-  using RenderEngine::ImplementGeometry;
+  using ShapeReifier::ImplementGeometry;
   void ImplementGeometry(const Box& box, void* user_data) override;
   void ImplementGeometry(const Capsule& capsule, void* user_data) override;
   void ImplementGeometry(const Convex& convex, void* user_data) override;
@@ -139,9 +128,13 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   RenderEngineVtk(const RenderEngineVtk& other);
 
   /* The rendering pipeline for a single image type (color, depth, or label). */
-  struct RenderingPipeline {
+  struct RenderingPipeline final {
+    explicit RenderingPipeline(RenderEngineVtkBackend backend_in);
+    ~RenderingPipeline();
+
+    const RenderEngineVtkBackend backend;
     vtkNew<vtkRenderer> renderer;
-    vtkNew<vtkRenderWindow> window;
+    vtkSmartPointer<vtkRenderWindow> window;
     vtkNew<vtkWindowToImageFilter> filter;
     vtkNew<vtkImageExport> exporter;
   };
@@ -206,34 +199,54 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
       const render::ColorRenderCamera& camera,
       systems::sensors::ImageLabel16I* label_image_out) const override;
 
-  // Common interface for loading a mesh-type geometry (i.e., Mesh or Convex).
-  // Examines the extension and delegates to the appropriate
-  // ImplementExtension() variant to handle that file type, warning otherwise.
-  void ImplementMesh(const std::string& file_name, double scale,
-                     void* user_data);
+  // Helper function for mapping a RenderMesh instance into the appropriate VTK
+  // polydata.
+  void ImplementRenderMesh(geometry::internal::RenderMesh&& mesh, double scale,
+                           const RegistrationData& data);
 
   // Adds an .obj to the scene for the id currently being reified (data->id).
   // Returns true if added, false if ignored (for whatever reason).
-  bool ImplementObj(const std::string& file_name, double scale,
-                    const RegistrationData& data);
+  bool ImplementObj(const Mesh& mesh, const RegistrationData& data);
 
   // Adds a .gltf to the scene for the id currently being reified (data->id).
   // Returns true if added, false if ignored (for whatever reason).
-  bool ImplementGltf(const std::string& file_name, double scale,
-                     const RegistrationData& data);
+  bool ImplementGltf(const Mesh& mesh, const RegistrationData& data);
 
  private:
   friend class RenderEngineVtkTester;
 
+  // Our diagnostic_ object's warning callback calls this function.
+  void HandleWarning(const drake::internal::DiagnosticDetail& detail) const;
+
   // Initializes the VTK pipelines.
   void InitializePipelines();
 
-  // Performs the common setup for all shape types.
+  // Performs the common setup for all shape types. Note, this can be called
+  // multiple times for a single value of data.id. It will simply accumulate
+  // multiple parts in the Prop associated with the geometry id.
   void ImplementPolyData(vtkPolyDataAlgorithm* source,
                          const geometry::internal::RenderMaterial& material,
                          const RegistrationData& data);
 
   void SetDefaultLightPosition(const Vector3<double>& p_DL) override;
+
+  // Configures the render engine to require all materials to use PBR
+  // interpolation. This can be mindlessly called repeatedly without harm.
+  // It should be invoked any time a necessary condition is encountered to
+  // ensure proper materials:
+  //
+  //   1) If any glTF model has been added.
+  //   2) If an environment map has been added.
+  //
+  // Note: this affects *all* objects, whether or not a model has been
+  // introduced that explicitly declares PBR materials.
+  void SetPbrMaterials();
+
+  // Setup a custom shader on the polydata mapper for rendering depth as the
+  // distance from the background plane
+  //
+  // @pre actor is not null.
+  static void SetDepthShader(vtkActor* actor);
 
   // A geometry is modeled with one or more "parts". A part maps to the actor
   // representing it in VTK and an optional transform mapping the actor's frame
@@ -274,12 +287,16 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
     if (!parameters_.lights.empty()) {
       return parameters_.lights;
     }
-    DRAKE_DEMAND(!fallback_lights_.empty());
+    // fallback_lights_ may be empty if the user has specified an environment
+    // map.
     return fallback_lights_;
   }
 
   // The engine's configuration parameters.
   const RenderEngineVtkParams parameters_;
+
+  // VTK error and/or warning messages end up here.
+  drake::internal::DiagnosticPolicy diagnostic_;
 
   std::array<std::unique_ptr<RenderingPipeline>, kNumPipelines> pipelines_;
 
@@ -288,7 +305,7 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   // deformable and does *not* depend on the system's pose information.
   // (If there is deformable geometry, it will have to be handled differently.)
   // Having "shared geometry" means having shared vtkPolyDataAlgorithm and
-  // vtkOpenGLPolyDataMapper instances. The shader callback gets registered to
+  // vtkOpenGLShaderProperty instances. The shader callback gets registered to
   // the *mapper* instances, so they all, implicitly, share the same callback.
   // Making this member static facilitates that but it does preclude the
   // possibility of simultaneous renderings with different uniform parameters.
@@ -303,7 +320,7 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   Rgba default_diffuse_{0.9, 0.45, 0.1, 1.0};
 
   // The color to clear the color buffer to.
-  systems::sensors::ColorD default_clear_color_;
+  Rgba default_clear_color_;
 
   // The collection of per-geometry actors -- one actor per pipeline (color,
   // depth, and label) -- keyed by the geometry's GeometryId.
@@ -314,7 +331,14 @@ class DRAKE_NO_EXPORT RenderEngineVtk : public render::RenderEngine,
   // Note: We are initializing this vector with a *single* light by using the
   // LightParameter default constructor; it has been specifically designed to
   // serve as the default light.
-  std::vector<render::LightParameter> fallback_lights_{{}};
+  std::vector<render::LightParameter> fallback_lights_{};
+
+  // If true, all newly created objects use pbr materials. As an invariant,
+  // setting this to true should retroactively make all previously created
+  // objects also use PBR materials (see SetPbrMaterials).
+  // If false, the behavior is undefined -- the interpolation model is left to
+  // VTK's default value.
+  bool use_pbr_materials_{false};
 };
 
 }  // namespace internal

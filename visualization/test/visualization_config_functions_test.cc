@@ -101,6 +101,8 @@ GTEST_TEST(VisualizationConfigFunctionsTest, ParamConversionDefault) {
             config.delete_on_initialization_event);
   EXPECT_EQ(meshcat_params.at(2).enable_alpha_slider,
             config.enable_alpha_sliders);
+  EXPECT_EQ(meshcat_params.at(2).initial_alpha_slider_value,
+            config.initial_proximity_alpha);
   EXPECT_EQ(meshcat_params.at(2).visible_by_default, false);
   EXPECT_EQ(meshcat_params.at(2).show_hydroelastic, true);
   EXPECT_EQ(meshcat_params.at(2).include_unspecified_accepting, true);
@@ -137,6 +139,15 @@ GTEST_TEST(VisualizationConfigFunctionsTest, ParamConversionSpecial) {
   EXPECT_EQ(meshcat_params.at(0).default_color, Rgba(0.25, 0.25, 0.25, 0.25));
   EXPECT_EQ(meshcat_params.at(0).prefix, "illustration");
   EXPECT_EQ(meshcat_params.at(0).enable_alpha_slider, true);
+
+  // Testing non-default value for initial_proximity_alpha requires
+  // publishing proximity.
+  const VisualizationConfig proximity_alpha_config{
+      .publish_proximity = true, .initial_proximity_alpha = 0.25};
+  const std::vector<MeshcatVisualizerParams> meshcat_params2 =
+      ConvertVisualizationConfigToMeshcatParams(proximity_alpha_config);
+  EXPECT_EQ(meshcat_params2.at(2).role, Role::kProximity);
+  EXPECT_EQ(meshcat_params2.at(2).initial_alpha_slider_value, 0.25);
 }
 
 // Tests everything disabled.
@@ -260,6 +271,43 @@ GTEST_TEST(VisualizationConfigFunctionsTest, ApplyNothing) {
   // Simulate for a moment and make sure nothing showed up.
   simulator.AdvanceTo(0.25);
   drake_lcm.HandleSubscriptions(1);
+}
+
+// When LCM is opted-out, the LCM-related systems are not added.
+GTEST_TEST(VisualizationConfigFunctionsTest, ApplyWithoutLcm) {
+  // Configure LcmBuses to only use the null bus.
+  DrakeLcm drake_lcm(LcmBuses::kLcmUrlMemqNull);
+  LcmBuses lcm_buses;
+  lcm_buses.Add("default", &drake_lcm);
+
+  // Add MbP and SG, then visualization.
+  DiagramBuilder<double> builder;
+  auto [plant, scene_graph] = AddMultibodyPlantSceneGraph(&builder, 0.0);
+  plant.Finalize();
+  VisualizationConfig config;
+  ApplyVisualizationConfig(config, &builder, &lcm_buses, &plant, &scene_graph);
+
+  // Check that no LCM-related objects are created.
+  for (const auto* system : builder.GetSystems()) {
+    const std::string& name = system->get_name();
+    // Allow the MbP basics.
+    if (name == "plant" || name == "scene_graph") {
+      continue;
+    }
+    // Allow anything meshcat-related.
+    if (name.find("meshcat") != std::string::npos) {
+      continue;
+    }
+    // This is relevant no matter which visualizer(s) are enabled.
+    if (name == "inertia_visualizer") {
+      continue;
+    }
+    GTEST_FAIL() << name << " should not exist in the diagram";
+  }
+
+  // Smoke test that nothing crashes.
+  Simulator<double> simulator(builder.Build());
+  simulator.AdvanceTo(0.25);
 }
 
 // Check that the update period is obeyed. No publish events are allowed to be

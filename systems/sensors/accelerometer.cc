@@ -12,7 +12,7 @@ using multibody::SpatialAcceleration;
 using multibody::SpatialVelocity;
 
 template <typename T>
-Accelerometer<T>::Accelerometer(const multibody::Body<T>& body,
+Accelerometer<T>::Accelerometer(const multibody::RigidBody<T>& body,
                                 const RigidTransform<double>& X_BS,
                                 const Eigen::Vector3d& gravity_vector)
     : Accelerometer(body.index(), X_BS, gravity_vector) {}
@@ -72,7 +72,7 @@ void Accelerometer<T>::CalcOutput(const Context<T>& context,
 
 template <typename T>
 const Accelerometer<T>& Accelerometer<T>::AddToDiagram(
-    const multibody::Body<T>& body, const RigidTransform<double>& X_BS,
+    const multibody::RigidBody<T>& body, const RigidTransform<double>& X_BS,
     const Eigen::Vector3d& gravity_vector,
     const multibody::MultibodyPlant<T>& plant, DiagramBuilder<T>* builder) {
   const auto& accelerometer = *builder->template AddSystem<Accelerometer<T>>(
@@ -93,7 +93,7 @@ Accelerometer<T>::Accelerometer(const Accelerometer<U>& other)
     : Accelerometer(other.body_index(), other.pose(), other.gravity_vector()) {}
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::sensors::Accelerometer)
+    class ::drake::systems::sensors::Accelerometer);
 
 }  // namespace sensors
 }  // namespace systems

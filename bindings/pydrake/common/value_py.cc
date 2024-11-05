@@ -3,12 +3,14 @@
 #include "pybind11/eval.h"
 
 #include "drake/bindings/pydrake/common/cpp_param_pybind.h"
+#include "drake/bindings/pydrake/common/submodules_py.h"
 #include "drake/bindings/pydrake/common/value_pybind.h"
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 
 namespace drake {
 namespace pydrake {
+namespace internal {
 
 namespace {
 
@@ -23,11 +25,13 @@ class PyObjectValue : public drake::Value<Object> {
 
   // Override `Clone()` to perform a deep copy on the object.
   std::unique_ptr<AbstractValue> Clone() const override {
+    py::gil_scoped_acquire guard;
     return std::make_unique<PyObjectValue>(get_value().Clone());
   }
 
   // Override `SetFrom()` to perform a deep copy on the object.
   void SetFrom(const AbstractValue& other) override {
+    py::gil_scoped_acquire guard;
     get_mutable_value() = other.get_value<Object>().Clone();
   }
 };
@@ -43,9 +47,7 @@ void AddPrimitiveValueInstantiations(py::module m) {
 
 }  // namespace
 
-PYBIND11_MODULE(value, m) {
-  PYDRAKE_PREVENT_PYTHON3_MODULE_REIMPORT(m);
-  m.doc() = "Bindings for //common:value";
+void DefineModuleValue(py::module m) {
   constexpr auto& doc = pydrake_doc.drake;
 
   // `AddValueInstantiation` will define methods specific to `T` for
@@ -81,5 +83,6 @@ PYBIND11_MODULE(value, m) {
   ExecuteExtraPythonCode(m);
 }
 
+}  // namespace internal
 }  // namespace pydrake
 }  // namespace drake

@@ -18,18 +18,11 @@ for resources like mesh files. This class can also download remote packages from
 the internet on an as-needed basis via AddRemote(). */
 class PackageMap final {
  public:
+  DRAKE_DECLARE_COPY_AND_MOVE_AND_ASSIGN(PackageMap);
+
   /** A constructor that initializes a default map containing only the top-level
   `drake` manifest. See PackageMap::MakeEmpty() to create an empty map. */
   PackageMap();
-
-  /** @name Implements CopyConstructible, CopyAssignable, MoveConstructible,
-  MoveAssignable */
-  //@{
-  PackageMap(const PackageMap&);
-  PackageMap& operator=(const PackageMap&);
-  PackageMap(PackageMap&&);
-  PackageMap& operator=(PackageMap&&);
-  //@}
 
   ~PackageMap();
 
@@ -59,6 +52,12 @@ class PackageMap final {
   const std::string& GetPath(
       const std::string& package_name,
       std::optional<std::string>* deprecated_message = nullptr) const;
+
+  /** Returns a resolved path for `url`. URL schemes are either `file://` for
+  local files or `package://` (or `model://`).
+
+  @throws std::exception if the url cannot be resolved. */
+  std::string ResolveUrl(const std::string& url) const;
 
   ///@}
 

@@ -35,7 +35,7 @@ updated.
 template <typename T>
 class InertiaVisualizer final : public systems::LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(InertiaVisualizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(InertiaVisualizer);
 
   /** Creates an instance of %InertiaVisualizer.
   The plant must be finalized. */
@@ -91,7 +91,7 @@ namespace internal {
 given body's moments of inertia. */
 template <typename T>
 std::pair<geometry::Ellipsoid, math::RigidTransform<double>>
-CalculateInertiaGeometry(const multibody::Body<T>& body,
+CalculateInertiaGeometry(const multibody::RigidBody<T>& body,
                          const systems::Context<T>& plant_context);
 }  // namespace internal
 
@@ -99,4 +99,4 @@ CalculateInertiaGeometry(const multibody::Body<T>& body,
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::visualization::InertiaVisualizer)
+    class ::drake::visualization::InertiaVisualizer);

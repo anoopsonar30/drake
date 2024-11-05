@@ -78,11 +78,23 @@ class TestGeometrySceneGraph(unittest.TestCase):
             scene_graph.get_query_output_port(), OutputPort)
 
         # Test limited rendering API.
-        scene_graph.AddRenderer("test_renderer",
+        renderer_name = "test_renderer"
+        scene_graph.AddRenderer(renderer_name,
                                 mut.MakeRenderEngineVtk(
                                     mut.RenderEngineVtkParams()))
-        self.assertTrue(scene_graph.HasRenderer("test_renderer"))
+        self.assertTrue(scene_graph.HasRenderer(renderer_name))
         self.assertEqual(scene_graph.RendererCount(), 1)
+        renderer_type_name = scene_graph.GetRendererTypeName(
+            name=renderer_name)
+
+        scene_graph.RemoveRenderer(renderer_name)
+        self.assertFalse(scene_graph.HasRenderer(renderer_name))
+        self.assertEqual(scene_graph.RendererCount(), 0)
+
+        # Now add the renderer back.
+        scene_graph.AddRenderer(renderer_name,
+                                mut.MakeRenderEngineVtk(
+                                    mut.RenderEngineVtkParams()))
 
         # Test SceneGraphInspector API
         inspector = scene_graph.model_inspector()
@@ -95,7 +107,12 @@ class TestGeometrySceneGraph(unittest.TestCase):
         self.assertTrue(global_frame in inspector.GetAllFrameIds())
         self.assertIsInstance(inspector.world_frame_id(), mut.FrameId)
         self.assertEqual(inspector.num_geometries(), 3)
-        self.assertEqual(len(inspector.GetAllGeometryIds()), 3)
+        self.assertEqual(
+            len(inspector.GetAllGeometryIds()),
+            3)
+        self.assertEqual(
+            len(inspector.GetAllGeometryIds(role=mut.Role.kProximity)),
+            2)
 
         # Test both GeometrySet API as well as SceneGraphInspector's
         # GeometrySet API.
@@ -317,6 +334,62 @@ class TestGeometrySceneGraph(unittest.TestCase):
                     context=context, source_id=global_source,
                     frame_id=global_frame, role=role),
                 1 if i == 0 else 0)
+
+    def test_scene_graph_config(self):
+        mut.DefaultProximityProperties()
+        scene_graph_config = mut.SceneGraphConfig()
+        scene_graph = mut.SceneGraph(config=scene_graph_config)
+        got_config = scene_graph.get_config()
+        self.assertEqual(
+            got_config.default_proximity_properties.compliance_type,
+            "undefined")
+        scene_graph_config.default_proximity_properties.compliance_type = \
+            "compliant"
+        scene_graph.set_config(config=scene_graph_config)
+        got_config = scene_graph.get_config()
+        self.assertEqual(
+            got_config.default_proximity_properties.compliance_type,
+            "compliant")
+
+        # ParamInit.
+        param_init_props = mut.DefaultProximityProperties(
+            compliance_type="compliant",
+            hydroelastic_modulus=2,
+            resolution_hint=3,
+            slab_thickness=4,
+            dynamic_friction=5,
+            static_friction=6,
+            hunt_crossley_dissipation=7,
+            relaxation_time=None,  # Test optionality.
+            point_stiffness=9,
+        )
+        param_init_scene_graph = mut.SceneGraphConfig(
+            default_proximity_properties=param_init_props)
+        # Spot-check that at least some value got passed through.
+        got_props = param_init_scene_graph.default_proximity_properties
+        self.assertEqual(got_props.relaxation_time, None)
+        self.assertEqual(got_props.point_stiffness, 9)
+
+    @numpy_compare.check_all_types
+    def test_scene_graph_renderer_with_context(self, T):
+        SceneGraph = mut.SceneGraph_[T]
+        scene_graph = SceneGraph()
+        context = scene_graph.CreateDefaultContext()
+        self.assertEqual(scene_graph.RendererCount(context), 0)
+        render_params = mut.RenderEngineVtkParams()
+        renderer_name = "test_renderer"
+        self.assertFalse(
+            scene_graph.HasRenderer(context=context, name=renderer_name))
+        scene_graph.AddRenderer(
+            context=context, name=renderer_name,
+            renderer=mut.MakeRenderEngineVtk(params=render_params))
+        self.assertEqual(scene_graph.RendererCount(context=context), 1)
+        self.assertTrue(
+            scene_graph.HasRenderer(context=context, name=renderer_name))
+        scene_graph.RemoveRenderer(context=context, name=renderer_name)
+        self.assertEqual(scene_graph.RendererCount(context=context), 0)
+        renderer_type_name = scene_graph.GetRendererTypeName(
+            context=context, name=renderer_name)
 
     @numpy_compare.check_all_types
     def test_scene_graph_register_geometry(self, T):

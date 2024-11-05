@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/multibody/plant/multibody_plant.h"
+#include "drake/multibody/plant/multibody_plant_config_functions.h"
 #include "drake/systems/framework/diagram_builder.h"
 
 namespace drake {
@@ -15,18 +17,19 @@ using geometry::GeometryInstance;
 using geometry::SceneGraph;
 using geometry::SceneGraphInspector;
 using geometry::Sphere;
+using math::RigidTransform;
 using math::RigidTransformd;
 using std::make_unique;
+using systems::BasicVector;
 
 class DeformableModelTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    constexpr double kDt = 0.01;
-    std::tie(plant_, scene_graph_) =
-        AddMultibodyPlantSceneGraph(&builder_, kDt);
-    auto deformable_model = make_unique<DeformableModel<double>>(plant_);
-    deformable_model_ptr_ = deformable_model.get();
-    plant_->AddPhysicalModel(std::move(deformable_model));
+    MultibodyPlantConfig plant_config;
+    plant_config.time_step = 0.01;
+    plant_config.discrete_contact_approximation = "sap";
+    std::tie(plant_, scene_graph_) = AddMultibodyPlant(plant_config, &builder_);
+    deformable_model_ptr_ = &plant_->mutable_deformable_model();
   }
 
   systems::DiagramBuilder<double> builder_;
@@ -38,10 +41,17 @@ class DeformableModelTest : public ::testing::Test {
   /* Registers a deformable sphere with the given initial pose in world. */
   DeformableBodyId RegisterSphere(double resolution_hint,
                                   RigidTransformd X_WS = RigidTransformd()) {
+    return RegisterSphere(deformable_model_ptr_, resolution_hint, X_WS);
+  }
+
+  template <typename T>
+  DeformableBodyId RegisterSphere(DeformableModel<T>* model,
+                                  double resolution_hint,
+                                  RigidTransformd X_WS = RigidTransformd()) {
     auto geometry =
         make_unique<GeometryInstance>(X_WS, make_unique<Sphere>(1), "sphere");
-    DeformableBodyId body_id = deformable_model_ptr_->RegisterDeformableBody(
-        std::move(geometry), default_body_config_, resolution_hint);
+    DeformableBodyId body_id = model->RegisterDeformableBody(
+        std::move(geometry), fem::DeformableBodyConfig<T>{}, resolution_hint);
     return body_id;
   }
 };
@@ -242,10 +252,10 @@ TEST_F(DeformableModelTest, VertexPositionsOutputPort) {
   std::unique_ptr<systems::Context<double>> context =
       plant_->CreateDefaultContext();
   std::unique_ptr<AbstractValue> output_value =
-      deformable_model_ptr_->vertex_positions_port().Allocate();
+      plant_->get_deformable_body_configuration_output_port().Allocate();
   /* Compute the configuration for each geometry in the model. */
-  deformable_model_ptr_->vertex_positions_port().Calc(*context,
-                                                      output_value.get());
+  plant_->get_deformable_body_configuration_output_port().Calc(
+      *context, output_value.get());
   const geometry::GeometryConfigurationVector<double>& configurations =
       output_value->get_value<geometry::GeometryConfigurationVector<double>>();
 
@@ -268,8 +278,8 @@ TEST_F(DeformableModelTest, AddFixedConstraint) {
   */
   DeformableBodyId deformable_id = RegisterSphere(100, X_WA);
   ASSERT_EQ(deformable_model_ptr_->GetFemModel(deformable_id).num_nodes(), 7);
-  const Body<double>& rigid_body =
-      plant_->AddRigidBody("box", SpatialInertia<double>());
+  const RigidBody<double>& rigid_body =
+      plant_->AddRigidBody("box", SpatialInertia<double>::NaN());
   geometry::Box box(1.0, 1.0, 1.0);
   const RigidTransformd X_BA(Vector3d(-2, 0, 0));
   const RigidTransformd X_BG(Vector3d(-1, 0, 0));
@@ -306,8 +316,8 @@ TEST_F(DeformableModelTest, AddFixedConstraint) {
                std::exception);
   /* Non-existant rigid body (registered with a different MbP). */
   MultibodyPlant<double> other_plant(0.0);
-  const Body<double>& wrong_rigid_body =
-      other_plant.AddRigidBody("wrong body", SpatialInertia<double>());
+  const RigidBody<double>& wrong_rigid_body =
+      other_plant.AddRigidBody("wrong body", SpatialInertia<double>::NaN());
   DRAKE_EXPECT_THROWS_MESSAGE(
       deformable_model_ptr_->AddFixedConstraint(deformable_id, wrong_rigid_body,
                                                 X_BA, box, X_BG),
@@ -327,6 +337,223 @@ TEST_F(DeformableModelTest, AddFixedConstraint) {
   EXPECT_THROW(deformable_model_ptr_->AddFixedConstraint(
                    deformable_id, rigid_body, X_BA, box, X_BG),
                std::exception);
+}
+
+TEST_F(DeformableModelTest, ExternalForces) {
+  /* A user defined force density field. */
+  class ConstantForceDensityField final : public ForceDensityField<double> {
+   public:
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ConstantForceDensityField);
+
+    /* Constructs an force density field that has the functional form given by
+     input `field` which is then scaled by a scalar value via input port. */
+    explicit ConstantForceDensityField(
+        std::function<Vector3<double>(const Vector3<double>&)> field)
+        : field_(std::move(field)) {}
+
+    /* Gets the double-valued input port that determines whether the force field
+     is turned on or off. 0 for off and anything else for on.  */
+    const systems::InputPort<double>& get_input_port() const {
+      return parent_system_or_throw().get_input_port(scale_port_index_);
+    }
+
+   private:
+    Vector3<double> DoEvaluateAt(const systems::Context<double>& context,
+                                 const Vector3<double>& p_WQ) const final {
+      return get_input_port().Eval(context)(0) * field_(p_WQ);
+    };
+
+    std::unique_ptr<ForceDensityField<double>> DoClone() const final {
+      return std::make_unique<ConstantForceDensityField>(*this);
+    }
+
+    void DoDeclareInputPorts(multibody::MultibodyPlant<double>* plant) final {
+      scale_port_index_ = this->DeclareVectorInputPort(
+                                  plant, "on/off signal for the force field",
+                                  BasicVector<double>(1.0))
+                              .get_index();
+    }
+
+    std::function<Vector3<double>(const Vector3<double>&)> field_;
+    systems::InputPortIndex scale_port_index_;
+  };
+
+  auto force_field = [](const Vector3d& x) {
+    return 3.14 * x;
+  };
+  auto constant_force =
+      std::make_unique<ConstantForceDensityField>(force_field);
+  const ConstantForceDensityField* constant_force_ptr = constant_force.get();
+  deformable_model_ptr_->AddExternalForce(std::move(constant_force));
+  constexpr double kRezHint = 0.5;
+  DeformableBodyId body_id = RegisterSphere(kRezHint);
+  /* Pre-finalize calls to GetExternalForces are not allowed. */
+  DRAKE_EXPECT_THROWS_MESSAGE(deformable_model_ptr_->GetExternalForces(body_id),
+                              ".*before system resources.*declared.*");
+  /* We modify the gravity to deviate from the default to verify that it is
+   reflected in the external gravity applied to the deformable body. */
+  const Vector3d gravity_vector(0.0, 0.0, -10.0);
+  plant_->mutable_gravity_field().set_gravity_vector(gravity_vector);
+  plant_->Finalize();
+  auto plant_context = plant_->CreateDefaultContext();
+
+  /* Post-finalize calls to AddExternalForce are not allowed. */
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      deformable_model_ptr_->AddExternalForce(
+          std::make_unique<ConstantForceDensityField>(force_field)),
+      ".*AddExternalForce.*after system resources have been declared.*");
+
+  DeformableBodyId fake_id = DeformableBodyId::get_new_id();
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      deformable_model_ptr_->GetExternalForces(fake_id),
+      fmt::format(".*No.*id.*{}.*registered.*", fake_id));
+
+  const std::vector<const ForceDensityField<double>*>& external_forces =
+      deformable_model_ptr_->GetExternalForces(body_id);
+  for (const auto* force : external_forces) {
+    const auto* g = dynamic_cast<const GravityForceField<double>*>(force);
+    const auto* f = dynamic_cast<const ConstantForceDensityField*>(force);
+    /* We know two external forces are added to the deformable body, one is
+     gravity (added automatically), the other is the explicit force defined
+     above. */
+    ASSERT_TRUE((g != nullptr) ^ (f != nullptr));
+    const Vector3d p_WQ(1, 2, 3);
+    if (g != nullptr) {
+      EXPECT_EQ(g->density_type(), ForceDensityType::kPerReferenceVolume);
+      EXPECT_EQ(force->EvaluateAt(*plant_context, p_WQ),
+                gravity_vector * default_body_config_.mass_density());
+    } else {
+      EXPECT_EQ(f->density_type(), ForceDensityType::kPerCurrentVolume);
+      const double scale = 2.71;
+      constant_force_ptr->get_input_port().FixValue(plant_context.get(),
+                                                    Vector1d(scale));
+      EXPECT_EQ(force->EvaluateAt(*plant_context, p_WQ), scale * 3.14 * p_WQ);
+    }
+  }
+}
+
+TEST_F(DeformableModelTest, CloneBeforeFinalizeThrows) {
+  MultibodyPlant<double> double_plant(0.01);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      deformable_model_ptr_->CloneToScalar<double>(&double_plant),
+      ".*owning plant.*must be finalized.*");
+  plant_->Finalize();
+  EXPECT_NO_THROW(deformable_model_ptr_->CloneToScalar<double>(&double_plant));
+}
+
+/* Test that cloning to other scalar types is allowed when the model is empty.
+ */
+TEST_F(DeformableModelTest, EmptyClone) {
+  /* The plants for the cloned models. */
+  MultibodyPlant<double> double_plant(0.01);
+  MultibodyPlant<AutoDiffXd> autodiff_plant(0.01);
+  MultibodyPlant<symbolic::Expression> symbolic_plant(0.01);
+  /* Plant owning the cloned from models need to be finalized. */
+  plant_->Finalize();
+  EXPECT_TRUE(deformable_model_ptr_->is_empty());
+
+  EXPECT_TRUE(deformable_model_ptr_->is_cloneable_to_double());
+  EXPECT_TRUE(deformable_model_ptr_->is_cloneable_to_autodiff());
+  EXPECT_TRUE(deformable_model_ptr_->is_cloneable_to_symbolic());
+
+  /* double -> double */
+  EXPECT_NO_THROW(deformable_model_ptr_->CloneToScalar<double>(&double_plant));
+  /* double -> autodiff */
+  EXPECT_NO_THROW(
+      deformable_model_ptr_->CloneToScalar<AutoDiffXd>(&autodiff_plant));
+  /* double -> symbolic */
+  EXPECT_NO_THROW(deformable_model_ptr_->CloneToScalar<symbolic::Expression>(
+      &symbolic_plant));
+}
+
+/* Test that, for a non-empty model, only cloning to double is allowed. */
+TEST_F(DeformableModelTest, NonEmptyClone) {
+  /* The plants for the cloned models. */
+  MultibodyPlant<double> double_plant(0.01);
+  MultibodyPlant<AutoDiffXd> autodiff_plant(0.01);
+  MultibodyPlant<symbolic::Expression> symbolic_plant(0.01);
+  /* Make the model non-empty. */
+  DeformableBodyId body_id = RegisterSphere(0.5);
+  const RigidBody<double>& rigid_body =
+      plant_->AddRigidBody("box", SpatialInertia<double>::NaN());
+  geometry::Box box(1.0, 1.0, 1.0);
+  const RigidTransformd X_BA(Vector3d(-2, 0, 0));
+  const RigidTransformd X_BG(Vector3d(-1, 0, 0));
+  const MultibodyConstraintId constraint_id =
+      deformable_model_ptr_->AddFixedConstraint(body_id, rigid_body, X_BA, box,
+                                                X_BG);
+
+  EXPECT_FALSE(deformable_model_ptr_->is_empty());
+  /* Plant owning the cloned from models need to be finalized. */
+  plant_->Finalize();
+
+  EXPECT_TRUE(deformable_model_ptr_->is_cloneable_to_double());
+  EXPECT_FALSE(deformable_model_ptr_->is_cloneable_to_autodiff());
+  EXPECT_FALSE(deformable_model_ptr_->is_cloneable_to_symbolic());
+
+  std::unique_ptr<PhysicalModel<double>> double_clone;
+  /* double -> double */
+  EXPECT_NO_THROW(double_clone = deformable_model_ptr_->CloneToScalar<double>(
+                      &double_plant));
+
+  /* Now verify the double clone is indeed a copy of the original. */
+  const DeformableModel<double>* double_clone_ptr =
+      dynamic_cast<const DeformableModel<double>*>(double_clone.get());
+  ASSERT_NE(double_clone_ptr, nullptr);
+  EXPECT_EQ(double_clone_ptr->num_bodies(),
+            deformable_model_ptr_->num_bodies());
+  /* We don't compare the result of GetDiscreteStateIndex and GetExternalForces
+   since they are set during DeclareSystemResources(). */
+  EXPECT_EQ(double_clone_ptr->GetFemModel(body_id).num_dofs(),
+            deformable_model_ptr_->GetFemModel(body_id).num_dofs());
+  EXPECT_EQ(double_clone_ptr->GetReferencePositions(body_id),
+            deformable_model_ptr_->GetReferencePositions(body_id));
+  /* We don't compare the result of any function that involves
+   DeformableBodyIndex because it's set during DeclareSystemResources(). */
+  const geometry::GeometryId geometry_id =
+      deformable_model_ptr_->GetGeometryId(body_id);
+  EXPECT_EQ(double_clone_ptr->GetGeometryId(body_id),
+            deformable_model_ptr_->GetGeometryId(body_id));
+  EXPECT_EQ(double_clone_ptr->GetBodyId(geometry_id),
+            deformable_model_ptr_->GetBodyId(geometry_id));
+  EXPECT_EQ(double_clone_ptr->HasConstraint(body_id),
+            deformable_model_ptr_->HasConstraint(body_id));
+  EXPECT_EQ(double_clone_ptr->fixed_constraint_spec(constraint_id),
+            deformable_model_ptr_->fixed_constraint_spec(constraint_id));
+  EXPECT_EQ(double_clone_ptr->fixed_constraint_ids(body_id),
+            deformable_model_ptr_->fixed_constraint_ids(body_id));
+}
+
+/* An empty DeformableModel doesn't get in the way of a TAMSI plant. */
+TEST_F(DeformableModelTest, EmptyDeformableModelWorksWithTamsi) {
+  plant_->set_discrete_contact_approximation(
+      multibody::DiscreteContactApproximation::kTamsi);
+  EXPECT_TRUE(deformable_model_ptr_->is_empty());
+  EXPECT_NO_THROW(plant_->Finalize());
+}
+
+/* If a DeformableModel is not empty, we require the owning plant to use the SAP
+ solver. */
+TEST_F(DeformableModelTest, NonEmptyDeformableModelOnlyWorksWithSap) {
+  plant_->set_discrete_contact_approximation(
+      multibody::DiscreteContactApproximation::kTamsi);
+  RegisterSphere(0.5);
+  EXPECT_FALSE(deformable_model_ptr_->is_empty());
+  DRAKE_EXPECT_THROWS_MESSAGE(plant_->Finalize(),
+                              ".*DeformableModel is only supported by.*SAP.*");
+}
+
+TEST_F(DeformableModelTest, RegistrationNotAllowedForNonDoubleModel) {
+  MultibodyPlant<AutoDiffXd> autodiff_plant(0.01);
+  DeformableModel<AutoDiffXd> autodiff_deformable_model(&autodiff_plant);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      RegisterSphere(&autodiff_deformable_model, 0.5),
+      ".*RegisterDeformableBody.*T != double.*not allowed.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      autodiff_deformable_model.AddExternalForce(
+          std::make_unique<GravityForceField<AutoDiffXd>>(Vector3d(0, 0, -10),
+                                                          1.0)),
+      ".*AddExternalForce.*T != double.*not allowed.*");
 }
 
 }  // namespace

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 namespace drake {
 namespace geometry {
@@ -28,6 +29,8 @@ void ThrowIfFilesMissing(const FileFieldsMap& file_fields) {
 }
 
 }  // namespace
+
+HttpService::~HttpService() = default;
 
 HttpResponse HttpService::PostForm(const std::string& temp_directory,
                                    const std::string& url,

@@ -96,7 +96,8 @@ namespace multibody {
 /// @see https://en.cppreference.com/w/cpp/language/exceptions
 ///
 /// @see To create a spatial inertia of a mesh, see
-/// @ref CalcSpatialInertia(const geometry::TriangleSurfaceMesh<double>& mesh, double density). <!--# NOLINT-->
+/// @ref CalcSpatialInertia(const geometry::TriangleSurfaceMesh<double>& mesh,
+/// double density). <!--# NOLINT-->
 ///
 /// @see To create spatial inertia from most of geometry::Shape, see
 /// @ref CalcSpatialInertia(const geometry::Shape& shape, double density).
@@ -111,7 +112,7 @@ namespace multibody {
 template <typename T>
 class SpatialInertia {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SpatialInertia)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SpatialInertia);
 
   /// Creates a spatial inertia for a physical body or composite body S about a
   /// point P from a given mass, center of mass, and central rotational inertia.
@@ -129,8 +130,9 @@ class SpatialInertia {
   ///                     (S's center of mass), expressed in a frame E.
   /// @param[in] I_SScm_E S's RotationalInertia about Scm, expressed in frame E.
   /// @retval M_SP_E S's spatial inertia about point P, expressed in frame E.
-  static SpatialInertia<T> MakeFromCentralInertia(const T& mass,
-      const Vector3<T>& p_PScm_E, const RotationalInertia<T>& I_SScm_E);
+  static SpatialInertia<T> MakeFromCentralInertia(
+      const T& mass, const Vector3<T>& p_PScm_E,
+      const RotationalInertia<T>& I_SScm_E);
 
   /// (Internal use only) Creates a spatial inertia whose mass is 1, position
   /// vector to center of mass is zero, and whose rotational inertia has
@@ -153,8 +155,8 @@ class SpatialInertia {
   /// @retval M_BBo_B B's spatial inertia about Bo, expressed in B.
   /// @throws std::exception if density, lx, ly, or lz is not positive and
   /// finite.
-  static SpatialInertia<T> SolidBoxWithDensity(
-      const T& density, const T& lx, const T& ly, const T& lz);
+  static SpatialInertia<T> SolidBoxWithDensity(const T& density, const T& lx,
+                                               const T& ly, const T& lz);
 
   /// Creates a spatial inertia for a uniform density solid box B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -164,8 +166,8 @@ class SpatialInertia {
   /// @param[in] lz length of the box in the Bz direction (meters).
   /// @retval M_BBo_B B's spatial inertia about Bo, expressed in B.
   /// @throws std::exception if mass, lx, ly, or lz is not positive and finite.
-  static SpatialInertia<T> SolidBoxWithMass(
-      const T& mass, const T& lx, const T& ly, const T& lz);
+  static SpatialInertia<T> SolidBoxWithMass(const T& mass, const T& lx,
+                                            const T& ly, const T& lz);
 
   /// Creates a spatial inertia for a uniform density solid cube B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -177,8 +179,8 @@ class SpatialInertia {
   /// @note B's rotational inertia about Bo is triaxially symmetric, meaning
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if density or length is not positive and finite.
-  static SpatialInertia<T> SolidCubeWithDensity(
-      const T& density, const T& length);
+  static SpatialInertia<T> SolidCubeWithDensity(const T& density,
+                                                const T& length);
 
   /// Creates a spatial inertia for a uniform density solid cube B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -190,8 +192,7 @@ class SpatialInertia {
   /// @note B's rotational inertia about Bo is triaxially symmetric, meaning
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if mass or length is not positive and finite.
-  static SpatialInertia<T> SolidCubeWithMass(
-      const T& mass, const T& length);
+  static SpatialInertia<T> SolidCubeWithMass(const T& mass, const T& length);
 
   /// Creates a spatial inertia for a uniform density solid capsule B about
   /// its geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -223,9 +224,9 @@ class SpatialInertia {
   /// and is perpendicular to unit_vector.
   /// @throws std::exception if mass, radius, or length is not positive and
   /// finite or if ‖unit_vector‖ is not within 1.0E-14 of 1.0.
-  static SpatialInertia<T> SolidCapsuleWithMass(
-      const T& mass, const T& radius, const T& length,
-      const Vector3<T>& unit_vector);
+  static SpatialInertia<T> SolidCapsuleWithMass(const T& mass, const T& radius,
+                                                const T& length,
+                                                const Vector3<T>& unit_vector);
 
   /// Creates a spatial inertia for a uniform density solid cylinder B about
   /// its geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -261,9 +262,9 @@ class SpatialInertia {
   /// finite or if ‖unit_vector‖ is not within 1.0E-14 of 1.0.
   /// @see SolidCylinderWithMassAboutEnd() to calculate M_BBp_B, B's spatial
   /// inertia about Bp (at the center of one of the cylinder's circular ends).
-  static SpatialInertia<T> SolidCylinderWithMass(
-      const T& mass, const T& radius, const T& length,
-      const Vector3<T>& unit_vector);
+  static SpatialInertia<T> SolidCylinderWithMass(const T& mass, const T& radius,
+                                                 const T& length,
+                                                 const Vector3<T>& unit_vector);
 
   /// Creates a spatial inertia for a uniform-density solid cylinder B about an
   /// end-point Bp of the cylinder's axis (see below for more about Bp).
@@ -320,8 +321,8 @@ class SpatialInertia {
   /// if ‖unit_vector‖ is not within 1.0E-14 of 1.0.
   /// @see ThinRodWithMassAboutEnd() to calculate M_BBp_B, B's spatial inertia
   /// about Bp (one of the ends of rod B).
-  static SpatialInertia<T> ThinRodWithMass(
-      const T& mass, const T& length, const Vector3<T>& unit_vector);
+  static SpatialInertia<T> ThinRodWithMass(const T& mass, const T& length,
+                                           const Vector3<T>& unit_vector);
 
   /// Creates a spatial inertia for a uniform-density thin rod B about one of
   /// its ends.
@@ -350,8 +351,9 @@ class SpatialInertia {
   /// @param[in] c length of ellipsoid semi-axis in the ellipsoid Bz direction.
   /// @retval M_BBo_B B's spatial inertia about Bo, expressed in B.
   /// @throws std::exception if density, a, b, or c is not positive and finite.
-  static SpatialInertia<T> SolidEllipsoidWithDensity(
-      const T& density, const T& a, const T& b, const T& c);
+  static SpatialInertia<T> SolidEllipsoidWithDensity(const T& density,
+                                                     const T& a, const T& b,
+                                                     const T& c);
 
   /// Creates a spatial inertia for a uniform density solid ellipsoid B about
   /// its geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -361,8 +363,8 @@ class SpatialInertia {
   /// @param[in] c length of ellipsoid semi-axis in the ellipsoid Bz direction.
   /// @retval M_BBo_B B's spatial inertia about Bo, expressed in B.
   /// @throws std::exception if mass, a, b, or c is not positive and finite.
-  static SpatialInertia<T> SolidEllipsoidWithMass(
-      const T& mass, const T& a, const T& b, const T& c);
+  static SpatialInertia<T> SolidEllipsoidWithMass(const T& mass, const T& a,
+                                                  const T& b, const T& c);
 
   /// Creates a spatial inertia for a uniform density solid sphere B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -374,8 +376,8 @@ class SpatialInertia {
   /// @note B's rotational inertia about Bo is triaxially symmetric, meaning
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if density or radius is not positive and finite.
-  static SpatialInertia<T> SolidSphereWithDensity(
-      const T& density, const T& radius);
+  static SpatialInertia<T> SolidSphereWithDensity(const T& density,
+                                                  const T& radius);
 
   /// Creates a spatial inertia for a uniform density solid sphere B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -387,8 +389,7 @@ class SpatialInertia {
   /// @note B's rotational inertia about Bo is triaxially symmetric, meaning
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if mass or radius is not positive and finite.
-  static SpatialInertia<T> SolidSphereWithMass(
-      const T& mass, const T& radius);
+  static SpatialInertia<T> SolidSphereWithMass(const T& mass, const T& radius);
 
   /// Creates a spatial inertia for a uniform density thin hollow sphere B about
   /// its geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -402,8 +403,8 @@ class SpatialInertia {
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if area_density or radius is not positive and
   /// finite.
-  static SpatialInertia<T> HollowSphereWithDensity(
-      const T& area_density, const T& radius);
+  static SpatialInertia<T> HollowSphereWithDensity(const T& area_density,
+                                                   const T& radius);
 
   /// Creates a spatial inertia for a uniform density hollow sphere B about its
   /// geometric center Bo (which is coincident with B's center of mass Bcm).
@@ -416,8 +417,7 @@ class SpatialInertia {
   /// @note B's rotational inertia about Bo is triaxially symmetric, meaning
   /// B has an equal moment of inertia about any line passing through Bo.
   /// @throws std::exception if mass or radius is not positive and finite.
-  static SpatialInertia<T> HollowSphereWithMass(
-      const T& mass, const T& radius);
+  static SpatialInertia<T> HollowSphereWithMass(const T& mass, const T& radius);
 
   /// Creates a spatial inertia for a uniform density solid tetrahedron B about
   /// a point A, from which position vectors to B's 4 vertices B0, B1, B2, B3
@@ -463,10 +463,14 @@ class SpatialInertia {
       const T& density, const Vector3<T>& p1, const Vector3<T>& p2,
       const Vector3<T>& p3);
 
-  /// Default SpatialInertia constructor initializes mass, center of mass and
-  /// rotational inertia to invalid NaN's for a quick detection of
-  /// uninitialized values.
-  SpatialInertia() {}
+  /// Initializes mass, center of mass and rotational inertia to zero.
+  static SpatialInertia Zero() {
+    return SpatialInertia(0, Vector3<T>::Zero(), UnitInertia<T>(0, 0, 0));
+  }
+
+  /// Initializes mass, center of mass and rotational inertia to invalid NaN's
+  /// for a quick detection of uninitialized values.
+  static SpatialInertia NaN() { return SpatialInertia(); }
 
   /// Constructs a spatial inertia for a physical body or composite body S about
   /// a point P from a given mass, center of mass and rotational inertia. The
@@ -494,10 +498,10 @@ class SpatialInertia {
   ///                   about origin point P and expressed in frame E.
   /// @param[in] skip_validity_check If true, skips the validity check described
   ///                                above. Defaults to false.
-  SpatialInertia(
-      const T& mass, const Vector3<T>& p_PScm_E, const UnitInertia<T>& G_SP_E,
-      const bool skip_validity_check = false) :
-      mass_(mass), p_PScm_E_(p_PScm_E), G_SP_E_(G_SP_E) {
+  SpatialInertia(const T& mass, const Vector3<T>& p_PScm_E,
+                 const UnitInertia<T>& G_SP_E,
+                 const bool skip_validity_check = false)
+      : mass_(mass), p_PScm_E_(p_PScm_E), G_SP_E_(G_SP_E) {
     if (!skip_validity_check) {
       CheckInvariants();
     }
@@ -518,42 +522,52 @@ class SpatialInertia {
   template <typename Scalar>
   SpatialInertia<Scalar> cast() const {
     return SpatialInertia<Scalar>(
-        get_mass(),
-        get_com().template cast<Scalar>(),
+        get_mass(), get_com().template cast<Scalar>(),
         get_unit_inertia().template cast<Scalar>(),
         true);  // Skip validity check since this inertia is already valid.
   }
 
   /// Get a constant reference to the mass of this spatial inertia.
-  const T& get_mass() const { return mass_;}
+  const T& get_mass() const { return mass_; }
 
   /// Get a constant reference to the position vector `p_PScm_E` from the
   /// _about point_ P to the center of mass `Scm` of the body or composite body
   /// S, expressed in frame E. See the documentation of this class for details.
-  const Vector3<T>& get_com() const { return p_PScm_E_;}
+  const Vector3<T>& get_com() const { return p_PScm_E_; }
 
   /// Computes the center of mass moment vector `mass * p_PScm_E` given the
   /// position vector `p_PScm_E` from the _about point_ P to the center of mass
   /// `Scm` of the body or composite body S, expressed in frame E. See the
   /// documentation of this class for details.
-  Vector3<T> CalcComMoment() const { return mass_ * p_PScm_E_;}
+  Vector3<T> CalcComMoment() const { return mass_ * p_PScm_E_; }
 
   /// Get a constant reference to the unit inertia `G_SP_E` of this
   /// spatial inertia, computed about point P and expressed in frame E. See the
   /// documentation of this class for details.
-  const UnitInertia<T>& get_unit_inertia() const { return G_SP_E_;}
+  const UnitInertia<T>& get_unit_inertia() const { return G_SP_E_; }
 
   /// Computes the rotational inertia `I_SP_E = mass * G_SP_E` of this
   /// spatial inertia, computed about point P and expressed in frame E. See the
   /// documentation of this class for details.
-  RotationalInertia<T> CalcRotationalInertia() const { return mass_ * G_SP_E_;}
+  RotationalInertia<T> CalcRotationalInertia() const { return mass_ * G_SP_E_; }
 
   /// Returns `true` if any of the elements in this spatial inertia is NaN
   /// and `false` otherwise.
   boolean<T> IsNaN() const {
     using std::isnan;
     return isnan(mass_) || G_SP_E_.IsNaN() ||
-        any_of(p_PScm_E_, [](auto x){ return isnan(x); });
+           any_of(p_PScm_E_, [](const auto& x) {
+             return isnan(x);
+           });
+  }
+
+  /// Returns `true` if all of the elements in this spatial inertia are zero
+  /// and `false` otherwise.
+  boolean<T> IsZero() const {
+    return (mass_ == 0.0) && G_SP_E_.IsZero() &&
+           all_of(p_PScm_E_, [](const auto& x) {
+             return (x == 0.0);
+           });
   }
 
   /// Performs a number of checks to verify that this is a physically valid
@@ -575,6 +589,10 @@ class SpatialInertia {
   /// mass.
   /// @see RotationalInertia::CouldBePhysicallyValid().
   boolean<T> IsPhysicallyValid() const;
+
+  /// Performs the same checks as the boolean typed IsPhysicallyValid().
+  /// @returns empty string if valid, otherwise, a detailed error message.
+  std::string CriticizeNotPhysicallyValid() const;
 
   /// @anchor spatial_inertia_equivalent_shapes
   /// @name Spatial inertia equivalent shapes
@@ -609,10 +627,14 @@ class SpatialInertia {
   /// principal moments of inertia and their associated principal directions.
   ///@{
 
-  /// Returns semi-diameters, orientation, and position of a solid ellipsoid
+  /// Returns 3 principal semi-diameters [lmax lmed lmin] sorted in descending
+  /// order (lmax ≥ lmed ≥ lmin), orientation, and position of a solid ellipsoid
   /// whose spatial inertia is equal to `this` spatial inertia.
   /// See @ref spatial_inertia_equivalent_shapes
   /// "Spatial inertia equivalent shapes" for more details.
+  /// @throws std::exception if the elements of `this` spatial inertia cannot
+  /// be converted to a real finite double. For example, an exception is thrown
+  /// if `this` contains an erroneous NaN or if scalar type T is symbolic.
   std::pair<Vector3<double>, drake::math::RigidTransform<double>>
   CalcPrincipalSemiDiametersAndPoseForSolidEllipsoid() const {
     constexpr double inertia_shape_factor = 1.0 / 5.0;
@@ -620,16 +642,64 @@ class SpatialInertia {
         inertia_shape_factor);
   }
 
-  /// Returns half-lengths, orientation, and position of a solid box
+  /// Returns three ½-lengths [lmax lmed lmin] sorted in descending order
+  /// (lmax ≥ lmed ≥ lmin), orientation, and position of a solid box
   /// whose spatial inertia is equal to `this` spatial inertia.
   /// See @ref spatial_inertia_equivalent_shapes
   /// "Spatial inertia equivalent shapes" for more details.
+  /// @throws std::exception if the elements of `this` spatial inertia cannot
+  /// be converted to a real finite double. For example, an exception is thrown
+  /// if `this` contains an erroneous NaN or if scalar type T is symbolic.
   std::pair<Vector3<double>, drake::math::RigidTransform<double>>
   CalcPrincipalHalfLengthsAndPoseForSolidBox() const {
     constexpr double inertia_shape_factor = 1.0 / 3.0;
     return CalcPrincipalHalfLengthsAndPoseForEquivalentShape(
         inertia_shape_factor);
   }
+
+  /// Returns three ½-lengths [lmax lmed lmin] sorted in descending order
+  /// (lmax ≥ lmed ≥ lmin), orientation, and position of a box whose mass is
+  /// concentrated in 8 particles at the box's corners and whose spatial inertia
+  /// is equal to `this` spatial inertia. The physical geometry of the actual
+  /// underlying object must be larger than this box, as this box is the minimum
+  /// bounding box for the actual geometry.
+  /// See @ref spatial_inertia_equivalent_shapes
+  /// "Spatial inertia equivalent shapes" for more details.
+  /// @throws std::exception if the elements of `this` spatial inertia cannot
+  /// be converted to a real finite double. For example, an exception is thrown
+  /// if `this` contains an erroneous NaN or if scalar type T is symbolic.
+  std::pair<Vector3<double>, drake::math::RigidTransform<double>>
+  CalcPrincipalHalfLengthsAndPoseForMinimumBoundingBox() const {
+    constexpr double inertia_shape_factor = 1.0;
+    return CalcPrincipalHalfLengthsAndPoseForEquivalentShape(
+        inertia_shape_factor);
+  }
+
+  /// Returns the minimum possible length for the physical extent of the massive
+  /// object that underlies this spatial inertia. In other words, the underlying
+  /// physical object must have at least two particles whose distance between
+  /// each other is greater than or equal to the minimum possible length.
+  /// @note The minimum possible length is equal to the space-diagonal of the
+  /// minimum bounding box for `this` spatial inertia, which happens to be equal
+  /// to √(2 * trace of the central unit inertia associated with `this`).
+  /// @note Minimum possible length can be used to detect erroneous inertias
+  /// associated with absurdly large objects or to detect errors when the
+  /// minimum possible length is larger than the real physical geometry that
+  /// underlies `this` spatial inertia (maybe due to inertia conversion errors,
+  /// e.g., factor of 10⁷ from kg m² to g cm² or 10⁹ from kg m² to g mm²).
+  /// To assess whether the minimum possible length is reasonable, it helps to
+  /// have comparable sizes, e.g., the world's largest aircraft carrier has a
+  /// space-diagonal ≈ 355 m (length ≈ 337 m, width ≈ 78 m, height ≈ 76 m), the
+  /// largest land vehicle (Bagger bucket-wheel excavator) is ≈ 224 m long, the
+  /// largest human object in space (International Space Station) is 109 m long
+  /// and 75 m wide, the USA space shuttle is ≈ 37 m long and can carry a 15.2 m
+  /// Canadarm, the world's largest humanoid robot (Mononofu) is ≈ 8.5 m tall.
+  /// Also, minimum possible length can be compared to known physical geometry
+  /// (e.g., realistic collision geometry, visual geometry, or physical extents
+  /// associated with body connectivity data and topology), and this comparison
+  /// can be used to warn that a spatial inertia may be physically impossible
+  /// (e.g., underlying geometry is smaller than the minimum possible length).
+  T CalcMinimumPhysicalLength() const;
   ///@}
 
   /// Copy to a full 6x6 matrix representation.
@@ -680,13 +750,12 @@ class SpatialInertia {
   /// taken about a point P and expressed in frame E, this method computes the
   /// same inertia re-expressed in another frame A.
   /// This operation is performed in-place modifying the original object.
+  /// On return, `this` is now re-expressed in frame A, that is, `M_SP_A`.
   /// @param[in] R_AE Rotation matrix from frame E to frame A.
-  /// @returns A reference to `this` rotational inertia about the same point P
-  ///          but now re-expressed in frame A, that is, `M_SP_A`.
-  SpatialInertia<T>& ReExpressInPlace(const math::RotationMatrix<T>& R_AE) {
+  void ReExpressInPlace(const math::RotationMatrix<T>& R_AE) {
     p_PScm_E_ = R_AE * p_PScm_E_;    // Now p_PScm_A
     G_SP_E_.ReExpressInPlace(R_AE);  // Now I_SP_A
-    return *this;                    // Now M_SP_A
+    // Now M_SP_A
   }
 
   /// Given `this` spatial inertia `M_SP_E` for some body or composite body S,
@@ -697,7 +766,9 @@ class SpatialInertia {
   ///                re-expressed in frame A.
   /// @see ReExpressInPlace() for details.
   SpatialInertia<T> ReExpress(const math::RotationMatrix<T>& R_AE) const {
-    return SpatialInertia(*this).ReExpressInPlace(R_AE);
+    SpatialInertia result(*this);
+    result.ReExpressInPlace(R_AE);
+    return result;
   }
 
   /// Given `this` spatial inertia `M_SP_E` for some body or composite body S,
@@ -706,6 +777,7 @@ class SpatialInertia {
   /// spatial inertia about a new point Q. The result still is expressed in
   /// frame E.
   /// This operation is performed in-place modifying the original object.
+  /// On return, `this` is now computed about a new point Q.
   /// @see Shift() which does not modify this object.
   ///
   /// For details see Section 2.1.2, p. 20 of [Jain 2010].
@@ -713,9 +785,7 @@ class SpatialInertia {
   /// @param[in] p_PQ_E position vector from the original about-point P to the
   ///                   new about-point Q, expressed in the same frame E that
   ///                   `this` spatial inertia is expressed in.
-  /// @returns A reference to `this` spatial inertia for body or composite body
-  ///          S but now computed about a new point Q.
-  SpatialInertia<T>& ShiftInPlace(const Vector3<T>& p_PQ_E);
+  void ShiftInPlace(const Vector3<T>& p_PQ_E);
 
   /// Given `this` spatial inertia `M_SP_E` for some body or composite body S,
   /// computed about point P, and expressed in frame E, this method uses
@@ -730,7 +800,9 @@ class SpatialInertia {
   /// @retval M_SQ_E    This same spatial inertia for body or composite body S
   ///                   but computed about a new point Q.
   SpatialInertia<T> Shift(const Vector3<T>& p_PQ_E) const {
-    return SpatialInertia(*this).ShiftInPlace(p_PQ_E);
+    SpatialInertia result(*this);
+    result.ShiftInPlace(p_PQ_E);
+    return result;
   }
 
   /// Multiplies `this` spatial inertia `M_Bo_E` of a body B about its frame
@@ -816,6 +888,9 @@ class SpatialInertia {
   }
 
  private:
+  // Constructs an all-NaN inertia.
+  SpatialInertia() = default;
+
   // Helper method for NaN initialization.
   static constexpr T nan() {
     return std::numeric_limits<
@@ -831,8 +906,7 @@ class SpatialInertia {
   template <typename T1 = T>
   typename std::enable_if_t<scalar_predicate<T1>::is_bool> CheckInvariants()
       const {
-    if (!IsPhysicallyValid())
-      ThrowNotPhysicallyValid();
+    if (!IsPhysicallyValid()) ThrowNotPhysicallyValid();
   }
 
   // SFINAE for non-numeric types. See documentation in the implementation for
@@ -841,7 +915,13 @@ class SpatialInertia {
   typename std::enable_if_t<!scalar_predicate<T1>::is_bool> CheckInvariants()
       const {}
 
+  // Throws an exception with a detailed error message.
+  // @pre !IsPhysicallyValid() (not checked).
   [[noreturn]] void ThrowNotPhysicallyValid() const;
+
+  // Returns a detailed error message.
+  // @pre !IsPhysicallyValid() (not checked).
+  std::string MakeNotPhysicallyValidErrorMessage() const;
 
   // Mass of the body or composite body.
   T mass_{nan()};
@@ -864,11 +944,9 @@ class SpatialInertia {
   // about-point Scm (S's center of mass) to about-point P. In other words,
   // shifts `M_SScm_E` to `M_SP_E` (both are expressed-in frame E).
   // @param[in] p_ScmP_E Position vector from Scm to P, expressed-in frame E.
-  // @return A reference to M_SP_E, `this` spatial inertia that has been shifted
-  // from about-point Scm to about-point P, expressed in frame E.
   // @pre On entry, the about-point for `this` SpatialInertia is Scm. Hence, on
   // entry the position vector p_PScm underlying `this` is the zero vector.
-  SpatialInertia<T>& ShiftFromCenterOfMassInPlace(const Vector3<T>& p_ScmP_E);
+  void ShiftFromCenterOfMassInPlace(const Vector3<T>& p_ScmP_E);
 
   // Calculates the spatial inertia that results from shifting `this` spatial
   // inertia for a body (or composite body) S from about-point Scm (S's center
@@ -880,6 +958,28 @@ class SpatialInertia {
   // entry the position vector p_PScm underlying `this` is the zero vector.
   [[nodiscard]] SpatialInertia<T> ShiftFromCenterOfMass(
       const Vector3<T>& p_ScmP_E) const;
+
+  // Shifts `this` spatial inertia for a body (or composite body) S from
+  // about-point P to about-point Scm (S's center of mass). In other words,
+  // shifts `M_SP_E` to `M_SScm_E` (both are expressed-in frame E).
+  // @note On return, the about-point for `this` SpatialInertia is Scm. Hence,
+  // on return the position vector p_PScm underlying `this` is the zero vector.
+  // @see SpatialInertia::ShiftToCenterOfMass(), ShiftFromCenterOfMassInPlace().
+  void ShiftToCenterOfMassInPlace();
+
+  // Calculates the spatial inertia that results from shifting `this` spatial
+  // inertia for a body (or composite body) S from about-point P to
+  // about-point Scm (S's center of mass). In other words, shifts
+  // `M_SP_E` to `M_SScm_E` (both are expressed-in frame E).
+  // @retval M_SScm_E S's spatial inertia about-point Scm expressed-in frame E.
+  // @note On return, the about-point for `this` SpatialInertia is Scm. Hence,
+  // on return the position vector p_PScm underlying `this` is the zero vector.
+  // @see SpatialInertia::ShiftToCenterOfMassInPlace(), ShiftFromCenterOfMass().
+  [[nodiscard]] SpatialInertia<T> ShiftToCenterOfMass() const {
+    SpatialInertia<T> result(*this);
+    result.ShiftToCenterOfMassInPlace();
+    return result;
+  }
 
   // Returns principal semi-diameters (half-lengths), associated principal axes
   // orientations, and the position of a simple uniform-density body D whose
@@ -932,4 +1032,4 @@ struct formatter<drake::multibody::SpatialInertia<T>>
 }  // namespace fmt
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::multibody::SpatialInertia)
+    class drake::multibody::SpatialInertia);

@@ -11,7 +11,6 @@
 
 #include <fmt/format.h>
 
-#include "drake/common/drake_deprecated.h"
 #include "drake/geometry/optimization/c_iris_collision_geometry.h"
 #include "drake/geometry/optimization/cspace_free_polytope_base.h"
 #include "drake/geometry/optimization/cspace_free_structs.h"
@@ -29,26 +28,23 @@ namespace optimization {
  This class tries to find large convex polytopes in the tangential-configuration
  space, such that all configurations in the convex polytopes is collision free.
  By tangential-configuration space, we mean the revolute joint angle θ is
- replaced by t = tan(θ/2).
+ replaced by t = tan(θ/2). We refer to the algorithm as C-IRIS.
  For more details, refer to the paper
 
- Certified Polyhedral Decomposition of Collisoin-Free Configuration Space
+ Certified Polyhedral Decomposition of Collision-Free Configuration Space
  by Hongkai Dai*, Alexandre Amice*, Peter Werner, Annan Zhang and Russ Tedrake.
 
  A conference version is published at
 
- Finding and Optimizing Certified, Colision-Free Regions in Configuration Space
+ Finding and Optimizing Certified, Collision-Free Regions in Configuration Space
  for Robot Manipulators
  by Alexandre Amice*, Hongkai Dai*, Peter Werner, Annan Zhang and Russ Tedrake.
  */
 class CspaceFreePolytope : public CspaceFreePolytopeBase {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CspaceFreePolytope)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CspaceFreePolytope);
 
   using CspaceFreePolytopeBase::IgnoredCollisionPairs;
-
-  ~CspaceFreePolytope() override = default;
-
   using CspaceFreePolytopeBase::Options;
 
   /**
@@ -69,6 +65,8 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
                      const Eigen::Ref<const Eigen::VectorXd>& q_star,
                      const Options& options = Options{});
 
+  ~CspaceFreePolytope() override;
+
   /**
    When searching for the separating plane, we want to certify that the
    numerator of a rational is non-negative in the C-space region C*s<=d,
@@ -78,8 +76,12 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
    */
   class SeparatingPlaneLagrangians {
    public:
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparatingPlaneLagrangians);
+
     SeparatingPlaneLagrangians(int C_rows, int s_size)
         : polytope_(C_rows), s_lower_(s_size), s_upper_(s_size) {}
+
+    ~SeparatingPlaneLagrangians();
 
     /** Substitutes the decision variables in each Lagrangians with its value in
      * result, returns the substitution result.
@@ -122,9 +124,9 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
    separating_planes()[plane_index] in the C-space polytope.
    */
   struct SeparationCertificateResult final : SeparationCertificateResultBase {
-    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResult)
-    SeparationCertificateResult() {}
-    ~SeparationCertificateResult() override = default;
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateResult);
+    SeparationCertificateResult() = default;
+    ~SeparationCertificateResult() final;
 
     const std::vector<SeparatingPlaneLagrangians>& lagrangians(
         PlaneSide plane_side) const {
@@ -149,7 +151,9 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
    λ(s) are sos, λ_lower(s) are sos, λ_upper(s) are sos.
    */
   struct SeparationCertificate {
-    SeparationCertificate() {}
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificate);
+    SeparationCertificate() = default;
+    ~SeparationCertificate();
 
     [[nodiscard]] SeparationCertificateResult GetSolution(
         int plane_index, const Vector3<symbolic::Polynomial>& a,
@@ -173,16 +177,16 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
   };
 
   struct SeparationCertificateProgram final : SeparationCertificateProgramBase {
-    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgram)
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SeparationCertificateProgram);
     SeparationCertificateProgram() = default;
-    virtual ~SeparationCertificateProgram() = default;
+    ~SeparationCertificateProgram() final;
 
     SeparationCertificate certificate;
   };
 
   struct FindSeparationCertificateGivenPolytopeOptions final
-      : FindSeparationCertificateOptions {
-    ~FindSeparationCertificateGivenPolytopeOptions() override = default;
+      : public FindSeparationCertificateOptions {
+    ~FindSeparationCertificateGivenPolytopeOptions() final;
     // If a row in C*s<=d is redundant (this row is implied by other rows in
     // C*s<=d, s_lower<=s<=s_upper), then we don't search for the Lagrangian
     // multiplier for this row.
@@ -239,6 +243,10 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
    Options for finding polytope with given Lagrangians.
    */
   struct FindPolytopeGivenLagrangianOptions {
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(FindPolytopeGivenLagrangianOptions);
+    FindPolytopeGivenLagrangianOptions() = default;
+    ~FindPolytopeGivenLagrangianOptions();
+
     std::optional<double> backoff_scale{std::nullopt};
 
     /** We will maximize the cost ∏ᵢ (δᵢ + ε) where δᵢ is the margin from each
@@ -274,7 +282,9 @@ class CspaceFreePolytope : public CspaceFreePolytopeBase {
   /** Result on searching the C-space polytope and separating planes. */
   class SearchResult {
    public:
-    SearchResult() {}
+    DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SearchResult);
+    SearchResult() = default;
+    ~SearchResult();
 
     [[nodiscard]] const Eigen::MatrixXd& C() const { return C_; }
 

@@ -4,7 +4,6 @@ import unittest
 import numpy as np
 
 from pydrake.common import FindResourceOrThrow
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.examples import PendulumPlant
 from pydrake.multibody.tree import MultibodyForces
 from pydrake.multibody.plant import MultibodyPlant
@@ -109,12 +108,12 @@ class TestControllers(unittest.TestCase):
         self.assertAlmostEqual(J[0], 1., delta=1e-6)
 
     def test_joint_stiffness_controller(self):
-        sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
 
         plant = MultibodyPlant(time_step=0.01)
-        Parser(plant).AddModels(sdf_path)
+        Parser(plant).AddModels(url=url)
         plant.WeldFrames(plant.world_frame(),
                          plant.GetFrameByName("iiwa_link_0"))
         plant.Finalize()
@@ -131,12 +130,12 @@ class TestControllers(unittest.TestCase):
         self.assertIsInstance(controller.get_multibody_plant(), MultibodyPlant)
 
     def test_inverse_dynamics(self):
-        sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
 
         plant = MultibodyPlant(time_step=0.01)
-        Parser(plant).AddModels(sdf_path)
+        Parser(plant).AddModels(url=url)
         plant.WeldFrames(plant.world_frame(),
                          plant.GetFrameByName("iiwa_link_0"))
         plant.Finalize()
@@ -148,30 +147,25 @@ class TestControllers(unittest.TestCase):
                               InputPort)
         self.assertIsInstance(controller.get_output_port_generalized_force(),
                               OutputPort)
-        with catch_drake_warnings(expected_count=1):
-            self.assertIsInstance(controller.get_output_port_force(),
-                                  OutputPort)
         self.assertFalse(controller.is_pure_gravity_compensation())
 
         controller = InverseDynamics(
             plant=plant,
-            mode=InverseDynamics.InverseDynamicsMode.kGravityCompensation)
+            mode=InverseDynamics.InverseDynamicsMode.kGravityCompensation,
+            plant_context=plant.CreateDefaultContext())
         self.assertIsInstance(controller.get_input_port_estimated_state(),
                               InputPort)
         self.assertIsInstance(controller.get_output_port_generalized_force(),
                               OutputPort)
-        with catch_drake_warnings(expected_count=1):
-            self.assertIsInstance(controller.get_output_port_force(),
-                                  OutputPort)
         self.assertTrue(controller.is_pure_gravity_compensation())
 
     def test_inverse_dynamics_controller(self):
-        sdf_path = FindResourceOrThrow(
-            "drake/manipulation/models/"
-            "iiwa_description/sdf/iiwa14_no_collision.sdf")
+        url = (
+            "package://drake_models/iiwa_description/sdf/"
+            + "iiwa14_no_collision.sdf")
 
         plant = MultibodyPlant(time_step=0.01)
-        Parser(plant).AddModels(sdf_path)
+        Parser(plant).AddModels(url=url)
         plant.WeldFrames(plant.world_frame(),
                          plant.GetFrameByName("iiwa_link_0"))
         plant.mutable_gravity_field().set_gravity_vector([0.0, 0.0, 0.0])
@@ -190,11 +184,13 @@ class TestControllers(unittest.TestCase):
         ki = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7])
         kd = np.array([.5, 1., 1.5, 2., 2.5, 3., 3.5])
 
-        controller = InverseDynamicsController(robot=plant,
-                                               kp=kp,
-                                               ki=ki,
-                                               kd=kd,
-                                               has_reference_acceleration=True)
+        controller = InverseDynamicsController(
+                robot=plant,
+                kp=kp,
+                ki=ki,
+                kd=kd,
+                has_reference_acceleration=True,
+                plant_context=plant.CreateDefaultContext())
         context = controller.CreateDefaultContext()
         output = controller.AllocateOutput()
 
@@ -232,8 +228,7 @@ class TestControllers(unittest.TestCase):
 
         # Set the plant's context.
         plant_context = plant.CreateDefaultContext()
-        x_plant = plant.GetMutablePositionsAndVelocities(plant_context)
-        x_plant[:] = x
+        plant.SetPositionsAndVelocities(plant_context, x)
 
         # Compute the expected value of the generalized forces using
         # inverse dynamics.

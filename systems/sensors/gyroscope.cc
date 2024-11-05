@@ -10,7 +10,7 @@ using math::RigidTransform;
 using multibody::SpatialVelocity;
 
 template <typename T>
-Gyroscope<T>::Gyroscope(const multibody::Body<T>& body,
+Gyroscope<T>::Gyroscope(const multibody::RigidBody<T>& body,
                         const RigidTransform<double>& X_BS)
     : Gyroscope(body.index(), X_BS) {}
 
@@ -51,7 +51,7 @@ void Gyroscope<T>::CalcOutput(const Context<T>& context,
 
 template <typename T>
 const Gyroscope<T>& Gyroscope<T>::AddToDiagram(
-    const multibody::Body<T>& body, const RigidTransform<double>& X_BS,
+    const multibody::RigidBody<T>& body, const RigidTransform<double>& X_BS,
     const multibody::MultibodyPlant<T>& plant, DiagramBuilder<T>* builder) {
   const auto& gyroscope =
       *builder->template AddSystem<Gyroscope<T>>(body, X_BS);
@@ -68,7 +68,7 @@ Gyroscope<T>::Gyroscope(const Gyroscope<U>& other)
     : Gyroscope(other.body_index(), other.pose()) {}
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::sensors::Gyroscope)
+    class ::drake::systems::sensors::Gyroscope);
 
 }  // namespace sensors
 }  // namespace systems

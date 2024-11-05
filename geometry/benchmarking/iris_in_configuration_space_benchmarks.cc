@@ -80,7 +80,7 @@ directives:
 # Add iiwa
 - add_model:
     name: iiwa
-    file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_primitive_collision.urdf
+    file: package://drake_models/iiwa_description/urdf/iiwa14_primitive_collision.urdf
     default_joint_positions:
         iiwa_joint_1: [0]
         iiwa_joint_2: [0.3]
@@ -97,7 +97,7 @@ directives:
 # Add schunk
 - add_model:
     name: wsg
-    file: package://drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50_welded_fingers.sdf
+    file: package://drake_models/wsg_50_description/sdf/schunk_wsg_50_welded_fingers.sdf
 
 - add_weld:
     parent: iiwa::iiwa_link_7
@@ -109,7 +109,7 @@ directives:
 # Add bins
 - add_model:
     name: binR
-    file: package://drake/examples/manipulation_station/models/bin2.sdf
+    file: package://drake_models/manipulation_station/bin2.sdf
 
 - add_weld:
     parent: world
@@ -120,7 +120,7 @@ directives:
 
 - add_model:
     name: binL
-    file: package://drake/examples/manipulation_station/models/bin2.sdf
+    file: package://drake_models/manipulation_station/bin2.sdf
 
 - add_weld:
     parent: world
@@ -131,7 +131,7 @@ directives:
 # Add shelves
 - add_model:
     name: shelves
-    file: package://drake/examples/manipulation_station/models/shelves.sdf
+    file: package://drake_models/manipulation_station/shelves.sdf
 
 - add_weld:
     parent: world
@@ -143,7 +143,7 @@ directives:
 # Add table
 - add_model:
     name: table
-    file: package://drake/examples/manipulation_station/models/table_wide.sdf
+    file: package://drake_models/manipulation_station/table_wide.sdf
 
 - add_weld:
     parent: world

@@ -6,7 +6,7 @@
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/multibody/plant/compliant_contact_manager.h"
-#include "drake/multibody/plant/test/compliant_contact_manager_tester.h"
+#include "drake/multibody/plant/multibody_plant.h"
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/diagram_builder.h"
 
@@ -31,24 +31,24 @@ class DeformableDriverTest : public ::testing::Test {
   void SetUp() override {
     systems::DiagramBuilder<double> builder;
     std::tie(plant_, scene_graph_) = AddMultibodyPlantSceneGraph(&builder, kDt);
-    auto deformable_model = make_unique<DeformableModel<double>>(plant_);
+    DeformableModel<double>& deformable_model =
+        plant_->mutable_deformable_model();
     constexpr double kRezHint = 0.5;
-    body_id_ = RegisterSphere(deformable_model.get(), kRezHint);
-    model_ = deformable_model.get();
-    plant_->AddPhysicalModel(std::move(deformable_model));
+    body_id_ = RegisterSphere(&deformable_model, kRezHint);
+    model_ = &deformable_model;
     const RigidBody<double>& body = plant_->AddRigidBody(
         "rigid_body", SpatialInertia<double>::SolidSphereWithMass(1.0, 1.0));
-    // N.B. Currently the manager only supports SAP.
-    plant_->set_discrete_contact_solver(DiscreteContactSolver::kSap);
+    // N.B. Deformables are only supported with the SAP solver.
+    // Thus for testing we choose one arbitrary contact approximation that uses
+    // the SAP solver.
+    plant_->set_discrete_contact_approximation(
+        DiscreteContactApproximation::kSap);
     plant_->Finalize();
     auto contact_manager = make_unique<CompliantContactManager<double>>();
     manager_ = contact_manager.get();
     plant_->SetDiscreteUpdateManager(std::move(contact_manager));
-    driver_ = CompliantContactManagerTester::deformable_driver(*manager_);
-
-    builder.Connect(model_->vertex_positions_port(),
-                    scene_graph_->get_source_configuration_port(
-                        plant_->get_source_id().value()));
+    driver_ = manager_->deformable_driver();
+    DRAKE_DEMAND(driver_ != nullptr);
     diagram_ = builder.Build();
     diagram_context_ = diagram_->CreateDefaultContext();
     plant_context_ =
@@ -109,7 +109,9 @@ class DeformableDriverTest : public ::testing::Test {
 namespace {
 
 /* Verifies that a DeformableDriver has been successfully created. */
-TEST_F(DeformableDriverTest, Constructor) { ASSERT_NE(driver_, nullptr); }
+TEST_F(DeformableDriverTest, Constructor) {
+  ASSERT_NE(driver_, nullptr);
+}
 
 TEST_F(DeformableDriverTest, ScalarConversion) {
   EXPECT_FALSE(driver_->is_cloneable_to_double());

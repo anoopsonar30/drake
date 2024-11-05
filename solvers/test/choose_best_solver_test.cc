@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/expect_throws_message.h"
+#include "drake/solvers/clarabel_solver.h"
 #include "drake/solvers/clp_solver.h"
 #include "drake/solvers/csdp_solver.h"
 #include "drake/solvers/equality_constrained_qp_solver.h"
@@ -25,6 +26,7 @@ class ChooseBestSolverTest : public ::testing::Test {
   ChooseBestSolverTest()
       : prog_{},
         x_{prog_.NewContinuousVariables<3>()},
+        clarabel_solver_{std::make_unique<ClarabelSolver>()},
         clp_solver_{std::make_unique<ClpSolver>()},
         linear_system_solver_{std::make_unique<LinearSystemSolver>()},
         equality_constrained_qp_solver_{
@@ -46,7 +48,7 @@ class ChooseBestSolverTest : public ::testing::Test {
     EXPECT_EQ(solver_id, expected_solver_id);
 
     // Ensure GetKnownSolvers is comprehensive.
-    EXPECT_EQ(GetKnownSolvers().count(solver_id), 1);
+    EXPECT_TRUE(GetKnownSolvers().contains(solver_id));
   }
 
   void CheckMakeSolver(const SolverInterface& solver) const {
@@ -54,7 +56,7 @@ class ChooseBestSolverTest : public ::testing::Test {
     EXPECT_EQ(new_solver->solver_id(), solver.solver_id());
 
     // Ensure GetKnownSolvers is comprehensive.
-    EXPECT_EQ(GetKnownSolvers().count(solver.solver_id()), 1);
+    EXPECT_TRUE(GetKnownSolvers().contains(solver.solver_id()));
   }
 
   void CheckBestSolver(const std::vector<SolverInterface*>& solvers) {
@@ -83,6 +85,7 @@ class ChooseBestSolverTest : public ::testing::Test {
  protected:
   MathematicalProgram prog_;
   VectorDecisionVariable<3> x_;
+  std::unique_ptr<ClarabelSolver> clarabel_solver_;
   std::unique_ptr<ClpSolver> clp_solver_;
   std::unique_ptr<LinearSystemSolver> linear_system_solver_;
   std::unique_ptr<EqualityConstrainedQPSolver> equality_constrained_qp_solver_;
@@ -113,7 +116,7 @@ void CheckGetAvailableSolvers(const MathematicalProgram& prog) {
   const std::vector<SolverId> available_ids = GetAvailableSolvers(prog_type);
   const auto known_solvers = GetKnownSolvers();
   for (const auto& available_id : available_ids) {
-    EXPECT_GT(known_solvers.count(available_id), 0);
+    EXPECT_TRUE(known_solvers.contains(available_id));
     std::unique_ptr<SolverInterface> solver = MakeSolver(available_id);
     EXPECT_TRUE(solver->available());
     EXPECT_TRUE(solver->enabled());
@@ -141,7 +144,7 @@ void CheckGetAvailableSolvers(const MathematicalProgram& prog) {
         // GetAvailableSolvers(kQuadraticCostConicConstraint).
         continue;
       } else {
-        EXPECT_GT(available_id_set.count(solver_id), 0);
+        EXPECT_TRUE(available_id_set.contains(solver_id));
       }
     }
   }
@@ -153,8 +156,9 @@ TEST_F(ChooseBestSolverTest, LPsolver) {
   prog_.AddLinearConstraint(x_(0) + 2 * x_(1) >= 1);
   prog_.AddLinearCost(x_(0) + x_(1));
   CheckBestSolver({gurobi_solver_.get(), mosek_solver_.get(), clp_solver_.get(),
-                   snopt_solver_.get(), ipopt_solver_.get(),
-                   nlopt_solver_.get(), csdp_solver_.get(), scs_solver_.get()});
+                   clarabel_solver_.get(), snopt_solver_.get(),
+                   ipopt_solver_.get(), nlopt_solver_.get(), csdp_solver_.get(),
+                   scs_solver_.get()});
   CheckGetAvailableSolvers(prog_);
 }
 
@@ -162,7 +166,8 @@ TEST_F(ChooseBestSolverTest, QPsolver) {
   prog_.AddLinearConstraint(x_(0) + x_(1) >= 1);
   prog_.AddQuadraticCost(x_(0) * x_(0));
   CheckBestSolver({mosek_solver_.get(), gurobi_solver_.get(),
-                   osqp_solver_.get(), snopt_solver_.get(), ipopt_solver_.get(),
+                   clarabel_solver_.get(), osqp_solver_.get(),
+                   snopt_solver_.get(), ipopt_solver_.get(),
                    nlopt_solver_.get(), scs_solver_.get()});
   CheckGetAvailableSolvers(prog_);
 }
@@ -170,12 +175,14 @@ TEST_F(ChooseBestSolverTest, QPsolver) {
 TEST_F(ChooseBestSolverTest, LorentzCone) {
   prog_.AddLorentzConeConstraint(x_.cast<symbolic::Expression>());
   CheckBestSolver({mosek_solver_.get(), gurobi_solver_.get(),
-                   csdp_solver_.get(), scs_solver_.get(), snopt_solver_.get(),
-                   ipopt_solver_.get(), nlopt_solver_.get()});
+                   clarabel_solver_.get(), csdp_solver_.get(),
+                   scs_solver_.get(), snopt_solver_.get(), ipopt_solver_.get(),
+                   nlopt_solver_.get()});
   prog_.AddRotatedLorentzConeConstraint(x_.cast<symbolic::Expression>());
   CheckBestSolver({mosek_solver_.get(), gurobi_solver_.get(),
-                   csdp_solver_.get(), scs_solver_.get(), snopt_solver_.get(),
-                   ipopt_solver_.get(), nlopt_solver_.get()});
+                   clarabel_solver_.get(), csdp_solver_.get(),
+                   scs_solver_.get(), snopt_solver_.get(), ipopt_solver_.get(),
+                   nlopt_solver_.get()});
 
   prog_.AddPolynomialCost(pow(x_(0), 3));
   CheckBestSolver(
@@ -196,7 +203,8 @@ TEST_F(ChooseBestSolverTest, LinearComplementarityConstraint) {
 TEST_F(ChooseBestSolverTest, PositiveSemidefiniteConstraint) {
   prog_.AddPositiveSemidefiniteConstraint(
       (Matrix2<symbolic::Variable>() << x_(0), x_(1), x_(1), x_(2)).finished());
-  CheckBestSolver({mosek_solver_.get(), csdp_solver_.get(), scs_solver_.get()});
+  CheckBestSolver({mosek_solver_.get(), clarabel_solver_.get(),
+                   csdp_solver_.get(), scs_solver_.get()});
   CheckGetAvailableSolvers(prog_);
 }
 
@@ -257,6 +265,7 @@ TEST_F(ChooseBestSolverTest, MakeSolver) {
   CheckMakeSolver(*equality_constrained_qp_solver_);
   CheckMakeSolver(*mosek_solver_);
   CheckMakeSolver(*gurobi_solver_);
+  CheckMakeSolver(*clarabel_solver_);
   CheckMakeSolver(*osqp_solver_);
   CheckMakeSolver(*moby_lcp_solver_);
   CheckMakeSolver(*snopt_solver_);

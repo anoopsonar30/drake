@@ -9,6 +9,10 @@
 #include "drake/common/test_utilities/expect_throws_message.h"
 #include "drake/common/yaml/test/example_structs.h"
 
+// This test suite is the C++ flavor of the Python test suite at
+//  drake/bindings/pydrake/common/test/yaml_typed_test.py
+// and should be roughly kept in sync with the test cases in that file.
+
 namespace drake {
 namespace yaml {
 namespace test {
@@ -60,7 +64,7 @@ TEST_F(YamlWriteArchiveTest, Double) {
   // See https://yaml.org/spec/1.2.2/#10214-floating-point for the specs.
   test(std::numeric_limits<double>::quiet_NaN(), ".nan");
   test(std::numeric_limits<double>::infinity(), ".inf");
-  test(-std::numeric_limits<double>::infinity(), ".-inf");
+  test(-std::numeric_limits<double>::infinity(), "-.inf");
 }
 
 TEST_F(YamlWriteArchiveTest, String) {
@@ -206,15 +210,24 @@ TEST_F(YamlWriteArchiveTest, Variant) {
 
   test(Variant4(std::string()), "\"\"");
   test(Variant4(std::string("foo")), "foo");
+  test(Variant4(1.0), "!!float 1.0");
   test(Variant4(DoubleStruct{1.0}), "!DoubleStruct\n    value: 1.0");
   test(Variant4(EigenVecStruct{Eigen::Vector2d(1.0, 2.0)}),
        "!EigenStruct\n    value: [1.0, 2.0]");
+}
 
-  // TODO(jwnimmer-tri) We'd like to see "!!float 1.0" here, but our writer
-  // does not yet support that output syntax.
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      Save(VariantStruct{double{1.0}}),
-      "Cannot YamlWriteArchive the variant type double with a non-zero index");
+TEST_F(YamlWriteArchiveTest, PrimitiveVariant) {
+  const auto test = [](const PrimitiveVariant& value,
+                       const std::string& expected) {
+    const PrimitiveVariantStruct x{value};
+    EXPECT_EQ(Save(x), WrapDoc(expected));
+  };
+
+  test(std::vector<double>{1.0, 2.0}, "[1.0, 2.0]");
+  test(true, "!!bool true");
+  test(10, "!!int 10");
+  test(1.0, "!!float 1.0");
+  test(std::string("foo"), "!!str foo");
 }
 
 TEST_F(YamlWriteArchiveTest, EigenVector) {

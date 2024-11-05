@@ -54,7 +54,7 @@ namespace multibody {
  */
 class RationalForwardKinematics {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RationalForwardKinematics)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RationalForwardKinematics);
 
   /** @param plant The plant for which we compute forward kinematics.
    `plant` should outlive this %RationalForwardKinematics object.
@@ -187,7 +187,7 @@ class RationalForwardKinematics {
   const MultibodyPlant<double>& plant() const { return plant_; }
 
   Eigen::Map<const VectorX<symbolic::Variable>> s() const {
-    return Eigen::Map<const VectorX<symbolic::Variable>>(s_.data(), s_.size());
+    return EigenMapView(s_);
   }
 
   /** map_mobilizer_to_s_index_[mobilizer_index] returns the starting index of
@@ -285,7 +285,7 @@ class RationalForwardKinematics {
   // indeterminates in the rational functions.
   std::vector<symbolic::Variable> s_;
   // Each s(i) is associated with a mobilizer.
-  std::unordered_map<symbolic::Variable::Id, internal::MobilizerIndex>
+  std::unordered_map<symbolic::Variable::Id, internal::MobodIndex>
       map_s_to_mobilizer_;
   // map_mobilizer_to_s_index_[mobilizer_index] returns the starting index of
   // the mobilizer's variable in s_ (the variable will be contiguous in s for

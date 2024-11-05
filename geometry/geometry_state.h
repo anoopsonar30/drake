@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -20,9 +21,11 @@
 #include "drake/geometry/internal_frame.h"
 #include "drake/geometry/internal_geometry.h"
 #include "drake/geometry/kinematics_vector.h"
+#include "drake/geometry/mesh_deformation_interpolator.h"
 #include "drake/geometry/proximity_engine.h"
 #include "drake/geometry/render/render_camera.h"
 #include "drake/geometry/render/render_engine.h"
+#include "drake/geometry/scene_graph_config.h"
 #include "drake/geometry/utilities.h"
 
 namespace drake {
@@ -80,6 +83,52 @@ struct KinematicsData {
   // In other words, it is the full evaluation of the kinematic chain from
   // frame i to the world frame.
   std::vector<math::RigidTransform<T>> X_WFs;
+};
+
+// Driven mesh data that depend on the configuration input values.
+class DrivenMeshData {
+ public:
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(DrivenMeshData);
+
+  DrivenMeshData();
+
+  ~DrivenMeshData();
+
+  // Updates the control mesh vertex positions for all driven meshes.
+  // @param[in] q_WGs  q_WGs.at(id) contains control mesh vertex positions as a
+  //                   flat Eigen vector.
+  // @pre all driven meshes in `this` have their control mesh vertex positions
+  // specified in `q_WGs`.
+  // @tparam_default_scalar
+  template <typename T>
+  void SetControlMeshPositions(
+      const std::unordered_map<GeometryId, VectorX<T>>& q_WGs);
+
+  const std::unordered_map<GeometryId, std::vector<DrivenTriangleMesh>>&
+  driven_meshes() const {
+    return driven_meshes_;
+  }
+
+  const std::vector<RenderMesh>& render_meshes(GeometryId id) const {
+    return render_meshes_.at(id);
+  }
+
+  // Registers both driven meshes and render meshes for the deformable geometry
+  // with the given id.
+  // @pre driven_meshes and render_meshes are the same size and not empty.
+  void SetMeshes(GeometryId id, std::vector<DrivenTriangleMesh> driven_meshes,
+                 std::vector<RenderMesh> render_meshes);
+
+  // Removes all mesh representations associated with the given GeometryId.
+  void Remove(GeometryId id) {
+    driven_meshes_.erase(id);
+    render_meshes_.erase(id);
+  }
+
+ private:
+  std::unordered_map<GeometryId, std::vector<DrivenTriangleMesh>>
+      driven_meshes_;
+  std::unordered_map<GeometryId, std::vector<RenderMesh>> render_meshes_;
 };
 
 }  // namespace internal
@@ -161,14 +210,18 @@ class GeometryState {
   }
 
   /** Implementation of SceneGraphInspector::GetAllGeometryIds().  */
-  std::vector<GeometryId> GetAllGeometryIds() const;
+  std::vector<GeometryId> GetAllGeometryIds(std::optional<Role> role) const;
 
   /** Implementation of SceneGraphInspector::GetGeometryIds().  */
-  std::unordered_set<GeometryId> GetGeometryIds(
-      const GeometrySet& geometry_set, const std::optional<Role>& role) const;
+  std::unordered_set<GeometryId> GetGeometryIds(const GeometrySet& geometry_set,
+                                                std::optional<Role> role) const;
 
   /** Implementation of SceneGraphInspector::NumGeometriesWithRole().  */
   int NumGeometriesWithRole(Role role) const;
+
+  /** Implementation of
+   SceneGraphInspector::NumDeformableGeometriesWithRole().  */
+  int NumDeformableGeometriesWithRole(Role role) const;
 
   /** Implementation of SceneGraphInspector::NumDynamicGeometries().  */
   int NumDynamicGeometries() const;
@@ -300,11 +353,19 @@ class GeometryState {
   /** Implementation of SceneGraphInspector::GetReferenceMesh().  */
   const VolumeMesh<double>* GetReferenceMesh(GeometryId id) const;
 
+  /** Implementation of
+   SceneGraphInspector::GetDrivenRenderMeshes().  */
+  const std::vector<internal::RenderMesh>& GetDrivenRenderMeshes(
+      GeometryId id, Role role) const;
+
   /** Implementation of SceneGraphInspector::IsDeformableGeometry(). */
   bool IsDeformableGeometry(GeometryId id) const;
 
   /** Implementation of SceneGraphInspector::GetAllDeformableGeometryIds(). */
   std::vector<GeometryId> GetAllDeformableGeometryIds() const;
+
+  /** Implementation of SceneGraphInspector::GetConvexHull(). */
+  const PolygonSurfaceMesh<double>* GetConvexHull(GeometryId id) const;
 
   /** Implementation of SceneGraphInspector::CollisionFiltered().  */
   bool CollisionFiltered(GeometryId id1, GeometryId id2) const;
@@ -330,6 +391,10 @@ class GeometryState {
 
   /** Implementation of QueryObject::GetConfigurationsInWorld().  */
   const VectorX<T>& get_configurations_in_world(GeometryId geometry_id) const;
+
+  /** Implementation of QueryObject::GetDrivenMeshConfigurationsInWorld().  */
+  std::vector<VectorX<T>> GetDrivenMeshConfigurationsInWorld(
+      GeometryId geometry_id, Role role) const;
   //@}
 
   /** @name        State management
@@ -377,9 +442,9 @@ class GeometryState {
   void RenameGeometry(GeometryId geometry_id, const std::string& name);
 
   /** Implementation of SceneGraph::ChangeShape().  */
-  void ChangeShape(
-      SourceId source_id, GeometryId geometry_id, const Shape& shape,
-      std::optional<math::RigidTransform<double>> X_FG);
+  void ChangeShape(SourceId source_id, GeometryId geometry_id,
+                   const Shape& shape,
+                   std::optional<math::RigidTransform<double>> X_FG);
 
   /** Implementation of SceneGraph::RemoveGeometry().  */
   void RemoveGeometry(SourceId source_id, GeometryId geometry_id);
@@ -565,15 +630,18 @@ class GeometryState {
   void AddRenderer(std::string name,
                    std::unique_ptr<render::RenderEngine> renderer);
 
+  /** Implementation of SceneGraph::RemoveRenderer(). */
+  void RemoveRenderer(const std::string& name);
+
   /** Implementation of SceneGraph::HasRenderer().  */
   bool HasRenderer(const std::string& name) const {
-    return render_engines_.count(name) > 0;
+    return render_engines_.contains(name);
   }
 
   /** Implementation of QueryObject::GetRenderEngineByName.  */
   const render::RenderEngine* GetRenderEngineByName(
       const std::string& name) const {
-    if (render_engines_.count(name) > 0) {
+    if (render_engines_.contains(name)) {
       return render_engines_.at(name).get();
     }
     return nullptr;
@@ -613,6 +681,27 @@ class GeometryState {
    instance already instantiated on AutoDiffXd, it is equivalent to cloning
    the instance.  */
   std::unique_ptr<GeometryState<AutoDiffXd>> ToAutoDiffXd() const;
+
+  //@}
+
+  /** @name Default proximity properties */
+  //@{
+
+  /** Applies the default proximity values in `defaults` to the proximity
+   properties of every currently registered geometry that has a proximity
+   role. For detailed semantics, see the 2-argument overload.
+  */
+  void ApplyProximityDefaults(const DefaultProximityProperties& defaults);
+
+  /** Applies the default proximity values in `defaults` to the proximity
+   properties of the geometry with the given geometry_id as appropriate. For a
+   given property, no value will be written if (a) `defaults` contains no value
+   for it, or (b) a value has previously been set for that property.
+
+   @pre geometry_id indicates a geometry with an assigned proximity role.
+  */
+  void ApplyProximityDefaults(const DefaultProximityProperties& defaults,
+                              GeometryId geometry_id);
 
   //@}
 
@@ -690,10 +779,11 @@ class GeometryState {
       std::vector<render::RenderEngine*> render_engines) const;
 
   // Method that updates the proximity engine and the render engines with the
-  // up-to-date _configuration_ data in `kinematics_data`. Currently, nothing is
-  // propagated to the render engines yet.
+  // up-to-date configuration data in `kinematics_data` and up-to-date
+  // `driven_mesh_data`.
   void FinalizeConfigurationUpdate(
       const internal::KinematicsData<T>& kinematics_data,
+      const internal::DrivenMeshData& driven_mesh_data,
       internal::ProximityEngine<T>* proximity_engine,
       std::vector<render::RenderEngine*> render_engines) const;
 
@@ -768,12 +858,48 @@ class GeometryState {
   bool RemoveFromRendererUnchecked(const std::string& renderer_name,
                                    GeometryId id);
 
-  // Attempts to add the given `geometry` to all compatible render engines. The
-  // only GeometryState-level data structure modified is the perception version.
-  // All other changes to GeometryState data must happen elsewhere.
+  // Attempts to add the given `geometry` to all compatible render engines.
+  // This helper function changes, at most, the state of registered render
+  // engines and this geometry state's perception version.  The caller is
+  // responsible for making sure that all other state associated with the
+  // perception role of a geometry is properly maintained for this geometry
+  // state to remain consistent.
   // @returns `true` if the geometry was added to *any* renderer.
   bool AddToCompatibleRenderersUnchecked(
       const internal::InternalGeometry& geometry);
+
+  // Attempts to add the given `geometry` to all `candidate_renderers`
+  // @pre `geometry` is not deformable.
+  // @returns `true` if the geometry was added to *any* renderer.
+  bool AddRigidToCompatibleRenderersUnchecked(
+      const internal::InternalGeometry& geometry,
+      std::vector<render::RenderEngine*>* candidate_renderers);
+
+  // Attempts to add the given deformable `geometry` to all
+  // `candidate_renderers`.
+  // @pre `geometry` is deformable.
+  // @returns `true` if the geometry was added to *any* renderer.
+  bool AddDeformableToCompatibleRenderersUnchecked(
+      const internal::InternalGeometry& geometry,
+      std::vector<render::RenderEngine*>* candidate_renderers);
+
+  // Adds the driven mesh for the deformable geometry with the given
+  // `geometry_id` for the given role. The nature of the driven mesh depends on
+  // the role and the geometry's properties for that role. Generally, it is
+  // simply the surface triangle mesh of the control volume mesh. However,
+  // the perception properties can define the ("deformable", "embedded_mesh")
+  // property containing a valid path to a surface mesh. In that case, that
+  // user-prescribed mesh will be the driven mesh.
+  // @throws std::exception if role is kPerception and the
+  // ("deformable", "embedded_mesh") property is present with a non-empty string
+  // value and that value does not contain a path to a surface mesh that's
+  // completely contained within the control volume mesh.
+  // @pre The geometry associated with `geometry_id` is a deformable geometry
+  // registered with `this` GeometryState with the given `role`.
+  // @pre `role` is not Role::kUnassigned.
+  // @note if driven meshes are already registered for the given `geometry_id`,
+  // they will be replaced with the new driven mesh.
+  void RegisterDrivenMesh(GeometryId geometry_id, Role role);
 
   // Attempts to remove the geometry with the given id from *all* render
   // engines. The only GeometryState-level data structure modified is the
@@ -833,6 +959,15 @@ class GeometryState {
   internal::KinematicsData<T>& mutable_kinematics_data() const {
     GeometryState<T>* mutable_state = const_cast<GeometryState<T>*>(this);
     return mutable_state->kinematics_data_;
+  }
+
+  // Returns a mutable reference to the driven meshes with the given role in
+  // this GeometryState.
+  // @pre role is not Role::kUnassigned.
+  internal::DrivenMeshData& mutable_driven_mesh_data(Role role) const {
+    DRAKE_DEMAND(role != Role::kUnassigned);
+    GeometryState<T>* mutable_state = const_cast<GeometryState<T>*>(this);
+    return mutable_state->driven_mesh_data_[role];
   }
 
   // Returns a mutable reference to the proximity engine in this GeometryState.
@@ -918,6 +1053,10 @@ class GeometryState {
   // NumDeformableGeometries() == kinematics_data_.num_deformable_geometries()
   // are two invariants.
   internal::KinematicsData<T> kinematics_data_;
+
+  // Mesh representations for deformable geometries that move passively with the
+  // simulated control mesh, keyed by roles.
+  std::map<Role, internal::DrivenMeshData> driven_mesh_data_;
 
   // The underlying geometry engine. The topology of the engine does _not_
   // change with respect to time. But its values do. This straddles the two

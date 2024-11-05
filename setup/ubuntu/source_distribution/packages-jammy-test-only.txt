@@ -1,4 +1,4 @@
-clang-format-12
+clang-format-15
 curl
 kcov
 libstdc++6-10-dbg
@@ -16,3 +16,4 @@ python3-uritemplate
 python3-websockets
 valgrind
 valgrind-dbg
+zip

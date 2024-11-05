@@ -1,18 +1,14 @@
+load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 load("//tools/install:install.bzl", "install")
-load(
-    "//tools/skylark:pybind.bzl",
-    "get_pybind_package_info",
-)
 load(
     "//tools/skylark:drake_py.bzl",
     "drake_py_library",
     "drake_py_unittest",
 )
 load(
-    "@drake_detected_os//:os.bzl",
-    "UBUNTU_RELEASE",
+    "//tools/skylark:pybind.bzl",
+    "get_pybind_package_info",
 )
-load("//bindings/pydrake:pydrake.bzl", "add_lint_tests_pydrake")
 
 package(default_visibility = [
     "//bindings/pydrake:__subpackages__",
@@ -29,7 +25,6 @@ drake_py_library(
         "_drake_gym_env.py",
     ],
     deps = [
-        "//bindings/pydrake/common",
         "//bindings/pydrake/systems",
         "@gymnasium_py",
     ],
@@ -52,7 +47,6 @@ drake_py_library(
 # to prevent this from being a circular dependency.
 drake_py_unittest(
     name = "drake_gym_test",
-    tags = ["manual"] if UBUNTU_RELEASE == "20.04" else [],
     deps = [
         ":gym",
         ":mock_torch_py",

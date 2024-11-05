@@ -1,5 +1,6 @@
 import copy
 import inspect
+import os
 import subprocess
 import textwrap
 import time
@@ -7,6 +8,7 @@ import unittest
 
 from pydrake.common import FindResourceOrThrow
 from pydrake.geometry import Meshcat
+from pydrake.multibody.parsing import PackageMap
 import pydrake.visualization as mut
 import pydrake.visualization._model_visualizer as mut_private
 
@@ -22,26 +24,31 @@ class TestModelVisualizerSubprocess(unittest.TestCase):
         self.dut = FindResourceOrThrow(
             "drake/bindings/pydrake/visualization/model_visualizer")
 
-    def model_file(self, model_runpath):
-        """Get a model file from a runpath."""
-        return FindResourceOrThrow(model_runpath)
+    def model_file(self, *, model_url):
+        """Get a model file from a URL."""
+        return PackageMap().ResolveUrl(model_url)
 
     def test_model_visualizer(self):
         """Test that model_visualizer doesn't crash."""
-        model_runpaths = [
+        model_urls = [
             # Simple SDFormat file.
-            "drake/multibody/benchmarks/acrobot/acrobot.sdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.sdf",
             # Simple URDF file.
-            "drake/multibody/benchmarks/acrobot/acrobot.urdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.urdf",
             # Nested SDFormat file.
-            "drake/manipulation/util/test/simple_nested_model.sdf",
+            "package://drake/manipulation/util/test/simple_nested_model.sdf",
             # SDFormat world file with multiple models.
-            "drake/manipulation/util/test/simple_world_with_two_models.sdf",
+            "package://drake/manipulation/util/test/"
+            + "simple_world_with_two_models.sdf",
         ]
-        for model_runpath in model_runpaths:
-            print(model_runpath)
-            subprocess.check_call([self.dut, self.model_file(model_runpath),
-                                   "--loop_once"])
+        for i, model_url in enumerate(model_urls):
+            with self.subTest(model_url=model_url):
+                filename = self.model_file(model_url=model_url)
+                args = [self.dut, filename, "--loop_once"]
+                # Smoke test coverage of optional command line options.
+                if i % 2 == 1:
+                    args.append(f"--compliance_type=compliant")
+                subprocess.check_call(args)
 
     def test_package_url(self):
         """Test that a package URL works."""
@@ -52,30 +59,32 @@ class TestModelVisualizerSubprocess(unittest.TestCase):
 
     def test_pyplot(self):
         """Test that pyplot doesn't crash."""
-        model_runpath = ("drake/manipulation/models/iiwa_description/sdf/"
-                         "iiwa14_no_collision.sdf")
-        subprocess.check_call([self.dut, self.model_file(model_runpath),
+        model_url = ("package://drake_models/iiwa_description/sdf/"
+                     + "iiwa14_no_collision.sdf")
+        subprocess.check_call([self.dut, self.model_file(model_url=model_url),
                                "--loop_once", "--pyplot"])
 
     def test_set_position(self):
         """Test that the --position option doesn't crash."""
-        model_runpaths = [
+        model_urls = [
             # Simple SDFormat file.
-            "drake/multibody/benchmarks/acrobot/acrobot.sdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.sdf",
             # Simple URDF file.
-            "drake/multibody/benchmarks/acrobot/acrobot.urdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.urdf",
         ]
-        for model_runpath in model_runpaths:
-            print(model_runpath)
-            subprocess.check_call([self.dut, self.model_file(model_runpath),
-                                   "--loop_once", "--position", "0.1", "0.2"])
+        for model_url in model_urls:
+            print(model_url)
+            filename = self.model_file(model_url=model_url)
+            subprocess.check_call([self.dut, filename, "--loop_once",
+                                   "--position", "0.1", "0.2"])
 
 
 class TestModelVisualizer(unittest.TestCase):
     """
     Tests the ModelVisualizer class.
 
-    Note that camera tests are split into the model_visualizer_camera_test.
+    Note that camera tests are split into the model_visualizer_camera_test, and
+    reload tests are split into the model_visualizer_reload_test.
     """
 
     SAMPLE_OBJ = textwrap.dedent("""<?xml version="1.0"?>
@@ -137,24 +146,26 @@ class TestModelVisualizer(unittest.TestCase):
         Visualizes models from files, one at a time.
         Enables frame visualization for additional code coverage.
         """
-        model_runpaths = [
+        model_urls = [
             # Simple SDFormat file.
-            "drake/multibody/benchmarks/acrobot/acrobot.sdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.sdf",
             # Simple URDF file.
-            "drake/multibody/benchmarks/acrobot/acrobot.urdf",
+            "package://drake/multibody/benchmarks/acrobot/acrobot.urdf",
             # Nested SDFormat file.
-            "drake/manipulation/util/test/simple_nested_model.sdf",
+            "package://drake/manipulation/util/test/simple_nested_model.sdf",
             # SDFormat world file with multiple models.
-            "drake/manipulation/util/test/simple_world_with_two_models.sdf",
+            "package://drake/manipulation/util/test/"
+            + "simple_world_with_two_models.sdf",
         ]
-        for i, model_runpath in enumerate(model_runpaths):
-            with self.subTest(model=model_runpath):
+        for i, model_url in enumerate(model_urls):
+            with self.subTest(model=model_url):
+                filename = PackageMap().ResolveUrl(model_url)
                 dut = mut.ModelVisualizer(visualize_frames=True)
                 if i % 2 == 0:
                     # Conditionally Ping the parser() here, so that we cover
                     # both branching paths within AddModels().
                     dut.parser()
-                dut.AddModels(FindResourceOrThrow(model_runpath))
+                dut.AddModels(filename=filename)
                 dut.Run(loop_once=True)
 
     def test_model_from_url(self):
@@ -188,6 +199,21 @@ class TestModelVisualizer(unittest.TestCase):
         dut.Finalize(position=positions)
         dut.Run(position=positions, loop_once=True)
 
+    def test_hydroelastic_contact(self):
+        """
+        When hydroelastic contact is configured, the right kind of contacts
+        appear in Meshcat.
+        """
+        meshcat = Meshcat()
+        dut = mut.ModelVisualizer(compliance_type="compliant", meshcat=meshcat)
+        for model in ["planning/test_utilities/collision_ground_plane.sdf",
+                      "manipulation/util/test/simple_nested_model.sdf"]:
+            dut.AddModels(url=f"package://drake/{model}")
+        dut.Run(loop_once=True)
+        self.assertTrue(meshcat._GetPackedProperty(
+            path="contact_forces/hydroelastic/ground_plane_box+link/force_C_W",
+            property="visible"))
+
     def test_precondition_messages(self):
         dut = mut.ModelVisualizer()
         dut.Finalize()
@@ -197,57 +223,6 @@ class TestModelVisualizer(unittest.TestCase):
             dut.parser()
         with self.assertRaisesRegex(ValueError, "already been"):
             dut.AddModels("ignored.urdf")
-
-    def test_reload(self):
-        """
-        Checks that the _reload() function does not crash.
-        """
-        # Prepare a model that should allow reloading.
-        meshcat = Meshcat()
-        dut = mut.ModelVisualizer(meshcat=meshcat)
-        filename = "drake/multibody/benchmarks/acrobot/acrobot.sdf"
-        dut.AddModels(FindResourceOrThrow(filename))
-        dut.Finalize()
-
-        # Check that it allowed reloading.
-        self.assertIsNotNone(dut._reload_button_name)
-        button = dut._reload_button_name
-        self.assertEqual(meshcat.GetButtonClicks(button), 0)
-
-        # Remember the originally-created diagram.
-        orig_diagram = dut._diagram
-
-        # Click the reload button.
-        cli = FindResourceOrThrow("drake/geometry/meshcat_websocket_client")
-        message = f"""{{
-            "type": "button",
-            "name": "{button}"
-        }}"""
-        subprocess.check_call([
-            cli,
-            f"--ws_url={meshcat.ws_url()}",
-            f"--send_message={message}"])
-
-        # Wait up to 5 seconds for the button click to be processed.
-        for _ in range(500):
-            if meshcat.GetButtonClicks(button) > 0:
-                break
-            time.sleep(1 / 100)
-        self.assertEqual(meshcat.GetButtonClicks(button), 1)
-
-        # Run once. If a reload() happened, the diagram will have changed out.
-        # Use a non-default position so we can check that it is maintained.
-        original_q = [1.0, 2.0]
-        dut.Run(position=original_q, loop_once=True)
-        self.assertNotEqual(id(orig_diagram), id(dut._diagram))
-
-        # Ensure the reloaded slider and joint values are the same.
-        slider_q = dut._sliders.get_output_port().Eval(
-            dut._sliders.GetMyContextFromRoot(dut._context))
-        self.assertListEqual(list(original_q), list(slider_q))
-        joint_q = dut._diagram.plant().GetPositions(
-            dut._diagram.plant().GetMyContextFromRoot(dut._context))
-        self.assertListEqual(list(original_q), list(joint_q))
 
     def test_traffic_cone(self):
         """
@@ -293,3 +268,56 @@ class TestModelVisualizer(unittest.TestCase):
         actual = mut.ModelVisualizer._get_constructor_defaults()
         for name in ("length", "radius", "opacity"):
             self.assertEqual(actual[f"triad_{name}"], expected[name].default)
+
+    def test_visualize_all_frames(self):
+        """ Confirm that *all* frames get added. """
+        dut = mut.ModelVisualizer(visualize_frames=True)
+        dut.parser().AddModels(file_type=".urdf", file_contents="""
+<?xml version="1.0"?>
+<robot name="test_model">
+    <link name="box">
+        <inertial>
+        <mass value="1"/>
+        <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+        </inertial>
+        <visual>
+        <geometry>
+            <box size=".1 .2 .3"/>
+        </geometry>
+        </visual>
+    </link>
+    <frame name="offset_frame" link="box" xyz="0.25 0 0" rpy="0 0 0"/>
+</robot>
+""")
+        dut.Run(loop_once=True)
+
+        meshcat = dut.meshcat()
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model"))
+        # Body frame.
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/box(2)/x-axis"))
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/box(2)/y-axis"))
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/box(2)/z-axis"))
+        # Offset frame.
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/offset_frame(2)/x-axis"))
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/offset_frame(2)/y-axis"))
+        self.assertTrue(meshcat.HasPath("/drake/illustration/test_model/box"
+                                        "/_frames/offset_frame(2)/z-axis"))
+
+    def test_visualize_all_frames_nested_models(self):
+        """When parsing SDFormat with nested models, we can get multiple
+        __model__ frames associated with the same body. It should still
+        process the frames and not complain about repeated geometry names.
+        """
+        sdf_file = FindResourceOrThrow(
+            "drake/multibody/parsing/test/sdf_parser_test/"
+            "model_with_directly_nested_models.sdf")
+
+        dut = mut.ModelVisualizer(visualize_frames=True)
+        dut.AddModels(filename=sdf_file)
+        dut.Run(loop_once=True)
+        # Note: reaching here without throwing is enough.

@@ -14,15 +14,16 @@
 #include "drake/solvers/constraint.h"
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/mathematical_program_result.h"
+#include "drake/solvers/specific_options.h"
 
 namespace drake {
 namespace solvers {
 namespace internal {
 // Mosek treats psd matrix variables in a special manner.
-// Check https://docs.mosek.com/10.0/capi/tutorial-sdo-shared.html for more
+// Check https://docs.mosek.com/10.1/capi/tutorial-sdo-shared.html for more
 // details. To summarize, Mosek stores a positive semidefinite (psd) matrix
 // variable as a "bar var" (as called in Mosek's API, for example
-// https://docs.mosek.com/10.0/capi/tutorial-sdo-shared.html). Inside Mosek, it
+// https://docs.mosek.com/10.1/capi/tutorial-sdo-shared.html). Inside Mosek, it
 // accesses each of the psd matrix variable with a unique ID. Moreover, the
 // Mosek user cannot access the entries of the psd matrix variable individually;
 // instead, the user can only access the matrix X̅ as a whole. To impose
@@ -78,7 +79,7 @@ class MatrixVariableEntry {
 
 // Mosek stores dual variable in different categories, called slc, suc, slx, sux
 // and snx. Refer to
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsolution
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsolution
 // for more information.
 enum class DualVarType {
   kLinearConstraint,  ///< Corresponds to Mosek's slc and suc.
@@ -256,7 +257,7 @@ class MosekSolverProgram {
       const Eigen::SparseMatrix<double>& B,
       const VectorX<symbolic::Variable>& decision_vars,
       const std::vector<MSKint32t>& slack_vars_mosek_indices,
-      const Eigen::VectorXd& c, MSKconetypee cone_type, MSKint64t* acc_index);
+      const Eigen::VectorXd& c, MSKdomaintypee cone_type, MSKint64t* acc_index);
 
   /*
    * This is the helper function to add three types of conic constraints
@@ -286,8 +287,12 @@ class MosekSolverProgram {
       std::unordered_map<Binding<PositiveSemidefiniteConstraint>, MSKint32t>*
           psd_barvar_indices);
 
+  // Add linear matrix inequality (LMI) constraints as affine cone constraints
+  // (acc), return the indices of the added affine cone constraints.
   MSKrescodee AddLinearMatrixInequalityConstraint(
-      const MathematicalProgram& prog);
+      const MathematicalProgram& prog,
+      std::unordered_map<Binding<LinearMatrixInequalityConstraint>, MSKint64t>*
+          lmi_acc_indices);
 
   MSKrescodee AddLinearCost(const Eigen::SparseVector<double>& linear_coeff,
                             const VectorX<symbolic::Variable>& linear_vars,
@@ -302,6 +307,12 @@ class MosekSolverProgram {
       const Eigen::SparseMatrix<double>& Q_quadratic_vars,
       const VectorX<symbolic::Variable>& quadratic_vars,
       const MathematicalProgram& prog);
+
+  // Adds the L2 norm cost min |C*x+d|₂ to Mosek.
+  MSKrescodee AddL2NormCost(const Eigen::SparseMatrix<double>& C,
+                            const Eigen::VectorXd& d,
+                            const VectorX<symbolic::Variable>& x,
+                            const MathematicalProgram& prog);
 
   MSKrescodee AddCosts(const MathematicalProgram& prog);
 
@@ -345,17 +356,15 @@ class MosekSolverProgram {
                                MSKint32t>& psd_barvar_indices,
       MathematicalProgramResult* result) const;
 
-  // @param[out] print_to_console Set to true if solver options requires
-  // printing the log to the console.
-  // @param[out] print_file_name Set to the name of the print file store in
-  // solver options. If solver options doesn't store the print file name, then
-  // set *print_file_name to an empty string.
+  // @param[in] options The options to copy into our task. It is mutable so
+  // that we can mutate it for efficiency; the data may be invalid afterwards,
+  // so the caller should not use it for anything after we return.
+  // @param[out] is_printing Set to true iff solver is printing to console or
+  // file, to indicate we want more details when possible.
   // @param[out] msk_writedata If solver options stores the file for writing
   // data, then put the file name to msk_writedata for later use.
-  MSKrescodee UpdateOptions(const SolverOptions& solver_options,
-                            SolverId mosek_id, bool* print_to_console,
-                            std::string* print_file_name,
-                            std::optional<std::string>* msk_writedata);
+  void UpdateOptions(internal::SpecificOptions* options, bool* is_printing,
+                     std::optional<std::string>* msk_writedata);
 
   MSKtask_t task() const { return task_; }
 
@@ -470,16 +479,16 @@ MSKrescodee MosekSolverProgram::AddConeConstraints(
       b(0) *= 0.5;
       rescode = this->AddAffineConeConstraint(
           prog, A, Eigen::SparseMatrix<double>(A.rows(), 0),
-          binding.variables(), {}, b, MSK_CT_RQUAD, &acc_index);
+          binding.variables(), {}, b, MSK_DOMAIN_RQUADRATIC_CONE, &acc_index);
       if (rescode != MSK_RES_OK) {
         return rescode;
       }
     } else {
-      MSKconetypee cone_type;
+      MSKdomaintypee cone_type;
       if (std::is_same_v<C, LorentzConeConstraint>) {
-        cone_type = MSK_CT_QUAD;
+        cone_type = MSK_DOMAIN_QUADRATIC_CONE;
       } else if (std::is_same_v<C, ExponentialConeConstraint>) {
-        cone_type = MSK_CT_PEXP;
+        cone_type = MSK_DOMAIN_PRIMAL_EXP_CONE;
       }
       rescode = this->AddAffineConeConstraint(
           prog, binding.evaluator()->A(),
@@ -496,13 +505,13 @@ MSKrescodee MosekSolverProgram::AddConeConstraints(
 }
 
 // @param slx Mosek dual variables for variable lower bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getslx
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getslx
 // @param sux Mosek dual variables for variable upper bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsux
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsux
 // @param slc Mosek dual variables for linear constraint lower bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getslc
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getslc
 // @param suc Mosek dual variables for linear constraint upper bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsuc
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsuc
 void SetBoundingBoxDualSolution(
     const std::vector<Binding<BoundingBoxConstraint>>& constraints,
     const std::vector<MSKrealt>& slx, const std::vector<MSKrealt>& sux,
@@ -542,10 +551,10 @@ void SetLinearConstraintDualSolution(
 
 // @param slc Mosek dual variables for linear and quadratic constraint lower
 // bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getslc
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getslc
 // @param suc Mosek dual variables for linear and quadratic constraint upper
 // bound. See
-// https://docs.mosek.com/10.0/capi/alphabetic-functionalities.html#mosek.task.getsuc
+// https://docs.mosek.com/10.1/capi/alphabetic-functionalities.html#mosek.task.getsuc
 void SetQuadraticConstraintDualSolution(
     const std::vector<Binding<QuadraticConstraint>>& constraints,
     const std::vector<MSKrealt>& slc, const std::vector<MSKrealt>& suc,

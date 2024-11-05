@@ -1,3 +1,4 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
@@ -10,38 +11,8 @@ load(
     "drake_py_library",
 )
 load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
-load("//tools/skylark:drake_data.bzl", "models_filegroup")
-load("//tools/install:install_data.bzl", "install_data")
-load("//tools/lint:lint.bzl", "add_lint_tests")
-load("//tools/skylark:test_tags.bzl", "vtk_test_tags")
 
-models_filegroup(
-    name = "installed_models",
-    visibility = ["//visibility:public"],
-)
-
-install_data(
-    name = "install_data",
-    data = [":installed_models"],
-    visibility = ["//visibility:public"],
-)
-
-filegroup(
-    name = "models",
-    srcs = [
-        ":installed_models",
-        "@drake_models//:manipulation_station/bin.mtl",
-        "@drake_models//:manipulation_station/bin.obj",
-        "@drake_models//:manipulation_station/bin.png",
-        "@drake_models//:manipulation_station/shelves.mtl",
-        "@drake_models//:manipulation_station/shelves.obj",
-        "@drake_models//:manipulation_station/shelves.png",
-        "@drake_models//:manipulation_station/table_wide.mtl",
-        "@drake_models//:manipulation_station/table_wide.obj",
-        "@drake_models//:manipulation_station/table_wide.png",
-    ],
-    visibility = ["//visibility:public"],
-)
+package(default_visibility = ["//visibility:private"])
 
 drake_cc_library(
     name = "manipulation_station",
@@ -52,12 +23,12 @@ drake_cc_library(
         "manipulation_station.h",
     ],
     data = [
-        ":models",
         "//examples/kuka_iiwa_arm:models",
-        "//manipulation/models/iiwa_description:models",
-        "//manipulation/models/realsense2_description:models",
-        "//manipulation/models/wsg_50_description:models",
-        "//manipulation/models/ycb:models",
+        "@drake_models//:iiwa_description",
+        "@drake_models//:manipulation_station",
+        "@drake_models//:realsense2_description",
+        "@drake_models//:wsg_50_description",
+        "@drake_models//:ycb",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -86,8 +57,8 @@ drake_cc_library(
         "manipulation_station_hardware_interface.h",
     ],
     data = [
-        "//manipulation/models/iiwa_description:models",
-        "//manipulation/models/wsg_50_description:models",
+        "@drake_models//:iiwa_description",
+        "@drake_models//:wsg_50_description",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -157,8 +128,7 @@ drake_cc_binary(
 
 drake_cc_googletest(
     name = "manipulation_station_test",
-    # Frequently exceeds short timeout in
-    # linux-focal-clang-bazel-nightly-coverage
+    # Frequently exceeds short timeout in coverage builds.
     timeout = "moderate",
     tags = vtk_test_tags(),
     deps = [
@@ -182,7 +152,6 @@ drake_cc_googletest(
 drake_py_library(
     name = "schunk_wsg_buttons",
     srcs = ["schunk_wsg_buttons.py"],
-    visibility = ["//visibility:private"],
     deps = [
         "//bindings/pydrake",
     ],

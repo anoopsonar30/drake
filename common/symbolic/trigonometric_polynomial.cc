@@ -27,7 +27,7 @@ enum TrigStatus {
 // Visitor class for sin/cos substitution.
 class SinCosVisitor {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SinCosVisitor)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(SinCosVisitor);
 
   explicit SinCosVisitor(SinCosSubstitution s) : subs_{std::move(s)} {};
 
@@ -502,35 +502,6 @@ symbolic::RationalFunction SubstituteStereographicProjection(
   return internal::SubstituteStereographicProjectionImpl(
       e_poly, sin_cos, sin_cos_set, t, t_set, one_plus_t_square, two_t,
       one_minus_t_square);
-}
-
-symbolic::RationalFunction SubstituteStereographicProjection(
-    const symbolic::Expression& e,
-    const std::unordered_map<symbolic::Variable, symbolic::Variable>& subs) {
-  // First substitute all cosθ and sinθ with cos_var and sin_var.
-  SinCosSubstitution sin_cos_subs;
-  symbolic::Variables sin_cos_vars;
-  std::vector<SinCos> sin_cos_vec;
-  sin_cos_vec.reserve(subs.size());
-  VectorX<symbolic::Variable> t_vars(subs.size());
-  int var_count = 0;
-  for (const auto& [theta, t] : subs) {
-    const SinCos sin_cos(Variable("s_" + theta.get_name()),
-                         Variable("c_" + theta.get_name()),
-                         SinCosSubstitutionType::kAngle);
-    sin_cos_subs.emplace(theta, sin_cos);
-    sin_cos_vars.insert(sin_cos.c);
-    sin_cos_vars.insert(sin_cos.s);
-    sin_cos_vec.push_back(sin_cos);
-    t_vars(var_count) = t;
-    var_count++;
-  }
-  const symbolic::Expression e_multilinear = Substitute(e, sin_cos_subs);
-
-  // Now rewrite e_multilinear as a polynomial of sin and cos.
-  const symbolic::Polynomial e_poly{e_multilinear, sin_cos_vars};
-
-  return SubstituteStereographicProjection(e_poly, sin_cos_vec, t_vars);
 }
 
 }  // namespace symbolic

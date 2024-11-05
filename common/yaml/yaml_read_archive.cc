@@ -5,6 +5,7 @@
 
 #include <fmt/format.h>
 #include <fmt/ostream.h>
+#include <fmt/ranges.h>
 #include <yaml-cpp/yaml.h>
 
 #include "drake/common/nice_type_name.h"
@@ -339,7 +340,7 @@ void YamlReadArchive::CheckAllAccepted() const {
   }
   for (const auto& [key, value] : root_->GetMapping()) {
     unused(value);
-    if (visited_names_.count(key) == 0) {
+    if (!visited_names_.contains(key)) {
       ReportError(fmt::format("key '{}' did not match any visited value", key));
     }
   }

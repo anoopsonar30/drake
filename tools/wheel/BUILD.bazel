@@ -1,12 +1,12 @@
-load("//tools/skylark:drake_py.bzl", "drake_py_binary")
 load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_py.bzl", "drake_py_binary", "drake_py_library")
 
 exports_files(
     glob(["**"]),
     visibility = ["//tools:__subpackages__"],
 )
 
-py_library(
+drake_py_library(
     name = "module_py",
     srcs = ["__init__.py"],
     visibility = [":__subpackages__"],
@@ -20,6 +20,7 @@ drake_py_binary(
         "wheel_builder/linux.py",
         "wheel_builder/linux_types.py",
         "wheel_builder/macos.py",
+        "wheel_builder/macos_types.py",
         "wheel_builder/main.py",
     ],
     main = "wheel_builder/main.py",

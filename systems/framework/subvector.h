@@ -6,7 +6,6 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/drake_deprecated.h"
 #include "drake/common/drake_throw.h"
 #include "drake/systems/framework/vector_base.h"
 
@@ -21,7 +20,7 @@ template <typename T>
 class Subvector final : public VectorBase<T> {
  public:
   // Subvector objects are neither copyable nor moveable.
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Subvector)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(Subvector);
 
   /// Constructs a subvector of vector that consists of num_elements starting
   /// at first_element.
@@ -74,4 +73,4 @@ class Subvector final : public VectorBase<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::Subvector)
+    class ::drake::systems::Subvector);

@@ -18,51 +18,6 @@ import os
 import sys
 import warnings
 
-# When importing `pydrake` as an external under Bazel, Bazel will use a shared
-# library whose relative RPATHs are incorrect for `libdrake.so`, and thus will
-# fail to load; this issue is captured in bazelbuild/bazel#4594. As a
-# workaround, we can use a library that properly links to `libdrake.so`, but in
-# `{runfiles}/{workspace}/external/drake` rather than `{runfiles}/drake`.
-# Once this is loaded, all of the Python C-extension libraries
-# that depend on it (and its dependencies) will load properly.
-# Please note that this workaround is only important when running under the
-# Bazel runfiles tree. Installed `pydrake` should not have this issue.
-# N.B. We do not import `external.drake.bindings.pydrake` as this may cause
-# duplicate classes to be loaded (#8810). This will not be a problem once #7912
-# is resolved.
-try:
-    import external.drake.bindings.bazel_workaround_4594_libdrake
-except ImportError:
-    pass
-
-# We specifically load `common` prior to loading any other pydrake modules,
-# in order to a) get assertion configuration done as early as possible, and b)
-# detect whether we are able to load the shared libraries.
-try:
-    from . import common
-except ImportError as e:
-    if ('cannot open shared object file' in (e.msg or '')
-            and '/pydrake/' in (e.path or '')):
-        message = f'''
-Drake failed to load a required library. This could indicate an installation
-problem, or that your system is missing required distro-provided packages.
-Please refer to the installation instructions to ensure that all required
-dependencies are installed.
-'''
-        # For wheel builds, we have a file with additional advice.
-        wheel_doc = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), 'INSTALLATION')
-        if os.path.exists(wheel_doc):
-            with open(wheel_doc) as f:
-                message += f.read()
-        message += '''
-For more information, please see https://drake.mit.edu/installation.html
-'''
-        print(message)
-    raise
-
-__all__ = ['common', 'getDrakePath']
-
 
 def getDrakePath():
     # Compatibility alias.
@@ -180,3 +135,34 @@ def _check_for_rtld_global_usages():
 if _check_for_rtld_global_usages():
     warnings.warn(
         _RTLD_GLOBAL_WARNING, category=_DrakeImportWarning, stacklevel=3)
+
+
+# We specifically load `common` prior to loading any other pydrake modules,
+# in order to a) get assertion configuration done as early as possible, and b)
+# detect whether we are able to load the shared libraries. But importantly,
+# we need to do this *after* defining the pure Python helper functions, above,
+# since they are called while loading `pydrake.common` and things it loads.
+try:
+    from . import common
+except ImportError as e:
+    if ('cannot open shared object file' in (e.msg or '')
+            and '/pydrake/' in (e.path or '')):
+        message = f'''
+Drake failed to load a required library. This could indicate an installation
+problem, or that your system is missing required distro-provided packages.
+Please refer to the installation instructions to ensure that all required
+dependencies are installed.
+'''
+        # For wheel builds, we have a file with additional advice.
+        wheel_doc = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), 'INSTALLATION')
+        if os.path.exists(wheel_doc):
+            with open(wheel_doc) as f:
+                message += f.read()
+        message += '''
+For more information, please see https://drake.mit.edu/installation.html
+'''
+        print(message)
+    raise
+
+__all__ = ['common', 'getDrakePath']

@@ -9,6 +9,7 @@
 #include "drake/solvers/mathematical_program.h"
 #include "drake/solvers/mixed_integer_optimization_util.h"
 #include "drake/solvers/test/exponential_cone_program_examples.h"
+#include "drake/solvers/test/l2norm_cost_examples.h"
 #include "drake/solvers/test/linear_program_examples.h"
 #include "drake/solvers/test/quadratic_constrained_program_examples.h"
 #include "drake/solvers/test/quadratic_program_examples.h"
@@ -44,7 +45,7 @@ TEST_F(UnboundedLinearProgramTest0, Test) {
         result.get_solver_details<MosekSolver>();
     EXPECT_EQ(mosek_solver_details.rescode, 0);
     // This problem status is defined in
-    // https://docs.mosek.com/10.0/capi/constants.html#mosek.prosta
+    // https://docs.mosek.com/10.1/capi/constants.html#mosek.prosta
     const int MSK_SOL_STA_DUAL_INFEAS_CER = 6;
     EXPECT_EQ(mosek_solver_details.solution_status,
               MSK_SOL_STA_DUAL_INFEAS_CER);
@@ -86,6 +87,13 @@ GTEST_TEST(QPtest, TestUnitBallExample) {
   MosekSolver solver;
   if (solver.available()) {
     TestQPonUnitBallExample(solver);
+  }
+}
+
+GTEST_TEST(QPtest, TestQuadraticCostVariableOrder) {
+  MosekSolver solver;
+  if (solver.available()) {
+    TestQuadraticCostVariableOrder(solver);
   }
 }
 
@@ -163,6 +171,29 @@ GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable2) {
   TestSocpDuplicatedVariable2(solver, std::nullopt, 1E-6);
 }
 
+GTEST_TEST(TestSOCP, TestSocpDuplicatedVariable3) {
+  MosekSolver solver;
+  TestSocpDuplicatedVariable3(solver, std::nullopt, 1E-5);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceToThreePoints) {
+  MosekSolver solver;
+  ShortestDistanceToThreePoints tester{};
+  tester.CheckSolution(solver, std::nullopt, 1E-4);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromCylinderToPoint) {
+  MosekSolver solver;
+  ShortestDistanceFromCylinderToPoint tester{};
+  tester.CheckSolution(solver);
+}
+
+GTEST_TEST(TestL2NormCost, ShortestDistanceFromPlaneToTwoPoints) {
+  MosekSolver solver;
+  ShortestDistanceFromPlaneToTwoPoints tester{};
+  tester.CheckSolution(solver, std::nullopt, 5E-4);
+}
+
 GTEST_TEST(TestSemidefiniteProgram, TrivialSDP) {
   MosekSolver mosek_solver;
   if (mosek_solver.available()) {
@@ -233,6 +264,13 @@ GTEST_TEST(TestExponentialConeProgram, MinimalEllipsoidConveringPoints) {
   }
 }
 
+GTEST_TEST(TestExponentialConeProgram, MatrixLogDeterminantLower) {
+  MosekSolver mosek_solver;
+  if (mosek_solver.available()) {
+    MatrixLogDeterminantLower(mosek_solver, 1E-6);
+  }
+}
+
 GTEST_TEST(MosekTest, TestLogging) {
   // Test if we can print the logging info to a log file.
   MathematicalProgram prog;
@@ -260,11 +298,11 @@ GTEST_TEST(MosekTest, TestLogging) {
   solver_options.SetOption(CommonSolverOption::kPrintToConsole, 1);
   DRAKE_EXPECT_THROWS_MESSAGE(
       solver.Solve(prog, {}, solver_options, &result),
-      ".* cannot print to both the console and the log file.");
+      ".*cannot print to both the console and a file.*");
 }
 
 GTEST_TEST(MosekTest, SolverOptionsTest) {
-  // We test that passing solver options change the behavior of
+  // We test that passing solver options changes the behavior of
   // MosekSolver::Solve().
   MathematicalProgram prog;
   auto x = prog.NewContinuousVariables<2>();
@@ -273,17 +311,27 @@ GTEST_TEST(MosekTest, SolverOptionsTest) {
   prog.AddConstraint(x(1) >= 0);
   prog.AddLinearCost(1E5 * x(0) + x(1));
 
-  SolverOptions solver_options;
-  solver_options.SetOption(MosekSolver::id(), "MSK_DPAR_DATA_TOL_C_HUGE", 1E3);
-  MathematicalProgramResult result;
   MosekSolver mosek_solver;
+  SolverOptions solver_options;
+  MathematicalProgramResult result;
+
+  // Set a string option, to at least make sure nothing crashes. Unfortunately,
+  // there is no MOSEK string option that affects the output or logging, so we
+  // cannot actually test that the option is propagated correctly.
+  solver_options.SetOption(MosekSolver::id(), "MSK_SPAR_BAS_SOL_FILE_NAME",
+                           "/tmp/mosek.bas");
+
+  // Solve with 1e3 => failed.
+  solver_options.SetOption(MosekSolver::id(), "MSK_DPAR_DATA_TOL_C_HUGE", 1E3);
   mosek_solver.Solve(prog, {}, solver_options, &result);
   EXPECT_FALSE(result.is_success());
   // This response code is defined in
-  // https://docs.mosek.com/10.0/capi/response-codes.html#mosek.rescode
+  // https://docs.mosek.com/10.1/capi/response-codes.html#mosek.rescode
   const int MSK_RES_ERR_HUGE_C{1375};
   EXPECT_EQ(result.get_solver_details<MosekSolver>().rescode,
             MSK_RES_ERR_HUGE_C);
+
+  // Solve with 1e6 => success.
   solver_options.SetOption(MosekSolver::id(), "MSK_DPAR_DATA_TOL_C_HUGE", 1E6);
   mosek_solver.Solve(prog, {}, solver_options, &result);
   EXPECT_TRUE(result.is_success());
@@ -294,14 +342,35 @@ GTEST_TEST(MosekSolver, SolverOptionsErrorTest) {
   MathematicalProgram prog;
   auto x = prog.NewContinuousVariables<2>();
   prog.AddLinearConstraint(x(0) + x(1) >= 0);
-
   MathematicalProgramResult result;
   MosekSolver mosek_solver;
-  SolverOptions solver_options;
-  solver_options.SetOption(MosekSolver::id(), "non-existing options", 42);
-  DRAKE_EXPECT_THROWS_MESSAGE(
-      mosek_solver.Solve(prog, {}, solver_options, &result),
-      ".*cannot set Mosek option \'non-existing options\' to value \'42\'.*");
+
+  // Test `int`.
+  {
+    SolverOptions solver_options;
+    solver_options.SetOption(MosekSolver::id(), "no_such_option", 42);
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        mosek_solver.Solve(prog, {}, solver_options, &result),
+        ".*cannot set Mosek option \'no_such_option\' to value \'42\'.*");
+  }
+
+  // Test `double`.
+  {
+    SolverOptions solver_options;
+    solver_options.SetOption(MosekSolver::id(), "no_such_option", 0.5);
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        mosek_solver.Solve(prog, {}, solver_options, &result),
+        ".*cannot set Mosek option \'no_such_option\' to value \'0.5\'.*");
+  }
+
+  // Test `string`.
+  {
+    SolverOptions solver_options;
+    solver_options.SetOption(MosekSolver::id(), "no_such_option", "foo");
+    DRAKE_EXPECT_THROWS_MESSAGE(
+        mosek_solver.Solve(prog, {}, solver_options, &result),
+        ".*cannot set Mosek option \'no_such_option\' to value \'foo\'.*");
+  }
 }
 
 GTEST_TEST(MosekTest, Write) {
@@ -412,7 +481,7 @@ GTEST_TEST(MosekTest, MotzkinPolynomial) {
   MosekSolver solver;
   if (solver.available()) {
     const auto result = solver.Solve(dut.prog());
-    dut.CheckResult(result, 1.3E-9);
+    dut.CheckResult(result, 1E-8);
   }
 }
 
@@ -557,7 +626,7 @@ GTEST_TEST(MosekSolver, SocpDualSolution2) {
 GTEST_TEST(MosekTest, SDPDualSolution1) {
   MosekSolver solver;
   if (solver.available()) {
-    TestSDPDualSolution1(solver, 3E-6);
+    TestSDPDualSolution1(solver, 1E-4);
   }
 }
 

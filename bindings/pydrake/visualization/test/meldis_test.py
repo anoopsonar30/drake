@@ -14,9 +14,10 @@ import pydrake.visualization as mut
 
 import functools
 import hashlib
+import json
 import os
 from pathlib import Path
-import sys
+import tempfile
 import unittest
 
 import numpy as np
@@ -29,14 +30,22 @@ from drake import (
     lcmt_viewer_link_data,
     lcmt_viewer_load_robot,
 )
-
+from pydrake.common import MemoryFile
 from pydrake.geometry import (
     DrakeVisualizer,
     DrakeVisualizerParams,
+    GeometryInstance,
+    IllustrationProperties,
+    InMemoryMesh,
+    Mesh,
+    MeshcatParams,
     Role,
 )
 from pydrake.lcm import (
     DrakeLcm,
+)
+from pydrake.math import (
+    RigidTransform,
 )
 from pydrake.multibody.parsing import (
     Parser,
@@ -73,7 +82,7 @@ import pydrake.visualization.meldis
 #
 # TODO(mwoehlke-kitware): Remove this when Jammy's python3-u-msgpack has been
 # updated to 2.5.2 or later.
-if sys.version_info[:2] >= (3, 10) and not hasattr(umsgpack, 'Hashable'):
+if not hasattr(umsgpack, 'Hashable'):
     import collections
     setattr(umsgpack.collections, 'Hashable', collections.abc.Hashable)
 
@@ -189,14 +198,14 @@ class TestMeldis(unittest.TestCase):
         """Checks _ViewerApplet support for untextured meshes.
         """
         self._check_viewer_applet_on_model(
-            "drake/manipulation/models/iiwa_description/urdf/"
+            "drake_models/iiwa_description/urdf/"
             "iiwa14_no_collision.urdf")
 
     def test_viewer_applet_textured_meshes(self):
         """Checks _ViewerApplet support for textured meshes.
         """
         self._check_viewer_applet_on_model(
-            "drake/manipulation/models/ycb/sdf/004_sugar_box.sdf")
+            "drake_models/ycb/004_sugar_box.sdf")
 
     def test_viewer_applet_reload_optimization(self):
         """Checks that loading the identical scene twice is efficient.
@@ -300,24 +309,24 @@ class TestMeldis(unittest.TestCase):
         message.num_links = len(message.link)
         self.assertEqual(dut(message), empty_hash)
 
-        # Switch to a valid mesh filename => non-empty hash.
+        # Switch to a valid .obj mesh filename => non-empty hash.
         test_tmpdir = Path(os.environ["TEST_TMPDIR"])
-        mesh_filename = test_tmpdir / "mesh_checksum_test.obj"
-        with open(mesh_filename, "w") as f:
+        obj_filename = test_tmpdir / "mesh_checksum_test.obj"
+        with open(obj_filename, "w") as f:
             f.write("foobar")
-        mesh.string_data = str(mesh_filename)
+        mesh.string_data = str(obj_filename)
         mesh_hash_1 = dut(message)
         self.assertNotEqual(mesh_hash_1, empty_hash)
 
-        # Changing the mesh content changes the checksum.
+        # Changing the .obj mesh content changes the checksum.
         # Invalid mtl filenames are not an error.
-        with open(mesh_filename, "w") as f:
+        with open(obj_filename, "w") as f:
             f.write("foo\n mtllib mesh_checksum_test.mtl \nbar\n")
         mesh_hash_2 = dut(message)
         self.assertNotEqual(mesh_hash_2, empty_hash)
         self.assertNotEqual(mesh_hash_2, mesh_hash_1)
 
-        # The appearance of the mtl file changes the checksum.
+        # The appearance of the .obj's mtl file changes the checksum.
         with open(test_tmpdir / "mesh_checksum_test.mtl", "w") as f:
             f.write("quux")
         mesh_hash_3 = dut(message)
@@ -337,6 +346,85 @@ class TestMeldis(unittest.TestCase):
         self.assertSetEqual(hashed_names, {"mesh_checksum_test.obj",
                                            "mesh_checksum_test.mtl",
                                            "mesh_checksum_test.png"})
+
+        # Message with .gltf mesh that can't be parsed => non-empty hash.
+        # (Invalid glTF content is not an error.)
+        gltf_filename = test_tmpdir / "mesh_checksum_test.gltf"
+        with open(gltf_filename, "w") as f:
+            f.write("I'm adversarially not json. {")
+        mesh.string_data = str(gltf_filename)
+        gltf_hash_1 = dut(message)
+        self.assertNotEqual(gltf_hash_1, empty_hash)
+
+        # Valid glTF file, but with no external files; the glTF's contents
+        # matter.
+        with open(gltf_filename, "w") as f:
+            f.write("{}")
+        gltf_hash_2 = dut(message)
+        self.assertNotEqual(gltf_hash_2, empty_hash)
+        self.assertNotEqual(gltf_hash_2, gltf_hash_1)
+
+        # Valid glTF file reference an external image.
+        with open(gltf_filename, "w") as f:
+            f.write(json.dumps({"images": [{"uri": str(png_filename)}]}))
+        gltf_hash_3 = dut(message)
+        self.assertNotEqual(gltf_hash_3, empty_hash)
+        self.assertNotEqual(gltf_hash_3, gltf_hash_2)
+
+        # Now finally, the glTF file has a .bin. This time, as a cross-check,
+        # inspect the filenames that were hashed instead of the hash itself.
+        bin_filename = test_tmpdir / "mesh_checksum_test.bin"
+        bin_filename.touch()
+        with open(gltf_filename, "w") as f:
+            f.write(json.dumps({
+                "images": [{"uri": str(png_filename)}],
+                "buffers": [{"uri": str(bin_filename)}]
+            }))
+        hasher = mut._meldis._GeometryFileHasher()
+        hasher.on_viewer_load_robot(message)
+        hashed_names = set([x.name for x in hasher._paths])
+        self.assertSetEqual(hashed_names, {"mesh_checksum_test.gltf",
+                                           "mesh_checksum_test.bin",
+                                           "mesh_checksum_test.png"})
+
+        # A message with an unsupported extension => non-empty hash.
+        unsupported_filename = test_tmpdir / "mesh_checksum_test.ply"
+        with open(unsupported_filename, "w") as f:
+            f.write("Non-empty content will not matter.")
+        mesh.string_data = str(unsupported_filename)
+        unsupported_hash = dut(message)
+        self.assertNotEqual(unsupported_hash, empty_hash)
+
+        # Hashing in-memory meshes (transported as json).
+        def make_json(on_disk_file: str):
+            file_str = ""
+            if on_disk_file is not None:
+                file_str = f', "on_disk": {{"path": "{on_disk_file}"}}'
+            return f"""{{
+  "in_memory_mesh": {{
+    "mesh_file": {{
+      "contents": "Cm10",
+      "extension": ".ext",
+      "filename_hint": "hint"
+    }},
+    "supporting_files": {{
+      "in_memory.mtl": {{
+        "contents": "Cm10bGxp",
+        "extension": ".mtl",
+        "filename_hint": "mtl_hint"
+      }}{file_str}
+    }}
+  }}
+}}"""
+
+        # An in-memory mesh with only in-memory supporting files => empty hash.
+        mesh.string_data = make_json(on_disk_file=None)
+        self.assertEqual(dut(message), empty_hash)
+
+        # An in-memory mesh with on-disk supporting files => hash of file.
+        mesh.string_data = make_json(on_disk_file=obj_filename)
+        self.assertNotEqual(dut(message), empty_hash)
+        self.assertEqual(dut(message), mesh_hash_2)
 
     def test_viewer_applet_alpha_slider(self):
         # Create the device under test.
@@ -395,8 +483,51 @@ class TestMeldis(unittest.TestCase):
         parsed = umsgpack.unpackb(message)
         self.assertEqual(parsed['value'], new_alpha)
 
+    def test_viewer_applet_in_memory_mesh(self):
+        """This simply makes sure meldis doesn't crash for in-memory meshes.
+        This relies on the fact that most of the core logic has been tested
+        by the _GeometryFileHasher test code."""
+        dut = mut.Meldis()
+        builder = DiagramBuilder()
+        plant, scene_graph = AddMultibodyPlantSceneGraph(builder, 0.0)
+        obj_contents = """
+mtllib meldis_test.mtl
+v 0 0 0
+v 1 0 0
+v 0 1 0
+vn 0 0 1
+usemtl meldis_mat
+f 1 2 3
+"""
+        mtl_contents = """
+newmtl meldis_mat
+Kd 1 1 0
+"""
+        mesh = Mesh(mesh_data=InMemoryMesh(
+                        mesh_file=MemoryFile(obj_contents, ".obj",
+                                             "from_test.obj"),
+                    supporting_files={
+                        "meldis_test.mtl": MemoryFile(mtl_contents, ".mtl",
+                                                      "meldis_test.mtl")}))
+        g_id = scene_graph.RegisterAnchoredGeometry(
+            plant.get_source_id(),
+            GeometryInstance(X_PG=RigidTransform(), shape=mesh,
+                             name="in_memory"))
+        scene_graph.AssignRole(plant.get_source_id(), g_id,
+                               IllustrationProperties())
+        lcm = dut._lcm
+        DrakeVisualizer.AddToBuilder(builder=builder, scene_graph=scene_graph,
+                                     params=DrakeVisualizerParams(), lcm=lcm)
+        plant.Finalize()
+        diagram = builder.Build()
+
+        diagram.ForcedPublish(diagram.CreateDefaultContext())
+        lcm.HandleSubscriptions(timeout_millis=0)
+        dut._invoke_subscriptions()
+        self.assertEqual(dut.meshcat.HasPath("/DRAKE_VIEWER"), True)
+
     def test_inertia_geometry(self):
-        url = "package://drake/examples/manipulation_station/models/sphere.sdf"
+        url = "package://drake_models/manipulation_station/sphere.sdf"
         dut = mut.Meldis()
         lcm = dut._lcm
         builder = DiagramBuilder()
@@ -423,7 +554,7 @@ class TestMeldis(unittest.TestCase):
         lcm = dut._lcm
         diagram = self._make_diagram(
             resource="drake/examples/hydroelastic/"
-                     "spatula_slip_control/models/spatula.sdf",
+                     "spatula_slip_control/spatula.sdf",
             visualizer_params=DrakeVisualizerParams(
                 show_hydroelastic=True,
                 role=Role.kProximity),
@@ -443,9 +574,10 @@ class TestMeldis(unittest.TestCase):
         lcm = dut._lcm
 
         # Enqueue a point contact result message.
-        url = "package://drake/examples/manipulation_station/models/sphere.sdf"
+        url = "package://drake_models/manipulation_station/sphere.sdf"
         builder = DiagramBuilder()
         plant, scene_graph = AddMultibodyPlantSceneGraph(builder, 0.001)
+        plant.SetUseSampledOutputPorts(False)  # We're not stepping time.
         sphere1_model, = Parser(plant, "sphere1").AddModels(url=url)
         sphere2_model, = Parser(plant, "sphere2").AddModels(url=url)
         body1 = plant.GetBodyByName("base_link", sphere1_model)
@@ -488,6 +620,7 @@ class TestMeldis(unittest.TestCase):
         url = "package://drake/multibody/meshcat/test/hydroelastic.sdf"
         builder = DiagramBuilder()
         plant, scene_graph = AddMultibodyPlantSceneGraph(builder, 0.001)
+        plant.SetUseSampledOutputPorts(False)  # We're not stepping time.
         parser = Parser(plant=plant)
         parser.AddModels(url=url)
         body1 = plant.GetBodyByName("body1")
@@ -626,9 +759,35 @@ class TestMeldis(unittest.TestCase):
         # After the handlers are called, we have the expected meshcat path.
         self.assertEqual(dut.meshcat.HasPath(meshcat_path), True)
 
+    def test_args_precedence(self):
+        """Checks that the "kwargs wins" part of our API contract is met.
+        """
+        # When bad MeshcatParams are used Meldis rejects them, but good kwargs
+        # can override them and win (no errors).
+        bad_host = MeshcatParams(host="8.8.8.8")
+        bad_port = MeshcatParams(port=1)
+        with self.assertRaises(BaseException):
+            mut.Meldis(meshcat_params=bad_host)
+        with self.assertRaises(BaseException):
+            mut.Meldis(meshcat_params=bad_port)
+        mut.Meldis(meshcat_params=bad_host, meshcat_host="localhost")
+        mut.Meldis(meshcat_params=bad_port, meshcat_port=0)
+
     def test_command_line_browser_names(self):
         """Sanity checks our webbrowser names logic. The objective is to return
         some kind of a list, without crashing.
         """
         names = pydrake.visualization.meldis._available_browsers()
         self.assertIsInstance(names, list)
+
+    def test_command_meshcat_params(self):
+        """Confirm that the params plumbing works by feeding in bad params and
+        seeing a validation error be spit out.
+        """
+        main = pydrake.visualization.meldis._main
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "meshcat_params.yaml"
+            path.write_text("{ port: 1 }", encoding="utf-8")
+            args = [f"--meshcat-params={path}"]
+            with self.assertRaisesRegex(BaseException, "port.*>.*1024"):
+                main(args=args)

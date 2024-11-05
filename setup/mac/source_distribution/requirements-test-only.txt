@@ -1,5 +1,0 @@
-flask
-jupyter
-six
-u-msgpack-python
-websockets

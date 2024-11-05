@@ -1,19 +1,18 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
     "drake_cc_googletest",
     "drake_cc_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
-package(
-    default_visibility = [":__subpackages__"],
-)
+package(default_visibility = ["//visibility:private"])
 
 drake_cc_library(
     name = "allegro_common",
     srcs = ["allegro_common.cc"],
     hdrs = ["allegro_common.h"],
+    visibility = ["//examples/allegro_hand/joint_control:__pkg__"],
     deps = [
         "//lcmtypes:allegro",
         "//multibody/plant",
@@ -24,7 +23,7 @@ drake_cc_library(
     name = "allegro_lcm",
     srcs = ["allegro_lcm.cc"],
     hdrs = ["allegro_lcm.h"],
-    visibility = ["//visibility:public"],
+    visibility = ["//examples/allegro_hand/joint_control:__pkg__"],
     deps = [
         ":allegro_common",
         "//lcmtypes:allegro",
@@ -36,7 +35,7 @@ drake_cc_binary(
     name = "run_allegro_constant_load_demo",
     srcs = ["run_allegro_constant_load_demo.cc"],
     data = [
-        "//manipulation/models/allegro_hand_description:models",
+        "@drake_models//:allegro_hand_description",
     ],
     deps = [
         "//common:add_text_logging_gflags",
@@ -59,6 +58,18 @@ drake_cc_googletest(
         ":allegro_lcm",
         "//common/test_utilities:eigen_matrix_compare",
         "//systems/framework",
+    ],
+)
+
+drake_cc_googletest(
+    name = "parse_test",
+    data = [
+        "@drake_models//:allegro_hand_description",
+    ],
+    deps = [
+        "//common:find_resource",
+        "//multibody/parsing",
+        "//multibody/plant",
     ],
 )
 

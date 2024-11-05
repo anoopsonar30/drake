@@ -27,10 +27,14 @@ downcasting of the plant and scene graph references.
 template <typename T>
 class RobotDiagramBuilder {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RobotDiagramBuilder)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RobotDiagramBuilder);
 
-  /** Constructs with the specified time step for the contained plant. */
-  explicit RobotDiagramBuilder(double time_step = 0.0);
+  /** Constructs with the specified time step for the contained plant.
+  @param time_step Governs whether the MultibodyPlant is modeled as a discrete
+  system (`time_step > 0`) or as a continuous system (`time_step = 0`). See
+  @ref multibody_simulation for further details. The default here matches the
+  default value from multibody::MultibodyPlantConfig. */
+  explicit RobotDiagramBuilder(double time_step = 0.001);
 
   ~RobotDiagramBuilder();
 
@@ -127,4 +131,4 @@ class RobotDiagramBuilder {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::planning::RobotDiagramBuilder)
+    class ::drake::planning::RobotDiagramBuilder);

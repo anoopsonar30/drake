@@ -16,21 +16,12 @@
 # PyPI, etc.) to CloudFront backed by an S3 bucket.
 #
 DEFAULT_MIRRORS = {
-    "buildifier": [
-        "https://drake-mirror.csail.mit.edu/github/bazelbuild/buildtools/releases/{version}/{filename}",  # noqa
-        "https://s3.amazonaws.com/drake-mirror/github/bazelbuild/buildtools/releases/{version}/{filename}",  # noqa
-        "https://github.com/bazelbuild/buildtools/releases/download/{version}/{filename}",  # noqa
-    ],
     "crate_universe": [
         # This pattern instructs us to allow the crates.io URL.
         "{default_url}",
         # These patterns are made available as additional backups.
         "https://drake-mirror.csail.mit.edu/crates.io/{archive}",
         "https://s3.amazonaws.com/drake-mirror/crates.io/{archive}",
-    ],
-    "director": [
-        "https://drake-packages.csail.mit.edu/director/{archive}",
-        "https://s3.amazonaws.com/drake-packages/director/{archive}",
     ],
     "doxygen": [
         "https://drake-packages.csail.mit.edu/doxygen/{archive}",
@@ -44,25 +35,20 @@ DEFAULT_MIRRORS = {
         "https://drake-mirror.csail.mit.edu/github/{repository}/{commit}.tar.gz",  # noqa
         "https://s3.amazonaws.com/drake-mirror/github/{repository}/{commit}.tar.gz",  # noqa
     ],
+    "github_release_attachments": [
+        "https://github.com/{repository}/releases/download/{commit}/{filename}",  # noqa
+        "https://drake-mirror.csail.mit.edu/github/{repository}/{commit}/{filename}",  # noqa
+        "https://s3.amazonaws.com/drake-mirror/github/{repository}/{commit}/{filename}",  # noqa
+    ],
     "maven": [
         "https://jcenter.bintray.com/{fulljar}",
         "https://repo1.maven.org/maven2/{fulljar}",
         # N.B. ibiblio doesn't offer https.
         "http://maven.ibiblio.org/maven2/{fulljar}",
     ],
-    "pypi": [
-        "https://files.pythonhosted.org/packages/source/{p}/{package}/{package}-{version}.tar.gz",  # noqa
-        "https://drake-mirror.csail.mit.edu/pypi/{package}/{package}-{version}.tar.gz",  # noqa
-        "https://s3.amazonaws.com/drake-mirror/pypi/{package}/{package}-{version}.tar.gz",  # noqa
-    ],
-    "pypi_wheel": [
-        "https://files.pythonhosted.org/packages/{blake2_256_01}/{blake2_256_23}/{blake2_256_4p}/{package}-{version}-{tag}.whl",  # noqa
-        "https://drake-mirror.csail.mit.edu/pypi_wheel/{package}/{package}-{version}-{tag}.tar.gz",  # noqa
-        "https://s3.amazonaws.com/drake-mirror/pypi_wheel/{package}/{package}-{version}-{tag}.tar.gz",  # noqa
-    ],
-    # On 2024-01-01 upon completion of @vtk deprecation, remove this stanza.
-    "vtk": [
-        "https://drake-packages.csail.mit.edu/vtk/{archive}",
-        "https://s3.amazonaws.com/drake-packages/vtk/{archive}",
+    "mosek": [
+        "https://download.mosek.com/{path}",
+        "https://drake-mirror.csail.mit.edu/mosek/{path}",
+        "https://s3.amazonaws.com/drake-mirror/mosek/{path}",
     ],
 }

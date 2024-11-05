@@ -28,7 +28,7 @@ namespace internal {
  InternalGeometry instances.  */
 class InternalFrame {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(InternalFrame)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(InternalFrame);
 
   /* Default constructor. The parent identifier and pose index will be
    invalid.  */
@@ -46,11 +46,11 @@ class InternalFrame {
 
   /* Compares two %InternalFrame instances for "equality". Two internal frames
    are considered equal if they have the same frame identifier.  */
-  bool operator==(const InternalFrame &other) const;
+  bool operator==(const InternalFrame& other) const;
 
   /* Compares two %InternalFrame instances for inequality. See operator==()
    for the definition of equality.  */
-  bool operator!=(const InternalFrame &other) const;
+  bool operator!=(const InternalFrame& other) const;
 
   /* @name      Frame properties    */
   //@{
@@ -112,19 +112,17 @@ class InternalFrame {
   /* Returns true if this frame considers the given `frame_id` to be a child.
    */
   bool has_child(FrameId frame_id) const {
-    return child_frames_.count(frame_id) > 0;
+    return child_frames_.contains(frame_id);
   }
 
   /* Adds the given `frame_id` to the set of frames that this frame considers
    to be children.  */
-  void add_child(FrameId frame_id) {
-    child_frames_.insert(frame_id);
-  }
+  void add_child(FrameId frame_id) { child_frames_.insert(frame_id); }
 
   /* Returns true if this frame considers the given `geometry_id` to be rigidly
    affixed to it.  */
   bool has_child(GeometryId geometry_id) const {
-    return child_geometries_.count(geometry_id) > 0;
+    return child_geometries_.contains(geometry_id);
   }
 
   /* Adds the given `geometry_id` to the set of geometries that this frame
@@ -137,14 +135,12 @@ class InternalFrame {
    considers to be children.
    @pre the id _is_ a valid child of this frame.  */
   void remove_child(GeometryId geometry_id) {
-    DRAKE_ASSERT(child_geometries_.count(geometry_id) > 0);
+    DRAKE_ASSERT(child_geometries_.contains(geometry_id));
     child_geometries_.erase(geometry_id);
   }
 
   /* Changes the name of the frame to `name`. */
-  void set_name(const std::string& name) {
-    name_ = name;
-  }
+  void set_name(const std::string& name) { name_ = name; }
 
   /* The identifier used for identifying the single world frame in all
    instances of SceneGraph. The world frame will eventually have an arbitrary

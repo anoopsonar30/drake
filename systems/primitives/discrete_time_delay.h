@@ -51,7 +51,7 @@ namespace systems {
 template <typename T>
 class DiscreteTimeDelay final : public LeafSystem<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteTimeDelay)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiscreteTimeDelay);
 
   /// Constructs a DiscreteTimeDelay system updating every `update_sec` and
   /// delaying a vector-valued input of size `vector_size` for
@@ -78,6 +78,7 @@ class DiscreteTimeDelay final : public LeafSystem<T> {
   /// block, sliding the delay buffer forward and placing the sampled input at
   /// the end. This emulates an update event and is mostly useful for testing.
   void SaveInputToBuffer(Context<T>* context) const {
+    this->ValidateContext(context);
     if (is_abstract()) {
       SaveInputAbstractValueToBuffer(*context, &context->get_mutable_state());
     } else {

@@ -39,7 +39,7 @@ DistributionVariant MakeDistributionVariant(RandomDistribution which) {
 // stored as discrete state.
 class SampleGenerator {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SampleGenerator)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SampleGenerator);
 
   SampleGenerator() = default;
   SampleGenerator(Seed seed, RandomDistribution which)
@@ -100,6 +100,7 @@ RandomSource<T>::RandomSource(const RandomSource<U>& other)
 
 template <typename T>
 Seed RandomSource<T>::get_seed(const Context<double>& context) const {
+  this->ValidateContext(context);
   const auto& source = context.template get_abstract_state<SampleGenerator>(0);
   return source.seed();
 }
@@ -170,11 +171,11 @@ int AddRandomInputs(double sampling_interval_sec, DiagramBuilder<T>* builder) {
 // clang-format off
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS((
     &AddRandomInputs<T>
-))
+));
 // clang-format on
 
 }  // namespace systems
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::systems::RandomSource)
+    class ::drake::systems::RandomSource);

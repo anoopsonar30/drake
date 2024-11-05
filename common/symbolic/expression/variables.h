@@ -28,7 +28,7 @@ namespace symbolic {
  */
 class Variables {
  public:
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Variables)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Variables);
 
   typedef typename std::set<Variable>::size_type size_type;
   typedef typename std::set<Variable>::iterator iterator;
@@ -45,6 +45,8 @@ class Variables {
 
   /** Constructs from an Eigen vector of variables. */
   explicit Variables(const Eigen::Ref<const VectorX<Variable>>& vec);
+
+  ~Variables();
 
   /** Returns the number of elements. */
   [[nodiscard]] size_type size() const { return vars_.size(); }

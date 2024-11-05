@@ -24,29 +24,57 @@ namespace internal {
 template <typename T>
 class WeldMobilizer final : public MobilizerImpl<T, 0, 0> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(WeldMobilizer)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(WeldMobilizer);
+  using MobilizerBase = MobilizerImpl<T, 0, 0>;
+  using MobilizerBase::kNq, MobilizerBase::kNv, MobilizerBase::kNx;
+  template <typename U>
+  using QVector = typename MobilizerBase::template QVector<U>;
+  template <typename U>
+  using VVector = typename MobilizerBase::template VVector<U>;
+  template <typename U>
+  using HMatrix = typename MobilizerBase::template HMatrix<U>;
 
   // Constructor for a %WeldMobilizer between the `inboard_frame_F` and
   // `outboard_frame_M`.
   // @param[in] X_FM Pose of `outboard_frame_M` in the `inboard_frame_F`.
-  WeldMobilizer(const Frame<T>& inboard_frame_F,
+  WeldMobilizer(const SpanningForest::Mobod& mobod,
+                const Frame<T>& inboard_frame_F,
                 const Frame<T>& outboard_frame_M,
-                const math::RigidTransform<double>& X_FM) :
-      MobilizerBase(inboard_frame_F, outboard_frame_M), X_FM_(X_FM) {}
+                const math::RigidTransform<double>& X_FM)
+      : MobilizerBase(mobod, inboard_frame_F, outboard_frame_M), X_FM_(X_FM) {}
+
+  ~WeldMobilizer() final;
+
+  std::unique_ptr<internal::BodyNode<T>> CreateBodyNode(
+      const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+      const Mobilizer<T>* mobilizer) const final;
 
   // @retval X_FM The pose of the outboard frame M in the inboard frame F.
   const math::RigidTransform<double>& get_X_FM() const { return X_FM_; }
 
   // Computes the across-mobilizer transform `X_FM`, which for this mobilizer
   // is independent of the state stored in `context`.
-  math::RigidTransform<T> CalcAcrossMobilizerTransform(
-      const systems::Context<T>& context) const final;
+  math::RigidTransform<T> calc_X_FM(const T*) const { return X_FM_.cast<T>(); }
 
-  // Computes the across-mobilizer velocity `V_FM` which for this mobilizer is
+  // Computes the across-mobilizer velocity V_FM which for this mobilizer is
   // always zero since the outboard frame M is fixed to the inboard frame F.
+  SpatialVelocity<T> calc_V_FM(const T*, const T*) const {
+    return SpatialVelocity<T>::Zero();
+  }
+
+  SpatialAcceleration<T> calc_A_FM(const T*, const T*, const T*) const {
+    return SpatialAcceleration<T>::Zero();
+  }
+
+  // Does nothing since there are no taus.
+  void calc_tau(const T*, const SpatialForce<T>&, T*) const {}
+
+  math::RigidTransform<T> CalcAcrossMobilizerTransform(
+      const systems::Context<T>&) const final;
+
   SpatialVelocity<T> CalcAcrossMobilizerSpatialVelocity(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v) const final;
+      const systems::Context<T>&,
+      const Eigen::Ref<const VectorX<T>>&) const final;
 
   // Computes the across-mobilizer acceleration `A_FM` which for this mobilizer
   // is always zero since the outboard frame M is fixed to the inboard frame F.
@@ -56,37 +84,33 @@ class WeldMobilizer final : public MobilizerImpl<T, 0, 0> {
 
   // Since this mobilizer has no generalized velocities associated with it,
   // this override is a no-op.
-  void ProjectSpatialForce(
-      const systems::Context<T>& context,
-      const SpatialForce<T>& F_Mo_F,
-      Eigen::Ref<VectorX<T>> tau) const final;
+  void ProjectSpatialForce(const systems::Context<T>& context,
+                           const SpatialForce<T>& F_Mo_F,
+                           Eigen::Ref<VectorX<T>> tau) const final;
 
   bool is_velocity_equal_to_qdot() const override { return true; }
 
   // This override is a no-op since this mobilizer has no generalized
   // velocities associated with it.
-  void MapVelocityToQDot(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& v,
-      EigenPtr<VectorX<T>> qdot) const final;
+  void MapVelocityToQDot(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& v,
+                         EigenPtr<VectorX<T>> qdot) const final;
 
   // This override is a no-op since this mobilizer has no generalized
   // velocities associated with it.
-  void MapQDotToVelocity(
-      const systems::Context<T>& context,
-      const Eigen::Ref<const VectorX<T>>& qdot,
-      EigenPtr<VectorX<T>> v) const final;
+  void MapQDotToVelocity(const systems::Context<T>& context,
+                         const Eigen::Ref<const VectorX<T>>& qdot,
+                         EigenPtr<VectorX<T>> v) const final;
 
-  bool can_rotate() const final    { return false; }
+  bool can_rotate() const final { return false; }
   bool can_translate() const final { return false; }
 
  protected:
   void DoCalcNMatrix(const systems::Context<T>& context,
                      EigenPtr<MatrixX<T>> N) const final;
 
-  void DoCalcNplusMatrix(
-      const systems::Context<T>& context,
-      EigenPtr<MatrixX<T>> Nplus) const final;
+  void DoCalcNplusMatrix(const systems::Context<T>& context,
+                         EigenPtr<MatrixX<T>> Nplus) const final;
 
   std::unique_ptr<Mobilizer<double>> DoCloneToScalar(
       const MultibodyTree<double>& tree_clone) const final;
@@ -98,16 +122,6 @@ class WeldMobilizer final : public MobilizerImpl<T, 0, 0> {
       const MultibodyTree<symbolic::Expression>& tree_clone) const final;
 
  private:
-  typedef MobilizerImpl<T, 0, 0> MobilizerBase;
-  // Bring the handy number of position and velocities MobilizerImpl enums into
-  // this class' scope. This is useful when writing mathematical expressions
-  // with fixed-sized vectors since we can do things like Vector<T, nq>.
-  // Operations with fixed-sized quantities can be optimized at compile time
-  // and therefore they are highly preferred compared to the very slow dynamic
-  // sized quantities.
-  using MobilizerBase::kNq;
-  using MobilizerBase::kNv;
-
   // Helper method to make a clone templated on ToScalar.
   template <typename ToScalar>
   std::unique_ptr<Mobilizer<ToScalar>> TemplatedDoCloneToScalar(
@@ -122,4 +136,4 @@ class WeldMobilizer final : public MobilizerImpl<T, 0, 0> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::WeldMobilizer)
+    class ::drake::multibody::internal::WeldMobilizer);

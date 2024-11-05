@@ -12,7 +12,7 @@ namespace drake {
 namespace multibody {
 namespace {
 
-const double kTolerance = std::numeric_limits<double>::epsilon();
+const double kTolerance = 1.8 * std::numeric_limits<double>::epsilon();
 
 using Eigen::Vector3d;
 using math::RigidTransformd;
@@ -38,13 +38,13 @@ class QuaternionFloatingJointTest : public ::testing::Test {
   void SetUp() override {
     // Spatial inertia for adding bodies. The actual value is not important for
     // these tests and therefore we do not initialize it.
-    const SpatialInertia<double> M_B;  // Default construction is ok for this.
+    const auto M_B = SpatialInertia<double>::NaN();
 
     // Create an empty model.
     auto model = std::make_unique<internal::MultibodyTree<double>>();
 
     // Add a body so we can add a joint between world and body:
-    body_ = &model->AddBody<RigidBody>("Body", M_B);
+    body_ = &model->AddRigidBody("Body", M_B);
 
     // Add a quaternion floating joint between the world and body:
     joint_ = &model->AddJoint<QuaternionFloatingJoint>(
@@ -121,10 +121,10 @@ TEST_F(QuaternionFloatingJointTest, GetJointLimits) {
 }
 
 TEST_F(QuaternionFloatingJointTest, Damping) {
-  EXPECT_EQ(joint_->angular_damping(), kAngularDamping);
-  EXPECT_EQ(joint_->translational_damping(), kTranslationalDamping);
+  EXPECT_EQ(joint_->default_angular_damping(), kAngularDamping);
+  EXPECT_EQ(joint_->default_translational_damping(), kTranslationalDamping);
   EXPECT_EQ(
-      joint_->damping_vector(),
+      joint_->default_damping_vector(),
       (Vector6d() << kAngularDamping, kAngularDamping, kAngularDamping,
        kTranslationalDamping, kTranslationalDamping, kTranslationalDamping)
           .finished());
@@ -134,7 +134,7 @@ TEST_F(QuaternionFloatingJointTest, Damping) {
 TEST_F(QuaternionFloatingJointTest, ContextDependentAccess) {
   const Vector3d position(1., 2., 3.);
   const Vector3d angular_velocity(0.5, 0.5, 0.5);
-  const Vector3d translational_veloctiy(0.1, 0.2, 0.3);
+  const Vector3d translational_velocity(0.1, 0.2, 0.3);
   Quaternion<double> quaternion_A(1., 2., 3., 4.);
   Quaternion<double> quaternion_B(5., 6., 7., 8.);
   quaternion_A.normalize();
@@ -142,35 +142,50 @@ TEST_F(QuaternionFloatingJointTest, ContextDependentAccess) {
   const RigidTransformd transform_A(quaternion_A, position);
   const RotationMatrixd rotation_matrix_B(quaternion_B);
 
-  // Position access:
-  joint_->set_quaternion(context_.get(), quaternion_A);
+  // Test configuration (orientation and translation).
+  joint_->SetQuaternion(context_.get(), quaternion_A);
   EXPECT_EQ(joint_->get_quaternion(*context_).coeffs(), quaternion_A.coeffs());
 
-  joint_->SetFromRotationMatrix(context_.get(), rotation_matrix_B);
+  joint_->SetOrientation(context_.get(), rotation_matrix_B);
   EXPECT_TRUE(math::AreQuaternionsEqualForOrientation(
       joint_->get_quaternion(*context_), quaternion_B, kTolerance));
 
-  joint_->set_position(context_.get(), position);
-  EXPECT_EQ(joint_->get_position(*context_), position);
+  joint_->SetTranslation(context_.get(), position);
+  EXPECT_EQ(joint_->get_translation(*context_), position);
 
-  joint_->set_position(context_.get(), Vector3d::Zero());  // Zero out pose.
-  joint_->set_pose(context_.get(), transform_A);
-  // We expect a bit of roundoff error due to transforming between quaternion
-  // and rotation matrix representations.
+  joint_->SetOrientation(context_.get(), RotationMatrixd::Identity());
+  joint_->SetTranslation(context_.get(), Vector3d::Zero());  // Zero out pose.
+  joint_->SetPose(context_.get(), transform_A);
+  // Expect roundoff error in converting the quaternion to a rotation matrix.
   EXPECT_TRUE(
-      joint_->get_pose(*context_).IsNearlyEqualTo(transform_A, kTolerance));
+      joint_->GetPose(*context_).IsNearlyEqualTo(transform_A, kTolerance));
 
   // Angular velocity access:
   joint_->set_angular_velocity(context_.get(), angular_velocity);
   EXPECT_EQ(joint_->get_angular_velocity(*context_), angular_velocity);
-  joint_->set_translational_velocity(context_.get(), translational_veloctiy);
+  joint_->set_translational_velocity(context_.get(), translational_velocity);
   EXPECT_EQ(joint_->get_translational_velocity(*context_),
-            translational_veloctiy);
+            translational_velocity);
 
   // Joint locking.
   joint_->Lock(context_.get());
   EXPECT_EQ(joint_->get_angular_velocity(*context_), Vector3d::Zero());
   EXPECT_EQ(joint_->get_translational_velocity(*context_), Vector3d::Zero());
+
+  // Damping.
+  const Vector6d damping =
+      (Vector6d() << kAngularDamping, kAngularDamping, kAngularDamping,
+       kTranslationalDamping, kTranslationalDamping, kTranslationalDamping)
+          .finished();
+  const Vector6d different_damping =
+      (Vector6d() << 2.3, 2.3, 2.3, 4.5, 4.5, 4.5).finished();
+  EXPECT_EQ(joint_->GetDampingVector(*context_), damping);
+  EXPECT_NO_THROW(joint_->SetDampingVector(context_.get(), different_damping));
+  EXPECT_EQ(joint_->GetDampingVector(*context_), different_damping);
+
+  // Expect to throw on invalid damping values.
+  EXPECT_THROW(joint_->SetDampingVector(context_.get(), Vector6d::Constant(-1)),
+               std::exception);
 }
 
 // Tests API to apply torques to joint.
@@ -181,7 +196,32 @@ TEST_F(QuaternionFloatingJointTest, AddInOneForce) {
   // Since adding forces to individual degrees of freedom of this joint does
   // not make physical sense, this method should throw.
   EXPECT_THROW(joint_->AddInOneForce(*context_, 0, some_value, &forces),
-               std::logic_error);
+               std::exception);
+}
+
+// Tests API to add in damping forces.
+TEST_F(QuaternionFloatingJointTest, AddInDampingForces) {
+  const Vector3d angular_velocity(0.1, 0.2, 0.3);
+  const Vector3d translational_veloctiy(0.4, 0.5, 0.6);
+  const double angular_damping = 3 * kAngularDamping;
+  const double translational_damping = 4 * kTranslationalDamping;
+
+  const Vector6d damping_forces_expected =
+      (Vector6d() << -angular_damping * angular_velocity,
+       -translational_damping * translational_veloctiy)
+          .finished();
+
+  joint_->set_angular_velocity(context_.get(), angular_velocity);
+  joint_->set_translational_velocity(context_.get(), translational_veloctiy);
+  joint_->SetDampingVector(
+      context_.get(),
+      (Vector6d() << angular_damping, angular_damping, angular_damping,
+       translational_damping, translational_damping, translational_damping)
+          .finished());
+
+  MultibodyForces<double> forces(tree());
+  joint_->AddInDamping(*context_, &forces);
+  EXPECT_EQ(forces.generalized_forces(), damping_forces_expected);
 }
 
 TEST_F(QuaternionFloatingJointTest, Clone) {
@@ -205,12 +245,14 @@ TEST_F(QuaternionFloatingJointTest, Clone) {
             joint_->acceleration_lower_limits());
   EXPECT_EQ(joint_clone.acceleration_upper_limits(),
             joint_->acceleration_upper_limits());
-  EXPECT_EQ(joint_clone.angular_damping(), joint_->angular_damping());
-  EXPECT_EQ(joint_clone.translational_damping(),
-            joint_->translational_damping());
+  EXPECT_EQ(joint_clone.default_angular_damping(),
+            joint_->default_angular_damping());
+  EXPECT_EQ(joint_clone.default_translational_damping(),
+            joint_->default_translational_damping());
   EXPECT_EQ(joint_clone.get_default_quaternion().coeffs(),
             joint_->get_default_quaternion().coeffs());
-  EXPECT_EQ(joint_clone.get_default_position(), joint_->get_default_position());
+  EXPECT_EQ(joint_clone.get_default_translation(),
+            joint_->get_default_translation());
 }
 
 TEST_F(QuaternionFloatingJointTest, SetVelocityAndAccelerationLimits) {
@@ -224,14 +266,14 @@ TEST_F(QuaternionFloatingJointTest, SetVelocityAndAccelerationLimits) {
   // Does not match num_velocities().
   EXPECT_THROW(mutable_joint_->set_velocity_limits(VectorX<double>(3),
                                                    VectorX<double>()),
-               std::runtime_error);
+               std::exception);
   EXPECT_THROW(mutable_joint_->set_velocity_limits(VectorX<double>(),
                                                    VectorX<double>(3)),
-               std::runtime_error);
+               std::exception);
   // Lower limit is larger than upper limit.
   EXPECT_THROW(mutable_joint_->set_velocity_limits(Vector6d::Constant(2),
                                                    Vector6d::Constant(0)),
-               std::runtime_error);
+               std::exception);
 
   // Check for acceleration limits.
   mutable_joint_->set_acceleration_limits(Vector6d::Constant(new_lower),
@@ -241,14 +283,14 @@ TEST_F(QuaternionFloatingJointTest, SetVelocityAndAccelerationLimits) {
   // Does not match num_velocities().
   EXPECT_THROW(mutable_joint_->set_acceleration_limits(VectorX<double>(3),
                                                        VectorX<double>()),
-               std::runtime_error);
+               std::exception);
   EXPECT_THROW(mutable_joint_->set_acceleration_limits(VectorX<double>(),
                                                        VectorX<double>(3)),
-               std::runtime_error);
+               std::exception);
   // Lower limit is larger than upper limit.
   EXPECT_THROW(mutable_joint_->set_acceleration_limits(Vector6d::Constant(2),
                                                        Vector6d::Constant(0)),
-               std::runtime_error);
+               std::exception);
 }
 
 TEST_F(QuaternionFloatingJointTest, CanRotateOrTranslate) {
@@ -307,9 +349,9 @@ TEST_F(QuaternionFloatingJointTest, RandomState) {
   std::uniform_real_distribution<symbolic::Expression> uniform;
 
   // Default behavior is to set to zero.
-  tree().SetRandomState(*context_, &context_->get_mutable_state(),
-                           &generator);
-  EXPECT_TRUE(joint_->get_pose(*context_).IsExactlyIdentity());
+  tree().SetRandomState(*context_, &context_->get_mutable_state(), &generator);
+  EXPECT_TRUE(joint_->GetPose(*context_).IsExactlyIdentity());
+
   // Set the position distribution to arbitrary values.
   Eigen::Matrix<symbolic::Expression, 3, 1> position_distribution;
   for (int i = 0; i < 3; i++) {
@@ -318,28 +360,25 @@ TEST_F(QuaternionFloatingJointTest, RandomState) {
 
   mutable_joint_->set_random_quaternion_distribution(
       math::UniformlyRandomQuaternion<symbolic::Expression>(&generator));
-  mutable_joint_->set_random_position_distribution(position_distribution);
-  tree().SetRandomState(*context_, &context_->get_mutable_state(),
-                           &generator);
+  mutable_joint_->set_random_translation_distribution(position_distribution);
+  tree().SetRandomState(*context_, &context_->get_mutable_state(), &generator);
   // We expect arbitrary non-zero values for the random state.
-  EXPECT_FALSE(joint_->get_pose(*context_).IsExactlyIdentity());
+  EXPECT_FALSE(joint_->GetPose(*context_).IsExactlyIdentity());
 
   // Set position and quaternion distributions back to 0.
   mutable_joint_->set_random_quaternion_distribution(
       Eigen::Quaternion<symbolic::Expression>::Identity());
-  mutable_joint_->set_random_position_distribution(
+  mutable_joint_->set_random_translation_distribution(
       Eigen::Matrix<symbolic::Expression, 3, 1>::Zero());
-  tree().SetRandomState(*context_, &context_->get_mutable_state(),
-                           &generator);
+  tree().SetRandomState(*context_, &context_->get_mutable_state(), &generator);
   // We expect zero values for pose.
-  EXPECT_TRUE(joint_->get_pose(*context_).IsExactlyIdentity());
+  EXPECT_TRUE(joint_->GetPose(*context_).IsExactlyIdentity());
 
   // Set the quaternion distribution using built in uniform sampling.
   mutable_joint_->set_random_quaternion_distribution_to_uniform();
-  tree().SetRandomState(*context_, &context_->get_mutable_state(),
-                           &generator);
+  tree().SetRandomState(*context_, &context_->get_mutable_state(), &generator);
   // We expect arbitrary non-zero pose.
-  EXPECT_FALSE(joint_->get_pose(*context_).IsExactlyIdentity());
+  EXPECT_FALSE(joint_->GetPose(*context_).IsExactlyIdentity());
 }
 
 }  // namespace

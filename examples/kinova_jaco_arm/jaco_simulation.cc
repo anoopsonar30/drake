@@ -41,9 +41,9 @@ using drake::manipulation::kinova_jaco::JacoStatusSender;
 using drake::manipulation::kinova_jaco::kJacoDefaultArmNumJoints;
 using drake::manipulation::kinova_jaco::kJacoDefaultArmNumFingers;
 using drake::manipulation::kinova_jaco::kJacoLcmStatusPeriod;
-using drake::multibody::Body;
 using drake::multibody::MultibodyPlant;
 using drake::multibody::Parser;
+using drake::multibody::RigidBody;
 using drake::systems::controllers::InverseDynamicsController;
 using drake::systems::Demultiplexer;
 using drake::visualization::AddDefaultVisualization;
@@ -54,7 +54,7 @@ namespace kinova_jaco_arm {
 namespace {
 
 const char kUrdfUrl[] =
-    "package://drake/manipulation/models/jaco_description/urdf/"
+    "package://drake_models/jaco_description/urdf/"
     "j2s7s300_sphere_collision.urdf";
 
 int DoMain() {

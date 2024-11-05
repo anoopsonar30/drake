@@ -198,9 +198,6 @@ Frame F's origin point Fo locates the frame and its basis orients the frame.
 Newton's laws of motion are valid in a non-rotating, non-accelerating "inertial
 frame", herein called the _World_ frame W (also called _Ground_ frame G or
 _Newtonian Frame_ N).  Any frame with fixed pose in W is also an inertial frame.
-Drake supports _Model_ frames (inertial frames fixed in W) so a simulation can
-be built from multiple independent models, each defined with respect to its own
-Model frame. This corresponds to the `<model>` tag in an `.sdf` file.
 
 In unambiguous situations, abbreviated notation uses the _frame_ name to also
 designate the frame's _origin_ or the frame's _basis_.  For example, if `A` and
@@ -214,7 +211,7 @@ combination of `w_AB` and `v_AB`.
 See @ref multibody_quantities for more information about notation.
 
 Each _body_ contains a _body frame_  and we use the same symbol `B` for both a
-body `B` and its body frame. Body B's location is defined via `Bo` (the
+body `B` and its body frame.  Body B's location is defined via `Bo` (the
 origin of the body frame) and body B's pose is defined via the pose of B's
 body frame.  Body properties (e.g., inertia and geometry) are measured with
 respect to the body frame.  Body B's center of mass is denoted `Bcm`
@@ -223,7 +220,6 @@ from Bo to Bcm.  Bcm is not necessarily coincident with Bo and body B's
 translational and spatial properties (e.g., position, velocity, acceleration)
 are measured using Bo (not Bcm).  If an additional frame is fixed to a rigid
 body, its position is located from the body frame.
-For a flexible body, deformations are measured with respect to the body frame.
 
 When a user initially specifies a body, such as in a `<link>` tag of an `.sdf`
 or `.urdf` file, there is a link frame L that may differ from Drake's body frame
@@ -322,8 +318,10 @@ reasonable! Alternately, use a footnote to avoid running over. -->
 
 Quantity                     |Symbol|     Typeset              | Monogram   | Meaningᵃ
 -----------------------------|:----:|:------------------------:|:----------:|----------------------------
+Generic vector v             |  v   |@f$[v]_E@f$               |`v_E`       |Vector v expressed in frame E.
 Rotation matrix              |  R   |@f$^BR^C@f$               |`R_BC`      |Frame C's orientation in frame B
-Position vector              |  p   |@f$^Pp^Q@f$               |`p_PQ`      |Position vector from point P to point Q
+Position vector              |  p   |@f$^Bp^C@f$               |`p_BC`      |Position vector from Bo (frame B's origin) to Co (frame C's origin), expressed in frame B (implied).
+Position vector              |  p   |@f$[^Pp^Q]_E@f$           |`p_PQ_E`    |Position vector from point P to point Q, expressed in frame E.
 Transform/pose               |  X   |@f$^BX^C@f$               |`X_BC`      |Frame C's *rigid* transform (pose) in frame B
 General Transform            |  T   |@f$^BT^C@f$               |`T_BC`      |The relationship between two spaces -- it may be affine, projective, isometric, etc. Every X_AB can be written as T_AB, but not every T_AB can be written as X_AB.
 Angular velocity             |  w   |@f$^B\omega^C@f$          |`w_BC`      |Frame C's angular velocity in frame Bᵃ
@@ -348,6 +346,7 @@ Jacobian wrt qᵈ              | Jq   |@f$[J_{q}^{{}^Pp^Q}]_E@f$ |`Jq_p_PQ_E
 Jacobian wrt q̇               | Jqdot|@f$J_{q̇}^{{}^Bv^Q}@f$     |`Jqdot_v_BQ`|%Point Q's translational velocity Jacobian in frame B wrt q̇
 Jacobian wrt v               | Jv   |@f$J_{v}^{{}^Bv^Q}@f$     |`Jv_v_BQ`   |%Point Q's translational velocity Jacobian in frame B wrt v
 Jacobian wrt v               | Jv   |@f$J_{v}^{{}^B\omega^C}@f$|`Jv_w_BC`   |%Frame C's angular velocity Jacobian in frame B wrt v
+Ez measure of vector v       |  v   |@f$[v]_{Ez}@f$            |`v_Ez`      |Ez scalar component of vector v, i.e., v • Ez, where Ez is frame E's z-direction unit vector.
 
 ᵃ In code, a vector has an expressed-in-frame which appears after the quantity.
 <br>Example: `w_BC_E` is C's angular velocity in B, expressed in frame E, typeset

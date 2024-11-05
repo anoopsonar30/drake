@@ -41,7 +41,7 @@ class BezierCurve final : public trajectories::Trajectory<T> {
   // TODO(russt): Add support for MatrixX control points, but only if we have a
   // use case for it.
 
-  virtual ~BezierCurve() = default;
+  ~BezierCurve() override;
 
   /** Returns the order of the curve (1 for linear, 2 for quadratic, etc.). */
   int order() const { return control_points_.cols() - 1; }
@@ -141,4 +141,4 @@ class BezierCurve final : public trajectories::Trajectory<T> {
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::BezierCurve)
+    class drake::trajectories::BezierCurve);

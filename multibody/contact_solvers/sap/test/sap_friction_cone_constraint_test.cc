@@ -7,6 +7,7 @@
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/math/autodiff_gradient.h"
 #include "drake/math/rotation_matrix.h"
+#include "drake/multibody/contact_solvers/sap/expect_equal.h"
 #include "drake/multibody/contact_solvers/sap/validate_constraint_gradients.h"
 #include "drake/solvers/constraint.h"
 #include "drake/solvers/mathematical_program.h"
@@ -47,14 +48,17 @@ const MatrixXd J34 =
 
 template <typename T = double>
 ContactConfiguration<T> MakeArbitraryConfiguration() {
-  const int objectA = 12;
-  Vector3<T> p_AoC_W(1., 2., 3.);
-  const int objectB = 5;
-  Vector3<T> p_BoC_W(4., 5., 6.);
-  const T phi0 = -2.5e-3;
-  RotationMatrix<T> R_WC;
-  return ContactConfiguration<T>{
-      objectA, std::move(p_AoC_W), objectB, std::move(p_BoC_W), phi0, R_WC};
+  // N.B. vn and fe in the configuration are not used by
+  // SapFrictionConeConstraint. We set them to infinity.
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  return ContactConfiguration<T>{.objectA = 12,
+                                 .p_ApC_W = Vector3<T>(1., 2., 3.),
+                                 .objectB = 5,
+                                 .p_BqC_W = Vector3<T>(4., 5., 6.),
+                                 .phi = -2.5e-3,
+                                 .vn = kInf,
+                                 .fe = kInf,
+                                 .R_WC = RotationMatrix<T>::Identity()};
 }
 
 template <typename T = double>
@@ -66,6 +70,13 @@ typename SapFrictionConeConstraint<T>::Parameters MakeArbitraryParameters() {
   const double sigma = 1.0e-4;
   return typename SapFrictionConeConstraint<T>::Parameters{
       mu, stiffness, dissipation_time_scale, beta, sigma};
+}
+
+void ExpectEqual(const SapFrictionConeConstraint<double>& c1,
+                 const SapFrictionConeConstraint<double>& c2) {
+  ExpectBaseIsEqual(c1, c2);
+  EXPECT_EQ(c1.parameters(), c2.parameters());
+  EXPECT_EQ(c1.configuration(), c2.configuration());
 }
 
 GTEST_TEST(SapFrictionConeConstraint, SingleCliqueConstraint) {
@@ -392,19 +403,17 @@ GTEST_TEST(SapFrictionConeConstraint, SingleCliqueConstraintClone) {
   auto clone =
       dynamic_pointer_cast<SapFrictionConeConstraint<double>>(c.Clone());
   ASSERT_NE(clone, nullptr);
-  EXPECT_EQ(clone->num_constraint_equations(), 3);
-  EXPECT_EQ(clone->num_cliques(), 1);
-  EXPECT_EQ(clone->first_clique(), clique);
-  EXPECT_THROW(clone->second_clique(), std::exception);
-  EXPECT_EQ(clone->first_clique_jacobian().MakeDenseMatrix(), J32);
-  EXPECT_THROW(clone->second_clique_jacobian(), std::exception);
-  EXPECT_EQ(clone->mu(), parameters.mu);
-  EXPECT_EQ(clone->parameters().mu, parameters.mu);
-  EXPECT_EQ(clone->parameters().stiffness, parameters.stiffness);
-  EXPECT_EQ(clone->parameters().dissipation_time_scale,
-            parameters.dissipation_time_scale);
-  EXPECT_EQ(clone->parameters().beta, parameters.beta);
-  EXPECT_EQ(clone->parameters().sigma, parameters.sigma);
+  ExpectEqual(c, *clone);
+
+  // Test ToDouble.
+  SapFrictionConeConstraint<AutoDiffXd> c_ad(
+      MakeArbitraryConfiguration<AutoDiffXd>(),
+      SapConstraintJacobian<AutoDiffXd>(clique, J32),
+      MakeArbitraryParameters<AutoDiffXd>());
+  auto clone_from_ad =
+      dynamic_pointer_cast<SapFrictionConeConstraint<double>>(c_ad.ToDouble());
+  ASSERT_NE(clone_from_ad, nullptr);
+  ExpectEqual(c, *clone_from_ad);
 }
 
 GTEST_TEST(SapFrictionConeConstraint, TwoCliquesConstraintClone) {
@@ -419,19 +428,18 @@ GTEST_TEST(SapFrictionConeConstraint, TwoCliquesConstraintClone) {
 
   auto clone =
       dynamic_pointer_cast<SapFrictionConeConstraint<double>>(c.Clone());
-  EXPECT_EQ(clone->num_constraint_equations(), 3);
-  EXPECT_EQ(clone->num_cliques(), 2);
-  EXPECT_EQ(clone->first_clique(), clique0);
-  EXPECT_EQ(clone->second_clique(), clique1);
-  EXPECT_EQ(clone->first_clique_jacobian().MakeDenseMatrix(), J32);
-  EXPECT_EQ(clone->second_clique_jacobian().MakeDenseMatrix(), J34);
-  EXPECT_EQ(clone->mu(), parameters.mu);
-  EXPECT_EQ(clone->parameters().mu, parameters.mu);
-  EXPECT_EQ(clone->parameters().stiffness, parameters.stiffness);
-  EXPECT_EQ(clone->parameters().dissipation_time_scale,
-            parameters.dissipation_time_scale);
-  EXPECT_EQ(clone->parameters().beta, parameters.beta);
-  EXPECT_EQ(clone->parameters().sigma, parameters.sigma);
+  ASSERT_NE(clone, nullptr);
+  ExpectEqual(c, *clone);
+
+  // Test ToDouble.
+  SapFrictionConeConstraint<AutoDiffXd> c_ad(
+      MakeArbitraryConfiguration<AutoDiffXd>(),
+      SapConstraintJacobian<AutoDiffXd>(clique0, J32, clique1, J34),
+      MakeArbitraryParameters<AutoDiffXd>());
+  auto clone_from_ad =
+      dynamic_pointer_cast<SapFrictionConeConstraint<double>>(c_ad.ToDouble());
+  ASSERT_NE(clone_from_ad, nullptr);
+  ExpectEqual(c, *clone_from_ad);
 }
 
 GTEST_TEST(SapFrictionConeConstraint, AccumulateSpatialImpulses) {

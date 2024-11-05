@@ -18,6 +18,9 @@ void DefineSolversAugmentedLagrangian(py::module m);
 /* Defines bindings per solvers_py_branch_and_bound.cc. */
 void DefineSolversBranchAndBound(py::module m);
 
+/* Defines the Clarabel bindings. See solvers_py_clarabel.cc. */
+void DefineSolversClarabel(py::module m);
+
 /* Defines the CLP bindings. See solvers_py_clp.cc. */
 void DefineSolversClp(py::module m);
 
@@ -32,6 +35,10 @@ void DefineSolversGurobi(py::module m);
 
 /* Defines the IPOPT bindings. See solvers_py_ipopt.cc. */
 void DefineSolversIpopt(py::module m);
+
+/* Defines the ProgramAttributes bindings. See solvers_py_program_attributes.cc.
+ */
+void DefineProgramAttribute(py::module m);
 
 /* Defines the cost, constraint, mathematical program, etc. bindings.
 See solvers_py_mathematicalprogram.cc.

@@ -49,7 +49,7 @@ class Variable {
                          ///< exponential distribution with λ=1.
   };
 
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Variable)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Variable);
 
   /** Constructs a default variable of type CONTINUOUS with an `Id` of zero.
    * All default-constructed variables are considered the same variable by the
@@ -66,6 +66,9 @@ class Variable {
   /** Constructs a variable with a string. If not specified, it has CONTINUOUS
    * type by default.*/
   explicit Variable(std::string name, Type type = Type::CONTINUOUS);
+
+  // The destructor is inlined for performance.
+  ~Variable() = default;
 
   /** Checks if this is the variable created by the default constructor. */
   [[nodiscard]] bool is_dummy() const { return get_id() == 0; }

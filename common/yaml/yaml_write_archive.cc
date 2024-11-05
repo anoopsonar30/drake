@@ -9,20 +9,13 @@
 #include <yaml-cpp/yaml.h>
 
 #include "drake/common/drake_assert.h"
+#include "drake/common/overloaded.h"
 #include "drake/common/unused.h"
 
 namespace drake {
 namespace yaml {
 namespace internal {
 namespace {
-
-// Boilerplate for std::visit.
-template <class... Ts>
-struct overloaded : Ts... {
-  using Ts::operator()...;
-};
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
 
 constexpr const char* const kKeyOrder = "__key_order";
 
@@ -41,9 +34,17 @@ void RecursiveEmit(const internal::Node& node, YAML::EmitFromEvents* sink) {
   if ((tag == internal::Node::kTagNull) || (tag == internal::Node::kTagBool) ||
       (tag == internal::Node::kTagInt) || (tag == internal::Node::kTagFloat) ||
       (tag == internal::Node::kTagStr)) {
-    // We don't need to emit the "JSON Schema" tags for YAML data. They are
-    // implied by default.
-    tag.clear();
+    // In most cases we don't need to emit the "JSON Schema" tags for YAML data,
+    // because they are implied by default. However, YamlWriteArchive on variant
+    // types sometimes marks the tag as important.
+    if (node.IsTagImportant()) {
+      DRAKE_DEMAND(tag.size() > 0);
+      // The `internal::Node::kTagFoo` all look like "tag:yaml.org,2002:foo".
+      // We only want the "foo" part (after the second colon).
+      tag = "!!" + tag.substr(18);
+    } else {
+      tag.clear();
+    }
   }
   node.Visit(overloaded{
       [&](const internal::Node::ScalarData& data) {
@@ -76,13 +77,13 @@ void RecursiveEmit(const internal::Node& node, YAML::EmitFromEvents* sink) {
         // member function in our header file), use it to specify output order;
         // otherwise, use alphabetical order.
         std::vector<std::string> key_order;
-        if (data.mapping.count(kKeyOrder)) {
+        if (data.mapping.contains(kKeyOrder)) {
           const internal::Node& key_order_node = data.mapping.at(kKeyOrder);
           // Use Accept()'s ordering.  (If EraseMatchingMaps has been called,
           // some of the keys may have disappeared.)
           for (const auto& item : key_order_node.GetSequence()) {
             const std::string& key = item.GetScalar();
-            if (data.mapping.count(key)) {
+            if (data.mapping.contains(key)) {
               key_order.push_back(key);
             }
           }
@@ -182,7 +183,7 @@ void WriteJson(std::ostream& os, const internal::Node& node) {
           os << "Infinity";
           return;
         }
-        if (scalar == ".-inf") {
+        if (scalar == "-.inf") {
           os << "-Infinity";
           return;
         }
@@ -278,7 +279,7 @@ void DoEraseMatchingMaps(internal::Node* x, const internal::Node* y) {
   if (!(y->IsMapping())) {
     return;
   }
-  const std::map<std::string, internal::Node>& y_map = y->GetMapping();
+  const string_map<internal::Node>& y_map = y->GetMapping();
 
   // Both x are y are maps.  Remove from x any key-value pair that is identical
   // within both x and y.

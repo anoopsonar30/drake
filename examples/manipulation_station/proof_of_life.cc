@@ -45,19 +45,19 @@ int do_main(int argc, char* argv[]) {
   if (FLAGS_setup == "clutter_clearing") {
     station->SetupClutterClearingStation(std::nullopt);
     station->AddManipulandFromFile(
-        "drake/manipulation/models/ycb/sdf/003_cracker_box.sdf",
+        "drake_models/ycb/003_cracker_box.sdf",
         RigidTransform<double>(RollPitchYaw<double>(-1.57, 0, 3),
                                Eigen::Vector3d(-0.3, -0.55, 0.36)));
   } else if (FLAGS_setup == "manipulation_class") {
     station->SetupManipulationClassStation();
     station->AddManipulandFromFile(
-        "drake/examples/manipulation_station/models/061_foam_brick.sdf",
+        "drake_models/manipulation_station/061_foam_brick.sdf",
         RigidTransform<double>(RotationMatrix<double>::Identity(),
                                Eigen::Vector3d(0.6, 0, 0)));
   } else if (FLAGS_setup == "planar") {
     station->SetupPlanarIiwaStation();
     station->AddManipulandFromFile(
-        "drake/examples/manipulation_station/models/061_foam_brick.sdf",
+        "drake_models/manipulation_station/061_foam_brick.sdf",
         RigidTransform<double>(RotationMatrix<double>::Identity(),
                                Eigen::Vector3d(0.6, 0, 0)));
   } else {

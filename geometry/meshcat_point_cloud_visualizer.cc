@@ -26,8 +26,7 @@ MeshcatPointCloudVisualizer<T>::MeshcatPointCloudVisualizer(
   DRAKE_DEMAND(publish_period >= 0.0);
 
   this->DeclarePeriodicPublishEvent(
-      publish_period, 0.0,
-      &MeshcatPointCloudVisualizer<T>::UpdateMeshcat);
+      publish_period, 0.0, &MeshcatPointCloudVisualizer<T>::UpdateMeshcat);
   this->DeclareForcedPublishEvent(
       &MeshcatPointCloudVisualizer<T>::UpdateMeshcat);
 
@@ -49,6 +48,9 @@ MeshcatPointCloudVisualizer<T>::MeshcatPointCloudVisualizer(
   set_point_size(other.point_size_);
   set_default_rgba(other.default_rgba_);
 }
+
+template <typename T>
+MeshcatPointCloudVisualizer<T>::~MeshcatPointCloudVisualizer() = default;
 
 template <typename T>
 void MeshcatPointCloudVisualizer<T>::Delete() const {
@@ -88,4 +90,4 @@ MeshcatPointCloudVisualizer<T>::DoGetGraphvizFragment(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::MeshcatPointCloudVisualizer)
+    class ::drake::geometry::MeshcatPointCloudVisualizer);

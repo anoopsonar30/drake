@@ -4,6 +4,7 @@
 
 #include "drake/manipulation/kuka_iiwa/build_iiwa_control.h"
 #include "drake/manipulation/kuka_iiwa/iiwa_constants.h"
+#include "drake/manipulation/kuka_iiwa/sim_iiwa_driver.h"
 #include "drake/manipulation/util/make_arm_controller_model.h"
 #include "drake/systems/primitives/shared_pointer_system.h"
 
@@ -26,7 +27,7 @@ void ApplyDriverConfig(
   DRAKE_THROW_UNLESS(builder != nullptr);
   const std::string& arm_name = model_instance_name;
   const std::string& hand_name = driver_config.hand_model_name;
-  if (models_from_directives.count(arm_name) == 0) {
+  if (!models_from_directives.contains(arm_name)) {
     throw std::runtime_error(fmt::format(
         "IiwaDriver could not find arm model directive '{}' to actuate",
         arm_name));
@@ -34,7 +35,7 @@ void ApplyDriverConfig(
   const ModelInstanceInfo& arm_model = models_from_directives.at(arm_name);
   std::optional<ModelInstanceInfo> hand_model;
   if (!hand_name.empty()) {
-    if (models_from_directives.count(hand_name) == 0) {
+    if (!models_from_directives.contains(hand_name)) {
       throw std::runtime_error(fmt::format(
           "IiwaDriver could not find hand model directive '{}' to actuate",
           hand_name));
@@ -54,10 +55,10 @@ void ApplyDriverConfig(
   const IiwaControlMode control_mode =
       ParseIiwaControlMode(driver_config.control_mode);
   if (lcm->get_lcm_url() == LcmBuses::kLcmUrlMemqNull) {
-    internal::AddSimIiwaDriver(sim_plant, arm_model.model_instance,
-                               *controller_plant, builder,
-                               driver_config.ext_joint_filter_tau,
-                               desired_iiwa_kp_gains, control_mode);
+    SimIiwaDriver<double>::AddToBuilder(
+        builder, sim_plant, arm_model.model_instance, *controller_plant,
+        driver_config.ext_joint_filter_tau, desired_iiwa_kp_gains,
+        control_mode);
   } else {
     BuildIiwaControl(sim_plant, arm_model.model_instance, *controller_plant,
                      lcm, builder, driver_config.ext_joint_filter_tau,

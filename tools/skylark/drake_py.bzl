@@ -1,10 +1,11 @@
-load("//tools/skylark:py.bzl", "py_binary", "py_library", "py_test")
 load(
     "//tools/skylark:kwargs.bzl",
     "amend",
     "incorporate_allow_network",
+    "incorporate_display",
     "incorporate_num_threads",
 )
+load("//tools/skylark:py.bzl", "py_binary", "py_library", "py_test")
 
 def drake_py_library(
         name,
@@ -56,6 +57,7 @@ def _py_target_isolated(
         main = None,
         isolate = True,
         visibility = None,
+        legacy_create_init = False,
         **kwargs):
     # See #8041 for more details.
     # TODO(eric.cousineau): See if we can remove these shims once we stop
@@ -81,6 +83,7 @@ def _py_target_isolated(
             srcs = srcs,
             main = main,
             visibility = visibility,
+            legacy_create_init = legacy_create_init,
             **kwargs
         )
 
@@ -104,6 +107,7 @@ def _py_target_isolated(
             srcs = srcs,
             main = main,
             visibility = visibility,
+            legacy_create_init = legacy_create_init,
             **kwargs
         )
 
@@ -162,7 +166,7 @@ def drake_py_binary(
             size = test_rule_size,
             timeout = test_rule_timeout,
             flaky = test_rule_flaky,
-            tags = (test_rule_tags or []) + ["nolint"],
+            tags = (test_rule_tags or []) + ["nolint", "no_kcov"],
             # N.B. Same as the warning in `drake_pybind_cc_googletest`: numpy
             # imports unittest unconditionally.
             allow_import_unittest = True,
@@ -190,6 +194,12 @@ def drake_py_unittest(
         fail("Changing srcs= is not allowed by drake_py_unittest." +
              " Use drake_py_test instead, if you need something weird.")
     srcs = ["test/%s.py" % name, helper]
+
+    # kcov is only appropriate for small-sized unit tests. If a test needs a
+    # shard_count or a special timeout, we assume it is not small.
+    if "shard_count" in kwargs or "timeout" in kwargs:
+        amend(kwargs, "tags", append = ["no_kcov"])
+
     drake_py_test(
         name = name,
         srcs = srcs,
@@ -210,6 +220,7 @@ def drake_py_test(
         isolate = True,
         allow_import_unittest = False,
         allow_network = None,
+        display = False,
         num_threads = None,
         **kwargs):
     """A wrapper to insert Drake-specific customizations.
@@ -230,6 +241,9 @@ def drake_py_test(
     @param allow_network (optional, default is ["meshcat"])
         See drake/tools/skylark/README.md for details.
 
+    @param display (optional, default is False)
+        See drake/tools/skylark/README.md for details.
+
     @param num_threads (optional, default is 1)
         See drake/tools/skylark/README.md for details.
 
@@ -247,6 +261,7 @@ def drake_py_test(
     shard_count = kwargs.pop("_drake_py_unittest_shard_count", None)
 
     kwargs = incorporate_allow_network(kwargs, allow_network = allow_network)
+    kwargs = incorporate_display(kwargs, display = display)
     kwargs = incorporate_num_threads(kwargs, num_threads = num_threads)
     kwargs = amend(kwargs, "tags", append = ["py"])
 

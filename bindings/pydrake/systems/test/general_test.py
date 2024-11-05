@@ -12,7 +12,6 @@ import numpy as np
 from pydrake.autodiffutils import AutoDiffXd
 from pydrake.common import RandomGenerator
 from pydrake.common.test_utilities import numpy_compare
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.value import AbstractValue, Value
 from pydrake.examples import PendulumPlant, RimlessWheel
 from pydrake.symbolic import Expression
@@ -36,7 +35,6 @@ from pydrake.systems.framework import (
     DiscreteValues, DiscreteValues_,
     Event, Event_,
     EventStatus,
-    GenerateHtml,
     InputPort, InputPort_,
     InputPortIndex,
     kUseDefaultName,
@@ -89,12 +87,12 @@ class TestGeneral(unittest.TestCase):
         self.assertEqual(
             lhs.num_output_ports(), rhs.num_output_ports())
         for i in range(lhs.num_input_ports()):
-            lhs_port = lhs.get_input_port(i)
-            rhs_port = rhs.get_input_port(i)
+            lhs_port = lhs.get_input_port(i, warn_deprecated=False)
+            rhs_port = rhs.get_input_port(i, warn_deprecated=False)
             self.assertEqual(lhs_port.size(), rhs_port.size())
         for i in range(lhs.num_output_ports()):
-            lhs_port = lhs.get_output_port(i)
-            rhs_port = rhs.get_output_port(i)
+            lhs_port = lhs.get_output_port(i, warn_deprecated=False)
+            rhs_port = rhs.get_output_port(i, warn_deprecated=False)
             self.assertEqual(lhs_port.size(), rhs_port.size())
 
     def test_system_base_api(self):
@@ -302,6 +300,7 @@ class TestGeneral(unittest.TestCase):
         self.assertTrue(copy.copy(periodic_data) is not periodic_data)
         is_diff_eq, period = system1.IsDifferenceEquationSystem()
         self.assertTrue(is_diff_eq)
+        self.assertFalse(system1.IsDifferentialEquationSystem())
         self.assertEqual(period, periodic_data.period_sec())
         context = system1.CreateDefaultContext()
         system1.get_input_port(0).FixValue(context, 0.0)
@@ -315,6 +314,7 @@ class TestGeneral(unittest.TestCase):
         self.assertIsNone(periodic_data)
         is_diff_eq, period = system2.IsDifferenceEquationSystem()
         self.assertFalse(is_diff_eq)
+        self.assertTrue(system2.IsDifferentialEquationSystem())
 
     def test_continuous_state_api(self):
         self.assertEqual(ContinuousState().size(), 0)
@@ -342,15 +342,24 @@ class TestGeneral(unittest.TestCase):
         state.SetFromVector(value=3*np.arange(6))
         self.assertEqual(len(state.CopyToVector()), 6)
 
-    def test_discrete_value_api(self):
+    @numpy_compare.check_all_types
+    def test_discrete_value_api(self, T):
+        DiscreteValues = DiscreteValues_[T]
+        BasicVector = BasicVector_[T]
+        cast = np.vectorize(T)
+
         self.assertEqual(DiscreteValues().num_groups(), 0)
         discrete_values = DiscreteValues(data=[BasicVector(1), BasicVector(2)])
         self.assertEqual(discrete_values.num_groups(), 2)
-        x = np.array([1.23, 4.56])
+        x = cast(np.array([1.23, 4.56]))
         discrete_values.set_value(1, x)
-        np.testing.assert_array_equal(discrete_values.get_value(index=1), x)
-        np.testing.assert_array_equal(
-            discrete_values.get_mutable_value(index=1), x)
+        numpy_compare.assert_equal(discrete_values.get_value(index=1), x)
+        if T == float:
+            numpy_compare.assert_equal(
+                discrete_values.get_mutable_value(index=1), x)
+        else:
+            with self.assertRaises(RuntimeError):
+                discrete_values.get_mutable_value(index=1)
 
         discrete_values = DiscreteValues(datum=BasicVector(np.arange(3)))
         self.assertEqual(discrete_values.size(), 3)
@@ -359,17 +368,20 @@ class TestGeneral(unittest.TestCase):
         self.assertEqual(len(discrete_values.get_data()), 1)
         self.assertEqual(discrete_values.get_vector(index=0).size(), 3)
         self.assertEqual(discrete_values.get_mutable_vector(index=0).size(), 3)
-        x = np.array([1., 3., 4.])
+        x = cast(np.array([1., 3., 4.]))
         discrete_values.set_value(x)
-        np.testing.assert_array_equal(discrete_values.value(index=0), x)
-        np.testing.assert_array_equal(discrete_values.get_value(), x)
-        np.testing.assert_array_equal(discrete_values.get_mutable_value(), x)
+        numpy_compare.assert_equal(discrete_values.value(index=0), x)
+        numpy_compare.assert_equal(discrete_values.get_value(), x)
+        if T == float:
+            numpy_compare.assert_equal(
+                discrete_values.get_mutable_value(), x)
         discrete_values[1] = 5.
-        self.assertEqual(discrete_values[1], 5.)
-        vector = discrete_values.get_mutable_value()
-        vector[0] = 2.3
-        self.assertEqual(discrete_values[0], 2.3)
-        discrete_values.SetFrom(DiscreteValues(BasicVector(3)))
+        numpy_compare.assert_equal(discrete_values[1], T(5.))
+        if T == float:
+            vector = discrete_values.get_mutable_value()
+            vector[0] = 2.3
+            self.assertEqual(discrete_values[0], 2.3)
+        discrete_values.SetFrom(DiscreteValues_[float](BasicVector_[float](3)))
 
     def test_instantiations(self):
         # Quick check of instantiations for given types.
@@ -841,12 +853,6 @@ class TestGeneral(unittest.TestCase):
             status.KeepMoreSevere(candidate=status), EventStatus)
         status = EventStatus.Failed(system=system, message="failed")
         self.assertIsInstance(status, EventStatus)
-
-    def test_generate_html(self):
-        system = ZeroOrderHold(period_sec=0.1, vector_size=1)
-        system.set_name("zoh")
-        with catch_drake_warnings(expected_count=1):
-            GenerateHtml(system, initial_depth=2)
 
     def test_diagram_builder_remove(self):
         builder = DiagramBuilder()

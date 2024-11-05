@@ -44,6 +44,9 @@ DiscreteTimeTrajectory<T>::DiscreteTimeTrajectory(
 }
 
 template <typename T>
+DiscreteTimeTrajectory<T>::~DiscreteTimeTrajectory() = default;
+
+template <typename T>
 PiecewisePolynomial<T> DiscreteTimeTrajectory<T>::ToZeroOrderHold() const {
   return PiecewisePolynomial<T>::ZeroOrderHold(times_, values_);
 }
@@ -117,4 +120,4 @@ T DiscreteTimeTrajectory<T>::end_time() const {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class drake::trajectories::DiscreteTimeTrajectory)
+    class drake::trajectories::DiscreteTimeTrajectory);

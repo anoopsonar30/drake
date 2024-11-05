@@ -6,6 +6,7 @@
 #include "drake/common/drake_throw.h"
 #include "drake/common/eigen_types.h"
 #include "drake/common/ssize.h"
+#include "drake/math/autodiff_gradient.h"
 #include "drake/multibody/contact_solvers/block_sparse_matrix.h"
 #include "drake/multibody/contact_solvers/sap/contact_problem_graph.h"
 #include "drake/multibody/plant/slicing_and_indexing.h"
@@ -49,6 +50,26 @@ std::unique_ptr<SapContactProblem<T>> SapContactProblem<T>::Clone() const {
   for (int i = 0; i < num_constraints(); ++i) {
     const SapConstraint<T>& c = get_constraint(i);
     clone->AddConstraint(c.Clone());
+  }
+  return clone;
+}
+
+template <typename T>
+std::unique_ptr<SapContactProblem<double>> SapContactProblem<T>::ToDouble()
+    const {
+  const double time_step = ExtractDoubleOrThrow(time_step_);
+  std::vector<MatrixX<double>> A;
+  A.reserve(A_.size());
+  for (int i = 0; i < ssize(A_); ++i) {
+    A.push_back(math::DiscardGradient(A_[i]));
+  }
+  VectorX<double> v_star = math::DiscardGradient(v_star_);
+  auto clone = std::make_unique<SapContactProblem<double>>(
+      time_step, std::move(A), std::move(v_star));
+  clone->set_num_objects(num_objects());
+  for (int i = 0; i < num_constraints(); ++i) {
+    const SapConstraint<T>& c = get_constraint(i);
+    clone->AddConstraint(c.ToDouble());
   }
   return clone;
 }
@@ -245,6 +266,39 @@ int SapContactProblem<T>::AddConstraint(std::unique_ptr<SapConstraint<T>> c) {
 }
 
 template <typename T>
+void SapContactProblem<T>::CalcConstraintGeneralizedForces(
+    const VectorX<T>& gamma, int constraint_start, int constraint_end,
+    VectorX<T>* generalized_forces) const {
+  DRAKE_THROW_UNLESS(0 <= constraint_start &&
+                     constraint_start < num_constraints());
+  DRAKE_THROW_UNLESS(0 <= constraint_end && constraint_end < num_constraints());
+  DRAKE_THROW_UNLESS(constraint_start <= constraint_end);
+  DRAKE_THROW_UNLESS(gamma.size() == num_constraint_equations());
+  DRAKE_THROW_UNLESS(generalized_forces != nullptr);
+  DRAKE_THROW_UNLESS(generalized_forces->size() == num_velocities());
+
+  generalized_forces->setZero();
+  for (int i = constraint_start; i <= constraint_end; ++i) {
+    const SapConstraint<T>& constraint = get_constraint(i);
+    const int equation_start = constraint_equations_start(i);
+    const int ne = constraint.num_constraint_equations();
+    const auto constraint_gamma = gamma.segment(equation_start, ne);
+
+    // Compute generalized forces per clique.
+    for (int c = 0; c < constraint.num_cliques(); ++c) {
+      const int clique = constraint.clique(c);
+      auto clique_forces = generalized_forces->segment(velocities_start(clique),
+                                                       num_velocities(clique));
+      constraint.AccumulateGeneralizedImpulses(c, constraint_gamma,
+                                               &clique_forces);
+    }
+  }
+
+  // Conversion of impulses into forces.
+  (*generalized_forces) /= time_step();
+}
+
+template <typename T>
 void SapContactProblem<T>::CalcConstraintMultibodyForces(
     const VectorX<T>& gamma, VectorX<T>* generalized_forces,
     std::vector<SpatialForce<T>>* spatial_forces) const {
@@ -296,4 +350,4 @@ void SapContactProblem<T>::CalcConstraintMultibodyForces(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::multibody::contact_solvers::internal::SapContactProblem)
+    class ::drake::multibody::contact_solvers::internal::SapContactProblem);

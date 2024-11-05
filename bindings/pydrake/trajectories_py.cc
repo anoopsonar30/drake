@@ -8,6 +8,9 @@
 #include "drake/common/trajectories/bezier_curve.h"
 #include "drake/common/trajectories/bspline_trajectory.h"
 #include "drake/common/trajectories/composite_trajectory.h"
+#include "drake/common/trajectories/derivative_trajectory.h"
+#include "drake/common/trajectories/exponential_plus_piecewise_polynomial.h"
+#include "drake/common/trajectories/function_handle_trajectory.h"
 #include "drake/common/trajectories/path_parameterized_trajectory.h"
 #include "drake/common/trajectories/piecewise_polynomial.h"
 #include "drake/common/trajectories/piecewise_pose.h"
@@ -321,6 +324,34 @@ struct Impl {
     }
 
     {
+      using Class = DerivativeTrajectory<T>;
+      constexpr auto& cls_doc = doc.DerivativeTrajectory;
+      auto cls = DefineTemplateClassWithDefault<Class, Trajectory<T>>(
+          m, "DerivativeTrajectory", param, cls_doc.doc);
+      cls  // BR
+          .def(py::init<const Trajectory<T>&, int>(), py::arg("nominal"),
+              py::arg("derivative_order") = 1, cls_doc.ctor.doc)
+          .def("Clone", &Class::Clone, cls_doc.Clone.doc);
+      DefCopyAndDeepCopy(&cls);
+    }
+
+    {
+      using Class = FunctionHandleTrajectory<T>;
+      constexpr auto& cls_doc = doc.FunctionHandleTrajectory;
+      auto cls = DefineTemplateClassWithDefault<Class, Trajectory<T>>(
+          m, "FunctionHandleTrajectory", param, cls_doc.doc);
+      cls  // BR
+          .def(py::init<const std::function<MatrixX<T>(const T&)>&, int, int,
+                   double, double>(),
+              py::arg("func"), py::arg("rows"), py::arg("cols") = 1,
+              py::arg("start_time") = -std::numeric_limits<double>::infinity(),
+              py::arg("end_time") = std::numeric_limits<double>::infinity(),
+              cls_doc.ctor.doc)
+          .def("Clone", &Class::Clone, cls_doc.Clone.doc);
+      DefCopyAndDeepCopy(&cls);
+    }
+
+    {
       using Class = PathParameterizedTrajectory<T>;
       constexpr auto& cls_doc = doc.PathParameterizedTrajectory;
       auto cls = DefineTemplateClassWithDefault<Class, Trajectory<T>>(
@@ -554,7 +585,7 @@ struct Impl {
     {
       using Class = CompositeTrajectory<T>;
       constexpr auto& cls_doc = doc.CompositeTrajectory;
-      auto cls = DefineTemplateClassWithDefault<Class, Trajectory<T>>(
+      auto cls = DefineTemplateClassWithDefault<Class, PiecewiseTrajectory<T>>(
           m, "CompositeTrajectory", param, cls_doc.doc);
       cls  // BR
           .def(py::init([](std::vector<const Trajectory<T>*> py_segments) {
@@ -568,7 +599,40 @@ struct Impl {
           }),
               py::arg("segments"), cls_doc.ctor.doc)
           .def("segment", &Class::segment, py::arg("segment_index"),
-              py_rvp::reference_internal, cls_doc.segment.doc);
+              py_rvp::reference_internal, cls_doc.segment.doc)
+          .def_static(
+              "AlignAndConcatenate",
+              [](std::vector<const Trajectory<T>*> py_segments) {
+                std::vector<copyable_unique_ptr<Trajectory<T>>> segments;
+                segments.reserve(py_segments.size());
+                for (const Trajectory<T>* py_segment : py_segments) {
+                  segments.emplace_back(
+                      py_segment ? py_segment->Clone() : nullptr);
+                }
+                return CompositeTrajectory<T>::AlignAndConcatenate(segments);
+              },
+              py::arg("segments"), cls_doc.AlignAndConcatenate.doc);
+      DefCopyAndDeepCopy(&cls);
+    }
+
+    if constexpr (std::is_same_v<T, double>) {
+      using Class = ExponentialPlusPiecewisePolynomial<T>;
+      constexpr auto& cls_doc = doc.ExponentialPlusPiecewisePolynomial;
+      auto cls = DefineTemplateClassWithDefault<Class, PiecewiseTrajectory<T>>(
+          m, "ExponentialPlusPiecewisePolynomial", param, cls_doc.doc);
+      cls  // BR
+          .def(
+              py::init(
+                  [](const Eigen::MatrixX<T>& K, const Eigen::MatrixX<T>& A,
+                      const Eigen::MatrixX<T>& alpha,
+                      const PiecewisePolynomial<T>& piecewise_polynomial_part) {
+                    return Class(K, A, alpha, piecewise_polynomial_part);
+                  }),
+              py::arg("K"), py::arg("A"), py::arg("alpha"),
+              py::arg("piecewise_polynomial_part"), cls_doc.ctor.doc)
+          .def("Clone", &Class::Clone, cls_doc.Clone.doc)
+          .def("shiftRight", &Class::shiftRight, py::arg("offset"),
+              cls_doc.shiftRight.doc);
       DefCopyAndDeepCopy(&cls);
     }
 

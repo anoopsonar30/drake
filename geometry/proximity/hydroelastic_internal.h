@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -92,6 +93,7 @@ class SoftMesh {
  */
 struct SoftHalfSpace {
   double pressure_scale;
+  double margin;
   // TODO(SeanCurtis-TRI): Possibly add a customizable pressure function in the
   //  future; one that isn't simply the scaled, normalized penetration distance.
 };
@@ -111,7 +113,7 @@ class SoftGeometry {
   explicit SoftGeometry(SoftMesh&& soft_mesh)
       : geometry_(std::move(soft_mesh)) {}
 
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SoftGeometry)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(SoftGeometry);
 
   /* @name  Distinguishing compliant representations
 
@@ -170,6 +172,19 @@ class SoftGeometry {
     return std::get<SoftHalfSpace>(geometry_).pressure_scale;
   }
 
+  /* Returns the half space's margin -- calling this will throw if
+   is_half_space() returns `false`.
+   The margin value is part of the contact surface calculation for half spaces.
+   For SoftMesh instances, the margin is already part of the representative mesh
+   and it is not necessary to carry the value here.  */
+  double half_space_margin() const {
+    if (!is_half_space()) {
+      throw std::runtime_error(
+          "SoftGeometry::margin() cannot be invoked for soft mesh");
+    }
+    return std::get<SoftHalfSpace>(geometry_).margin;
+  }
+
   //@}
 
  private:
@@ -187,7 +202,7 @@ class RigidMesh {
       : mesh_(std::move(mesh)),
         bvh_(std::make_unique<Bvh<Obb, TriangleSurfaceMesh<double>>>(*mesh_)) {}
 
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidMesh)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidMesh);
 
   const TriangleSurfaceMesh<double>& mesh() const {
     DRAKE_DEMAND(mesh_ != nullptr);
@@ -219,7 +234,7 @@ class RigidGeometry {
   explicit RigidGeometry(RigidMesh&& rigid_mesh)
       : geometry_(RigidMesh(std::move(rigid_mesh))) {}
 
-  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidGeometry)
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(RigidGeometry);
 
   /* Returns true if this RigidGeometry is a half space.  */
   bool is_half_space() const { return !geometry_.has_value(); }
@@ -277,12 +292,13 @@ class Geometries final : public ShapeReifier {
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Geometries);
 
   Geometries() = default;
+  ~Geometries() final;
 
   /* Reports the hydroelastic representation type for the given id. The
    following invariants should always hold:
 
      - If HydroelasticType::kUndefined is returned, there is no representation
-       for that id.
+       for that id. See also is_vanished().
      - If HydroelasticType::kRigid is returned, there is a rigid geometry
        associated with that id and calling rigid_geometry() will return a
        valid RigidGeometry.
@@ -290,6 +306,13 @@ class Geometries final : public ShapeReifier {
        associated with that id and calling soft_geometry() will return a valid
        SoftGeometry.  */
   HydroelasticType hydroelastic_type(GeometryId id) const;
+
+  /* Returns true iff the hydroelastic representation of this geometry has been
+   marked vanished. Geometries that will be marked as vanished are finite
+   primitives for which gradients could not be computed. This excludes:
+   HalfSpace (as not being finite) and Mesh and Convex (as not being
+   primitive). */
+  bool is_vanished(GeometryId id) const;
 
   /* Returns the representation of the soft geometry with the given `id`.
    @pre hydroelastic_type(id) returns HydroelasticType::kSoft.  */
@@ -364,6 +387,9 @@ class Geometries final : public ShapeReifier {
 
   // The representations of all rigid geometries.
   std::unordered_map<GeometryId, RigidGeometry> rigid_geometries_;
+
+  // The registrations of all vanished geometries.
+  std::unordered_set<GeometryId> vanished_geometries_;
 };
 
 /* @name Creating hydroelastic representations of shapes
@@ -385,7 +411,7 @@ std::optional<RigidGeometry> MakeRigidRepresentation(
       "Rigid {} shapes are not currently supported for hydroelastic "
       "contact; registration is allowed, but an error will be thrown "
       "during contact.",
-      ShapeName(shape));
+      shape.type_name());
   return {};
 }
 
@@ -437,7 +463,7 @@ std::optional<SoftGeometry> MakeSoftRepresentation(const Shape& shape,
   static const logging::Warn log_once(
       "Soft {} shapes are not currently supported for hydroelastic contact; "
       "registration is allowed, but an error will be thrown during contact.",
-      ShapeName(shape));
+      shape.type_name());
   return {};
 }
 
@@ -487,7 +513,7 @@ std::optional<SoftGeometry> MakeSoftRepresentation(
  properties have sufficient information). Requires the ('hydroelastic',
  'hydroelastic_modulus') properties. */
 std::optional<SoftGeometry> MakeSoftRepresentation(
-    const Mesh& mesh_specification, const ProximityProperties& props);
+    const Mesh& mesh_spec, const ProximityProperties& props);
 
 //@}
 

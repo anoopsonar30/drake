@@ -1,12 +1,14 @@
 #include "drake/geometry/geometry_state.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
 #include <utility>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "drake/common/autodiff.h"
 #include "drake/common/default_scalars.h"
@@ -15,6 +17,8 @@
 #include "drake/geometry/geometry_frame.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_roles.h"
+#include "drake/geometry/proximity/make_convex_hull_mesh.h"
+#include "drake/geometry/proximity/volume_to_surface_mesh.h"
 #include "drake/geometry/proximity_engine.h"
 #include "drake/geometry/proximity_properties.h"
 #include "drake/geometry/render/render_engine.h"
@@ -25,11 +29,25 @@ namespace drake {
 namespace geometry {
 
 using internal::convert_to_double;
+using internal::DrivenTriangleMesh;
 using internal::FrameNameSet;
 using internal::HydroelasticType;
 using internal::InternalFrame;
 using internal::InternalGeometry;
+using internal::kComplianceType;
+using internal::kElastic;
+using internal::kFriction;
+using internal::kHcDissipation;
+using internal::kHydroGroup;
+using internal::kMargin;
+using internal::kMaterialGroup;
+using internal::kPointStiffness;
+using internal::kRelaxationTime;
+using internal::kRezHint;
+using internal::kSlabThickness;
+using internal::MakeRenderMeshFromTriangleSurfaceMesh;
 using internal::ProximityEngine;
+using internal::RenderMesh;
 using math::RigidTransform;
 using math::RigidTransformd;
 using render::ColorRenderCamera;
@@ -44,6 +62,41 @@ using std::unordered_set;
 using systems::sensors::ImageDepth32F;
 using systems::sensors::ImageLabel16I;
 using systems::sensors::ImageRgba8U;
+
+namespace internal {
+
+DrivenMeshData::DrivenMeshData() = default;
+
+DrivenMeshData::~DrivenMeshData() = default;
+
+template <typename T>
+void DrivenMeshData::SetControlMeshPositions(
+    const std::unordered_map<GeometryId, VectorX<T>>& q_WGs) {
+  for (auto& [id, meshes] : driven_meshes_) {
+    DRAKE_DEMAND(q_WGs.contains(id));
+    // To prevent unnecessary copying, this returns a reference for T=double and
+    // returns a copy otherwise.
+    const VectorX<double>& q_WG =
+        geometry::internal::convert_to_double(q_WGs.at(id));
+    // The meshes are partitions of the overall geometry and each of them knows
+    // how to locate its own coordinates from within the full set of q_WG.
+    for (auto& mesh : meshes) {
+      mesh.SetControlMeshPositions(q_WG);
+    }
+  }
+}
+
+void DrivenMeshData::SetMeshes(
+    GeometryId id, std::vector<DrivenTriangleMesh> driven_meshes,
+    std::vector<RenderMesh> render_meshes) {
+  DRAKE_DEMAND(!driven_meshes.empty());
+  DRAKE_DEMAND(!render_meshes.empty());
+  DRAKE_DEMAND(driven_meshes.size() == render_meshes.size());
+  driven_meshes_.emplace(id, std::move(driven_meshes));
+  render_meshes_.emplace(id, std::move(render_meshes));
+}
+
+}  // namespace internal
 
 //-----------------------------------------------------------------------------
 
@@ -125,8 +178,7 @@ GeometryState<T>::GeometryState()
   const FrameId world = InternalFrame::world_frame_id();
   // As an arbitrary design choice, we'll say the world frame is its own parent.
   frames_[world] = InternalFrame(self_source_, world, "world",
-                                 InternalFrame::world_frame_group(),
-                                 0, world);
+                                 InternalFrame::world_frame_group(), 0, world);
   frame_index_to_id_map_.push_back(world);
   kinematics_data_.X_WFs.push_back(RigidTransform<T>::Identity());
   kinematics_data_.X_PFs.push_back(RigidTransform<T>::Identity());
@@ -135,6 +187,10 @@ GeometryState<T>::GeometryState()
   source_deformable_geometry_id_map_[self_source_] = {};
   source_frame_name_map_[self_source_] = {"world"};
   source_root_frame_map_[self_source_] = {world};
+
+  driven_mesh_data_[Role::kPerception] = {};
+  driven_mesh_data_[Role::kIllustration] = {};
+  driven_mesh_data_[Role::kProximity] = {};
 }
 
 namespace {
@@ -167,6 +223,50 @@ static RigidTransform<T> ChangeScalarType(const RigidTransform<U>& other) {
   }
 }
 
+// Helper for ApplyProximityDefaults(). Adds any proximity properties that are
+// (a) missing in `properties`, and (b) not nullopt in `defaults`.
+//
+// @returns true if any properties were modified.
+bool BackfillDefaults(ProximityProperties* properties,
+                      const DefaultProximityProperties& defaults) {
+  auto backfill = [&](const std::string& group_name, const std::string& name,
+                      const auto& default_value) -> bool {
+    if (properties->HasProperty(group_name, name)) {
+      return false;
+    }
+    if (!default_value.has_value()) {
+      return false;
+    }
+    properties->AddProperty(group_name, name, *default_value);
+    return true;
+  };
+
+  bool result = false;
+  std::optional<HydroelasticType> wrapped_compliance(
+      internal::GetHydroelasticTypeFromString(defaults.compliance_type));
+  result |= backfill(kHydroGroup, kComplianceType, wrapped_compliance);
+
+  result |= backfill(kHydroGroup, kElastic, defaults.hydroelastic_modulus);
+  result |= backfill(kHydroGroup, kRezHint, defaults.resolution_hint);
+  result |= backfill(kHydroGroup, kSlabThickness, defaults.slab_thickness);
+
+  result |= backfill(kMaterialGroup, kHcDissipation,
+                     defaults.hunt_crossley_dissipation);
+  result |= backfill(kMaterialGroup, kRelaxationTime, defaults.relaxation_time);
+  result |= backfill(kMaterialGroup, kPointStiffness, defaults.point_stiffness);
+  result |= backfill(kHydroGroup, kMargin, defaults.margin);
+  if (defaults.static_friction.has_value()) {
+    // DefaultProximityProperties::ValidateOrThrow() enforces invariants on
+    // friction quantities.
+    DRAKE_DEMAND(defaults.dynamic_friction.has_value());
+    const auto wrapped_friction =
+        std::make_optional<multibody::CoulombFriction<double>>(
+            *defaults.static_friction, *defaults.dynamic_friction);
+    result |= backfill(kMaterialGroup, kFriction, wrapped_friction);
+  }
+  return result;
+}
+
 }  // namespace
 
 // It is _vitally_ important that all members are _explicitly_ accounted for
@@ -186,6 +286,7 @@ GeometryState<T>::GeometryState(const GeometryState<U>& source)
       frames_(source.frames_),
       geometries_(source.geometries_),
       frame_index_to_id_map_(source.frame_index_to_id_map_),
+      driven_mesh_data_(source.driven_mesh_data_),
       geometry_engine_(
           std::move(source.geometry_engine_->template ToScalarType<T>())),
       render_engines_(source.render_engines_),
@@ -228,20 +329,30 @@ GeometryState<T>::GeometryState(const GeometryState<U>& source)
     }
   }
 }
+
 template <typename T>
-std::vector<GeometryId> GeometryState<T>::GetAllGeometryIds() const {
-  std::vector<GeometryId> ids;
-  ids.reserve(geometries_.size());
-  for (const auto& id_geometry_pair : geometries_) {
-    ids.push_back(id_geometry_pair.first);
+std::vector<GeometryId> GeometryState<T>::GetAllGeometryIds(
+    std::optional<Role> role) const {
+  std::vector<GeometryId> result;
+  if (role.has_value()) {
+    for (const auto& [geometry_id, internal_geometry] : geometries_) {
+      if (internal_geometry.has_role(*role)) {
+        result.push_back(geometry_id);
+      }
+    }
+  } else {
+    result.reserve(geometries_.size());
+    for (const auto& [geometry_id, _] : geometries_) {
+      result.push_back(geometry_id);
+    }
   }
-  std::sort(ids.begin(), ids.end());
-  return ids;
+  std::sort(result.begin(), result.end());
+  return result;
 }
 
 template <typename T>
 unordered_set<GeometryId> GeometryState<T>::GetGeometryIds(
-      const GeometrySet& geometry_set, const std::optional<Role>& role) const {
+    const GeometrySet& geometry_set, std::optional<Role> role) const {
   return CollectIds(geometry_set, role, CollisionFilterScope::kAll);
 }
 
@@ -250,6 +361,15 @@ int GeometryState<T>::NumGeometriesWithRole(Role role) const {
   int count = 0;
   for (const auto& pair : geometries_) {
     if (pair.second.has_role(role)) ++count;
+  }
+  return count;
+}
+
+template <typename T>
+int GeometryState<T>::NumDeformableGeometriesWithRole(Role role) const {
+  int count = 0;
+  for (const auto& pair : geometries_) {
+    if (pair.second.has_role(role) && pair.second.is_deformable()) ++count;
   }
   return count;
 }
@@ -353,8 +473,7 @@ int GeometryState<T>::NumFramesForSource(SourceId source_id) const {
 }
 
 template <typename T>
-const FrameIdSet& GeometryState<T>::FramesForSource(
-    SourceId source_id) const {
+const FrameIdSet& GeometryState<T>::FramesForSource(SourceId source_id) const {
   return GetValueOrThrow(source_id, source_frame_id_map_);
 }
 
@@ -378,7 +497,7 @@ template <typename T>
 const std::string& GeometryState<T>::GetName(FrameId frame_id) const {
   FindOrThrow(frame_id, frames_, [frame_id]() {
     return "No frame name available for invalid frame id: " +
-        to_string(frame_id);
+           to_string(frame_id);
   });
   return frames_.at(frame_id).name();
 }
@@ -387,7 +506,7 @@ template <typename T>
 FrameId GeometryState<T>::GetParentFrame(FrameId frame_id) const {
   FindOrThrow(frame_id, frames_, [frame_id]() {
     return "No frame name available for invalid frame id: " +
-        to_string(frame_id);
+           to_string(frame_id);
   });
   const FrameId parent_frame_id = frames_.at(frame_id).parent_frame_id();
   if (parent_frame_id == frame_id) {
@@ -401,7 +520,7 @@ template <typename T>
 int GeometryState<T>::GetFrameGroup(FrameId frame_id) const {
   FindOrThrow(frame_id, frames_, [frame_id]() {
     return "No frame group available for invalid frame id: " +
-        to_string(frame_id);
+           to_string(frame_id);
   });
   return frames_.at(frame_id).frame_group();
 }
@@ -428,7 +547,7 @@ int GeometryState<T>::NumGeometriesWithRole(FrameId frame_id, Role role) const {
   int count = 0;
   FindOrThrow(frame_id, frames_, [frame_id, role]() {
     return "Cannot report number of geometries with the " + to_string(role) +
-        " role for invalid frame id: " + to_string(frame_id);
+           " role for invalid frame id: " + to_string(frame_id);
   });
   const InternalFrame& frame = frames_.at(frame_id);
   for (GeometryId id : frame.child_geometries()) {
@@ -507,7 +626,7 @@ template <typename T>
 bool GeometryState<T>::BelongsToSource(GeometryId geometry_id,
                                        SourceId source_id) const {
   // Confirm valid source id.
-  FindOrThrow(source_id, source_names_, [source_id](){
+  FindOrThrow(source_id, source_names_, [source_id]() {
     return get_missing_id_message(source_id);
   });
   // If this fails, the geometry_id is not valid and an exception is thrown.
@@ -533,7 +652,7 @@ const std::string& GeometryState<T>::GetName(GeometryId geometry_id) const {
   if (geometry != nullptr) return geometry->name();
 
   throw std::logic_error("No geometry available for invalid geometry id: " +
-      to_string(geometry_id));
+                         to_string(geometry_id));
 }
 
 template <typename T>
@@ -542,7 +661,7 @@ const Shape& GeometryState<T>::GetShape(GeometryId id) const {
   if (geometry != nullptr) return geometry->shape();
 
   throw std::logic_error("No geometry available for invalid geometry id: " +
-      to_string(id));
+                         to_string(id));
 }
 
 template <typename T>
@@ -617,6 +736,21 @@ const VolumeMesh<double>* GeometryState<T>::GetReferenceMesh(
 }
 
 template <typename T>
+const std::vector<RenderMesh>& GeometryState<T>::GetDrivenRenderMeshes(
+    GeometryId id, Role role) const {
+  const InternalGeometry* geometry = GetGeometry(id);
+  DRAKE_THROW_UNLESS(role != Role::kUnassigned);
+  if (geometry == nullptr || !geometry->has_role(role) ||
+      !geometry->is_deformable()) {
+    throw std::logic_error(
+        fmt::format("Referenced geometry {} is not a registered deformable "
+                    "geometry with specified role {}",
+                    id, role));
+  }
+  return driven_mesh_data_.at(role).render_meshes(id);
+}
+
+template <typename T>
 bool GeometryState<T>::IsDeformableGeometry(GeometryId id) const {
   const InternalGeometry& geometry = GetValueOrThrow(id, geometries_);
   return geometry.is_deformable();
@@ -632,11 +766,53 @@ std::vector<GeometryId> GeometryState<T>::GetAllDeformableGeometryIds() const {
   return ids;
 }
 
+namespace {
+
+// Extracts a convex hull from the two shapes that support it (returning
+// nullptr for everything else). Essentially, this merely serves as a mechanism
+// for finding a pointer to a convex hull that is stored with the corresponding
+// InternalGeometry. Therefore, the lifespan of a HullExtractor has no bearing
+// on the lifespan of the pointer returned.
+class HullExtractor final : public ShapeReifier {
+ public:
+  HullExtractor() = default;
+  ~HullExtractor() = default;
+
+  const PolygonSurfaceMesh<double>* GetConvexHull() const { return hull_; }
+
+ private:
+  // Don't throw for the rest, nullptr is fine.
+  void ThrowUnsupportedGeometry(const std::string&) final {}
+
+  using ShapeReifier::ImplementGeometry;
+
+  void ImplementGeometry(const Mesh& mesh, void*) final {
+    hull_ = &mesh.GetConvexHull();
+  }
+
+  void ImplementGeometry(const Convex& convex, void*) final {
+    hull_ = &convex.GetConvexHull();
+  }
+
+  const PolygonSurfaceMesh<double>* hull_{nullptr};
+};
+
+}  // namespace
+
+template <typename T>
+const PolygonSurfaceMesh<double>* GeometryState<T>::GetConvexHull(
+    GeometryId id) const {
+  const InternalGeometry& geometry = GetValueOrThrow(id, geometries_);
+  HullExtractor extractor;
+  geometry.shape().Reify(&extractor);
+  return extractor.GetConvexHull();
+}
+
 template <typename T>
 bool GeometryState<T>::CollisionFiltered(GeometryId id1, GeometryId id2) const {
   std::string base_message =
       "Can't report collision filter status between geometries " +
-          to_string(id1) + " and " + to_string(id2) + "; ";
+      to_string(id1) + " and " + to_string(id2) + "; ";
   const internal::InternalGeometry* geometry1 = GetGeometry(id1);
   const internal::InternalGeometry* geometry2 = GetGeometry(id2);
   if (geometry1 != nullptr && geometry2 != nullptr) {
@@ -646,20 +822,20 @@ bool GeometryState<T>::CollisionFiltered(GeometryId id1, GeometryId id2) const {
     }
     if (geometry1->has_proximity_role()) {
       throw std::logic_error(base_message + to_string(id2) +
-          " does not have a proximity role");
+                             " does not have a proximity role");
     } else if (geometry2->has_proximity_role()) {
       throw std::logic_error(base_message + to_string(id1) +
-          " does not have a proximity role");
+                             " does not have a proximity role");
     } else {
       throw std::logic_error(base_message + " neither id has a proximity role");
     }
   }
   if (geometry1 != nullptr) {
     throw std::logic_error(base_message + to_string(id2) +
-        " is not a valid geometry");
+                           " is not a valid geometry");
   } else if (geometry2 != nullptr) {
     throw std::logic_error(base_message + to_string(id1) +
-        " is not a valid geometry");
+                           " is not a valid geometry");
   } else {
     throw std::logic_error(base_message + "neither id is a valid geometry");
   }
@@ -717,6 +893,30 @@ const VectorX<T>& GeometryState<T>::get_configurations_in_world(
 }
 
 template <typename T>
+std::vector<VectorX<T>> GeometryState<T>::GetDrivenMeshConfigurationsInWorld(
+    GeometryId geometry_id, Role role) const {
+  FindOrThrow(geometry_id, geometries_, [geometry_id]() {
+    return "No mesh configurations available for invalid geometry id: " +
+           to_string(geometry_id);
+  });
+  const auto& geometry = GetValueOrThrow(geometry_id, geometries_);
+  DRAKE_THROW_UNLESS(geometry.is_deformable());
+  DRAKE_THROW_UNLESS(geometry.has_role(role));
+  DRAKE_THROW_UNLESS(role != Role::kUnassigned);
+
+  auto calc_configuration = [&](const internal::DrivenMeshData& data) {
+    std::vector<VectorX<T>> result;
+    DRAKE_THROW_UNLESS(data.driven_meshes().contains(geometry_id));
+    for (const auto& mesh : data.driven_meshes().at(geometry_id)) {
+      result.emplace_back(mesh.GetDrivenVertexPositions());
+    }
+    return result;
+  };
+
+  return calc_configuration(driven_mesh_data_.at(role));
+}
+
+template <typename T>
 SourceId GeometryState<T>::RegisterNewSource(const std::string& name) {
   SourceId source_id = SourceId::get_new_id();
   const std::string final_name =
@@ -750,17 +950,19 @@ FrameId GeometryState<T>::RegisterFrame(SourceId source_id, FrameId parent_id,
                                         const GeometryFrame& frame) {
   FrameId frame_id = frame.id();
 
-  if (frames_.count(frame_id) > 0) {
+  if (frames_.contains(frame_id)) {
     throw std::logic_error(
         "Registering frame with an id that has already been registered: " +
-            to_string(frame_id));
+        to_string(frame_id));
   }
 
   FrameIdSet& f_set = GetMutableValueOrThrow(source_id, &source_frame_id_map_);
   if (parent_id != InternalFrame::world_frame_id()) {
     FindOrThrow(parent_id, f_set, [parent_id, source_id]() {
-      return "Indicated parent id " + to_string(parent_id) + " does not belong "
-          "to the indicated source id " + to_string(source_id) + ".";
+      return "Indicated parent id " + to_string(parent_id) +
+             " does not belong "
+             "to the indicated source id " +
+             to_string(source_id) + ".";
     });
     frames_[parent_id].add_child(frame_id);
   } else {
@@ -782,29 +984,29 @@ FrameId GeometryState<T>::RegisterFrame(SourceId source_id, FrameId parent_id,
   kinematics_data_.X_WFs.emplace_back(RigidTransform<T>::Identity());
   frame_index_to_id_map_.push_back(frame_id);
   f_set.insert(frame_id);
-  frames_.emplace(frame_id, InternalFrame(source_id, frame_id, frame.name(),
-                                          frame.frame_group(), index,
-                                          parent_id));
+  frames_.emplace(frame_id,
+                  InternalFrame(source_id, frame_id, frame.name(),
+                                frame.frame_group(), index, parent_id));
   return frame_id;
 }
 
 template <typename T>
 void GeometryState<T>::RenameFrame(FrameId frame_id, const std::string& name) {
   FindOrThrow(frame_id, frames_, [frame_id]() {
-    return "Cannot rename frame with invalid frame id: " +
-        to_string(frame_id);
+    return "Cannot rename frame with invalid frame id: " + to_string(frame_id);
   });
   InternalFrame& frame = frames_.at(frame_id);
   const std::string old_name(frame.name());
-  if (old_name == name) { return; }
+  if (old_name == name) {
+    return;
+  }
 
   SourceId source_id = frame.source_id();
 
   // Edit source_frame_name_map_.
   FrameNameSet& f_name_set = source_frame_name_map_.at(source_id);
   f_name_set.erase(old_name);
-  const auto& [iterator, was_inserted] =
-      f_name_set.insert(std::string(name));
+  const auto& [iterator, was_inserted] = f_name_set.insert(std::string(name));
   if (!was_inserted) {
     throw std::logic_error(
         fmt::format("Renaming frame from '{}'"
@@ -821,9 +1023,9 @@ GeometryId GeometryState<T>::RegisterGeometry(
     SourceId source_id, FrameId frame_id,
     std::unique_ptr<GeometryInstance> geometry) {
   if (geometry == nullptr) {
-    throw std::logic_error(
-        "Registering null geometry to frame " + to_string(frame_id) +
-            ", on source " + to_string(source_id) + ".");
+    throw std::logic_error("Registering null geometry to frame " +
+                           to_string(frame_id) + ", on source " +
+                           to_string(source_id) + ".");
   }
   const GeometryId geometry_id = geometry->id();
   ValidateRegistrationAndSetTopology(source_id, frame_id, geometry_id);
@@ -889,11 +1091,12 @@ void GeometryState<T>::RenameGeometry(GeometryId geometry_id,
                                       const std::string& name) {
   InternalGeometry* geometry = GetMutableGeometry(geometry_id);
   if (geometry == nullptr) {
-    throw std::logic_error(
-        "Cannot rename geometry with invalid geometry id: "
-        + to_string(geometry_id));
+    throw std::logic_error("Cannot rename geometry with invalid geometry id: " +
+                           to_string(geometry_id));
   }
-  if (geometry->name() == name) { return; }
+  if (geometry->name() == name) {
+    return;
+  }
 
   // Check for name uniqueness in all assigned roles. Note: if the universe of
   // roles grows, this iteration will need to grow as well.
@@ -963,8 +1166,7 @@ void GeometryState<T>::ChangeShape(SourceId source_id, GeometryId geometry_id,
 
 template <typename T>
 GeometryId GeometryState<T>::RegisterAnchoredGeometry(
-    SourceId source_id,
-    std::unique_ptr<GeometryInstance> geometry) {
+    SourceId source_id, std::unique_ptr<GeometryInstance> geometry) {
   return RegisterGeometry(source_id, InternalFrame::world_frame_id(),
                           std::move(geometry));
 }
@@ -973,10 +1175,13 @@ template <typename T>
 void GeometryState<T>::RemoveGeometry(SourceId source_id,
                                       GeometryId geometry_id) {
   if (!BelongsToSource(geometry_id, source_id)) {
-    throw std::logic_error(
-        "Trying to remove geometry " + to_string(geometry_id) + " from "
-            "source " + to_string(source_id) + ", but the geometry doesn't "
-            "belong to that source.");
+    throw std::logic_error("Trying to remove geometry " +
+                           to_string(geometry_id) +
+                           " from "
+                           "source " +
+                           to_string(source_id) +
+                           ", but the geometry doesn't "
+                           "belong to that source.");
   }
 
   const InternalGeometry& geometry = GetValueOrThrow(geometry_id, geometries_);
@@ -1063,6 +1268,13 @@ void GeometryState<T>::AssignRole(SourceId source_id, GeometryId geometry_id,
     default:
       DRAKE_UNREACHABLE();
   }
+
+  // If the geometry is deformable, we need to register its driven meshes. We
+  // always blindly throw out the old driven mesh data and replace it with a new
+  // driven mesh data.
+  if (geometry.is_deformable()) {
+    RegisterDrivenMesh(geometry_id, Role::kProximity);
+  }
 }
 
 template <typename T>
@@ -1083,6 +1295,10 @@ void GeometryState<T>::AssignRole(SourceId source_id, GeometryId geometry_id,
 
   geometry.SetRole(std::move(properties));
 
+  if (geometry.is_deformable()) {
+    RegisterDrivenMesh(geometry_id, Role::kPerception);
+  }
+
   const bool added_to_renderer = AddToCompatibleRenderersUnchecked(geometry);
 
   if (!added_to_renderer && render_engines_.size() > 0) {
@@ -1097,13 +1313,20 @@ template <typename T>
 void GeometryState<T>::AssignRole(SourceId source_id, GeometryId geometry_id,
                                   IllustrationProperties properties,
                                   RoleAssign assign) {
+  InternalGeometry& geometry =
+      ValidateRoleAssign(source_id, geometry_id, Role::kIllustration, assign);
+
+  // We don't warn until after all the error checking has already happened.
   if (properties.HasProperty("phong", "diffuse_map")) {
     static logging::Warn log_once(
         "Explicitly defined values for the ('phong', 'diffuse_map') property "
         "are not currently used in illustration roles -- only perception "
-        "roles");
+        "roles. This warning is only shown during SceneGraph's first encounter "
+        "with an ignored 'diffuse_map', which occurred with the geometry named "
+        "'{}' on a geometry frame named '{}'; "
+        "further encounters will be silently ignored.",
+        GetName(geometry_id), GetName(GetFrameId(geometry_id)));
   }
-
   // TODO(SeanCurtis-TRI): We want to remove this warning. For that to happen,
   // we need systems dependent on illustration properties to recognize if there
   // has been a change since last they processed the state. The simplest way to
@@ -1121,12 +1344,13 @@ void GeometryState<T>::AssignRole(SourceId source_id, GeometryId geometry_id,
         "property changes, force the visualizer to re-initialize via its API.");
   }
 
-  InternalGeometry& geometry =
-      ValidateRoleAssign(source_id, geometry_id, Role::kIllustration, assign);
-
   geometry_version_.modify_illustration();
 
   geometry.SetRole(std::move(properties));
+
+  if (geometry.is_deformable()) {
+    RegisterDrivenMesh(geometry_id, Role::kIllustration);
+  }
 }
 
 template <typename T>
@@ -1157,10 +1381,10 @@ template <typename T>
 int GeometryState<T>::RemoveRole(SourceId source_id, GeometryId geometry_id,
                                  Role role) {
   if (!BelongsToSource(geometry_id, source_id)) {
-    throw std::logic_error(
-        "Trying to remove the role " + to_string(role) + " from the geometry " +
-            to_string(geometry_id) + " from source " + to_string(source_id) +
-            ", but the geometry doesn't belong to that source.");
+    throw std::logic_error("Trying to remove the role " + to_string(role) +
+                           " from the geometry " + to_string(geometry_id) +
+                           " from source " + to_string(source_id) +
+                           ", but the geometry doesn't belong to that source.");
   }
 
   // One can't "remove" the unassigned role state.
@@ -1193,10 +1417,14 @@ int GeometryState<T>::RemoveFromRenderer(const std::string& renderer_name,
                                          SourceId source_id,
                                          GeometryId geometry_id) {
   if (!BelongsToSource(geometry_id, source_id)) {
-    throw std::logic_error(
-        "Trying to remove geometry " + to_string(geometry_id) + " from the "
-        "renderer '" + renderer_name + "', but the geometry doesn't belong to "
-        "given source " + to_string(source_id) + ".");
+    throw std::logic_error("Trying to remove geometry " +
+                           to_string(geometry_id) +
+                           " from the "
+                           "renderer '" +
+                           renderer_name +
+                           "', but the geometry doesn't belong to "
+                           "given source " +
+                           to_string(source_id) + ".");
   }
 
   return RemoveFromRendererUnchecked(renderer_name, geometry_id) ? 1 : 0;
@@ -1222,17 +1450,17 @@ void ThrowForNonProximity(const internal::InternalGeometry& g,
 
 template <typename T>
 SignedDistancePair<T> GeometryState<T>::ComputeSignedDistancePairClosestPoints(
-      GeometryId id_A, GeometryId id_B) const {
-    ThrowForNonProximity(GetValueOrThrow(id_A, geometries_), __func__);
-    ThrowForNonProximity(GetValueOrThrow(id_B, geometries_), __func__);
-    return geometry_engine_->ComputeSignedDistancePairClosestPoints(
-        id_A, id_B, kinematics_data_.X_WGs);
-  }
+    GeometryId id_A, GeometryId id_B) const {
+  ThrowForNonProximity(GetValueOrThrow(id_A, geometries_), __func__);
+  ThrowForNonProximity(GetValueOrThrow(id_B, geometries_), __func__);
+  return geometry_engine_->ComputeSignedDistancePairClosestPoints(
+      id_A, id_B, kinematics_data_.X_WGs);
+}
 
 template <typename T>
 void GeometryState<T>::AddRenderer(
     std::string name, std::unique_ptr<render::RenderEngine> renderer) {
-  if (render_engines_.count(name) > 0) {
+  if (render_engines_.contains(name)) {
     throw std::logic_error(fmt::format(
         "AddRenderer(): A renderer with the name '{}' already exists", name));
   }
@@ -1251,11 +1479,17 @@ void GeometryState<T>::AddRenderer(
       DRAKE_DEMAND(properties != nullptr);
       auto accepting_renderers = properties->GetPropertyOrDefault(
           "renderer", "accepting", set<string>{});
-      if (accepting_renderers.empty() || accepting_renderers.count(name) > 0) {
+      if (accepting_renderers.empty() || accepting_renderers.contains(name)) {
         const GeometryId id = id_geo_pair.first;
-        accepted |= render_engine->RegisterVisual(
-            id, geometry.shape(), *properties, RigidTransformd(geometry.X_FG()),
-            geometry.is_dynamic());
+        if (geometry.is_deformable()) {
+          accepted |= render_engine->RegisterDeformableVisual(
+              id, driven_mesh_data_.at(Role::kPerception).render_meshes(id),
+              *properties);
+        } else {
+          accepted |= render_engine->RegisterVisual(
+              id, geometry.shape(), *properties,
+              RigidTransformd(geometry.X_FG()), geometry.is_dynamic());
+        }
       }
     }
   }
@@ -1264,6 +1498,17 @@ void GeometryState<T>::AddRenderer(
   if (accepted) {
     geometry_version_.modify_perception();
   }
+}
+
+template <typename T>
+void GeometryState<T>::RemoveRenderer(const std::string& name) {
+  if (!render_engines_.contains(name)) {
+    throw std::logic_error(fmt::format(
+        "RemoveRenderer(): A renderer with the name '{}' does not exist",
+        name));
+  }
+  render_engines_.erase(name);
+  geometry_version_.modify_perception();
 }
 
 template <typename T>
@@ -1320,10 +1565,44 @@ void GeometryState<T>::RenderLabelImage(const ColorRenderCamera& camera,
 }
 
 template <typename T>
-std::unique_ptr<GeometryState<AutoDiffXd>>
-GeometryState<T>::ToAutoDiffXd() const {
+std::unique_ptr<GeometryState<AutoDiffXd>> GeometryState<T>::ToAutoDiffXd()
+    const {
   return std::unique_ptr<GeometryState<AutoDiffXd>>(
       new GeometryState<AutoDiffXd>(*this));
+}
+
+template <typename T>
+void GeometryState<T>::ApplyProximityDefaults(
+    const DefaultProximityProperties& defaults) {
+  for (const auto& geometry_id : GetAllGeometryIds(Role::kProximity)) {
+    ApplyProximityDefaults(defaults, geometry_id);
+  }
+}
+
+template <typename T>
+void GeometryState<T>::ApplyProximityDefaults(
+    const DefaultProximityProperties& defaults,
+    GeometryId geometry_id) {
+  // TODO(#20820) Maybe this can be removed later.
+  // Leave deformables untouched.
+  if (IsDeformableGeometry(geometry_id)) {
+    return;
+  }
+
+  // Get current proximity properties, required by documented precondition.
+  const auto* found_props = GetProximityProperties(geometry_id);
+  DRAKE_DEMAND(found_props != nullptr);
+  ProximityProperties props(*found_props);
+
+  // Update properties with defaults. Return early if nothing changed.
+  bool changed = BackfillDefaults(&props, defaults);
+  if (!changed) {
+    return;
+  }
+
+  // Make the final changes to proximity properties.
+  AssignRole(get_source_id(geometry_id), geometry_id, props,
+             RoleAssign::kReplace);
 }
 
 template <typename T>
@@ -1373,7 +1652,7 @@ void GeometryState<T>::SetFramePoses(
   const RigidTransform<T> world_pose = RigidTransform<T>::Identity();
   for (auto frame_id : source_root_frame_map_.at(source_id)) {
     UpdatePosesRecursively(frames_.at(frame_id), world_pose, poses,
-        kinematics_data);
+                           kinematics_data);
   }
 }
 
@@ -1398,10 +1677,10 @@ void GeometryState<T>::ValidateFrameIds(
   if (ref_frame_count != kinematics_data.size()) {
     // TODO(SeanCurtis-TRI): Determine if more specific information is required.
     // e.g., which frames are missing/added.
-    throw std::runtime_error(
-        "Disagreement in expected number of frames (" +
-        to_string(frames.size()) + ") and the given number of frames (" +
-        to_string(kinematics_data.size()) + ").");
+    throw std::runtime_error("Disagreement in expected number of frames (" +
+                             to_string(frames.size()) +
+                             ") and the given number of frames (" +
+                             to_string(kinematics_data.size()) + ").");
   }
   for (auto id : frames) {
     if (!kinematics_data.has_id(id)) {
@@ -1416,7 +1695,7 @@ void GeometryState<T>::ValidateFrameIds(
 template <typename T>
 void GeometryState<T>::ValidateRegistrationAndSetTopology(
     SourceId source_id, FrameId frame_id, GeometryId geometry_id) {
-  if (geometries_.count(geometry_id) > 0) {
+  if (geometries_.contains(geometry_id)) {
     throw std::logic_error(
         "Registering geometry with an id that has already been registered: " +
         to_string(geometry_id));
@@ -1426,8 +1705,9 @@ void GeometryState<T>::ValidateRegistrationAndSetTopology(
   if (frame_id == InternalFrame::world_frame_id()) {
     // Explicitly validate the source id because it won't happen in acquiring
     // the world frame.
-    FindOrThrow(source_id, source_frame_id_map_,
-                [source_id]() { return get_missing_id_message(source_id); });
+    FindOrThrow(source_id, source_frame_id_map_, [source_id]() {
+      return get_missing_id_message(source_id);
+    });
     frame_source_id = self_source_;
   }
 
@@ -1449,9 +1729,9 @@ void GeometryState<T>::ValidateRegistrationAndSetTopology(
 
 template <typename T>
 void GeometryState<T>::FinalizePoseUpdate(
-      const internal::KinematicsData<T>& kinematics_data,
-      internal::ProximityEngine<T>* proximity_engine,
-      std::vector<render::RenderEngine*> render_engines) const {
+    const internal::KinematicsData<T>& kinematics_data,
+    internal::ProximityEngine<T>* proximity_engine,
+    std::vector<render::RenderEngine*> render_engines) const {
   proximity_engine->UpdateWorldPoses(kinematics_data.X_WGs);
   for (auto* render_engine : render_engines) {
     render_engine->UpdatePoses(kinematics_data.X_WGs);
@@ -1461,10 +1741,25 @@ void GeometryState<T>::FinalizePoseUpdate(
 template <typename T>
 void GeometryState<T>::FinalizeConfigurationUpdate(
     const internal::KinematicsData<T>& kinematics_data,
+    const internal::DrivenMeshData& driven_meshes,
     internal::ProximityEngine<T>* proximity_engine,
-    std::vector<render::RenderEngine*>) const {
+    std::vector<render::RenderEngine*> render_engines) const {
   proximity_engine->UpdateDeformableVertexPositions(kinematics_data.q_WGs);
-  // TODO(xuchenhan-tri): Update render engine as necessary.
+  for (const auto& [id, meshes] : driven_meshes.driven_meshes()) {
+    // Vertex positions of driven meshes.
+    std::vector<VectorX<double>> q_WDs(meshes.size());
+    // Vertex normals of driven meshes.
+    std::vector<VectorX<double>> nhats_W(meshes.size());
+    for (int i = 0; i < ssize(meshes); ++i) {
+      // TODO(xuchenhan-tri): Consider eliminating the copy here if performance
+      // is an issue.
+      q_WDs[i] = meshes[i].GetDrivenVertexPositions();
+      nhats_W[i] = meshes[i].GetDrivenVertexNormals();
+    }
+    for (auto* render_engine : render_engines) {
+      render_engine->UpdateDeformableConfigurations(id, q_WDs, nhats_W);
+    }
+  }
 }
 
 template <typename T>
@@ -1544,8 +1839,10 @@ template <typename T>
 void GeometryState<T>::ThrowIfNameExistsInRole(FrameId id, Role role,
                                                const std::string& name) const {
   if (!NameIsUnique(id, role, name)) {
-    throw std::logic_error("The name '" + name + "' has already been used by "
-        "a geometry with the '" + to_string(role) + "' role.");
+    throw std::logic_error("The name '" + name +
+                           "' has already been used by "
+                           "a geometry with the '" +
+                           to_string(role) + "' role.");
   }
 }
 
@@ -1580,8 +1877,8 @@ InternalGeometry& GeometryState<T>::ValidateRoleAssign(SourceId source_id,
                                                        RoleAssign assign) {
   if (!BelongsToSource(geometry_id, source_id)) {
     throw std::logic_error("Given geometry id " + to_string(geometry_id) +
-        " does not belong to the given source id " +
-        to_string(source_id));
+                           " does not belong to the given source id " +
+                           to_string(source_id));
   }
   InternalGeometry* geometry = GetMutableGeometry(geometry_id);
   // Must be non-null, otherwise, we never would've gotten past the
@@ -1593,14 +1890,14 @@ InternalGeometry& GeometryState<T>::ValidateRoleAssign(SourceId source_id,
   const bool has_role = geometry->has_role(role);
   if (has_role && assign == RoleAssign::kNew) {
     throw std::logic_error(
-        "Trying to assign the '" + to_string(role)
-        + "' role to geometry id " + to_string(geometry_id)
-        + " for the first time; it already has the role assigned");
+        "Trying to assign the '" + to_string(role) + "' role to geometry id " +
+        to_string(geometry_id) +
+        " for the first time; it already has the role assigned");
   } else if (!has_role && assign == RoleAssign::kReplace) {
     throw std::logic_error(
-        "Trying to replace the properties on geometry id "
-        + to_string(geometry_id) + " for the '" + to_string(role)
-        + "' role; it has not had the role initially assigned");
+        "Trying to replace the properties on geometry id " +
+        to_string(geometry_id) + " for the '" + to_string(role) +
+        "' role; it has not had the role initially assigned");
   }
 
   if (!has_role && assign == RoleAssign::kNew) {
@@ -1679,22 +1976,25 @@ bool GeometryState<T>::RemoveFromRendererUnchecked(
 template <typename T>
 bool GeometryState<T>::AddToCompatibleRenderersUnchecked(
     const internal::InternalGeometry& geometry) {
-  const PerceptionProperties& properties = *geometry.perception_properties();
-
-  const RigidTransformd& X_WG =
-      convert_to_double(kinematics_data_.X_WGs.at(geometry.id()));
-
+  bool added_to_renderer = false;
   auto accepting_renderers =
-      properties.GetPropertyOrDefault("renderer", "accepting", set<string>{});
-
-  bool added_to_renderer{false};
+      geometry.perception_properties()->GetPropertyOrDefault(
+          "renderer", "accepting", set<string>{});
+  std::vector<render::RenderEngine*> candidate_renderers;
   for (auto& [name, engine] : render_engines_) {
-    if (accepting_renderers.empty() || accepting_renderers.count(name) > 0) {
-      added_to_renderer =
-          engine->RegisterVisual(geometry.id(), geometry.shape(), properties,
-                                 X_WG, geometry.is_dynamic()) ||
-          added_to_renderer;
+    // If no "accepting_renderer" has been specified, every renderer will be
+    // given the chance to register the geometry.
+    if (accepting_renderers.empty() || accepting_renderers.contains(name)) {
+      candidate_renderers.emplace_back(engine.get_mutable());
     }
+  }
+  if (candidate_renderers.empty()) return false;
+  if (geometry.is_deformable()) {
+    added_to_renderer = AddDeformableToCompatibleRenderersUnchecked(
+        geometry, &candidate_renderers);
+  } else {
+    added_to_renderer =
+        AddRigidToCompatibleRenderersUnchecked(geometry, &candidate_renderers);
   }
   if (added_to_renderer) {
     // Increment version number only if some renderer picks up the role
@@ -1702,6 +2002,84 @@ bool GeometryState<T>::AddToCompatibleRenderersUnchecked(
     geometry_version_.modify_perception();
   }
   return added_to_renderer;
+}
+
+template <typename T>
+bool GeometryState<T>::AddRigidToCompatibleRenderersUnchecked(
+    const internal::InternalGeometry& geometry,
+    std::vector<render::RenderEngine*>* candidate_renderers) {
+  const PerceptionProperties& properties = *geometry.perception_properties();
+
+  const RigidTransformd& X_WG =
+      convert_to_double(kinematics_data_.X_WGs.at(geometry.id()));
+
+  bool added_to_renderer{false};
+  for (auto& engine : *candidate_renderers) {
+    added_to_renderer =
+        engine->RegisterVisual(geometry.id(), geometry.shape(), properties,
+                               X_WG, geometry.is_dynamic()) ||
+        added_to_renderer;
+  }
+  return added_to_renderer;
+}
+
+template <typename T>
+bool GeometryState<T>::AddDeformableToCompatibleRenderersUnchecked(
+    const internal::InternalGeometry& geometry,
+    std::vector<render::RenderEngine*>* candidate_renderers) {
+  const GeometryId id = geometry.id();
+  const PerceptionProperties& properties = *geometry.perception_properties();
+  bool added_to_renderer{false};
+  for (auto& engine : *candidate_renderers) {
+    added_to_renderer =
+        engine->RegisterDeformableVisual(
+            id, driven_mesh_data_.at(Role::kPerception).render_meshes(id),
+            properties) ||
+        added_to_renderer;
+  }
+  return added_to_renderer;
+}
+
+template <typename T>
+void GeometryState<T>::RegisterDrivenMesh(GeometryId geometry_id, Role role) {
+  InternalGeometry& geometry = geometries_[geometry_id];
+  DRAKE_DEMAND(geometry.is_deformable());
+  DRAKE_DEMAND(role != Role::kUnassigned);
+  DRAKE_DEMAND(geometry.has_role(role));
+  const GeometryProperties& properties = *geometry.properties(role);
+
+  const VolumeMesh<double>* control_mesh_ptr = geometry.reference_mesh();
+  DRAKE_DEMAND(control_mesh_ptr != nullptr);
+  const VolumeMesh<double>& control_mesh = *control_mesh_ptr;
+
+  std::vector<RenderMesh> render_meshes;
+  std::vector<DrivenTriangleMesh> driven_meshes;
+
+  if (role == Role::kPerception) {
+    // TODO(xuchenhan-tri): consider allowing embedded mesh for illustration
+    // similar to the driven perception mesh.
+    const std::filesystem::path render_meshes_file =
+        properties.GetPropertyOrDefault("deformable", "embedded_mesh",
+                                        string{});
+    if (!render_meshes_file.empty()) {
+      render_meshes =
+          internal::LoadRenderMeshesFromObj(render_meshes_file, properties, {});
+      for (const internal::RenderMesh& render_mesh : render_meshes) {
+        driven_meshes.emplace_back(MakeTriangleSurfaceMesh(render_mesh),
+                                   control_mesh);
+      }
+      driven_mesh_data_[Role::kPerception].SetMeshes(
+          geometry_id, std::move(driven_meshes), std::move(render_meshes));
+      return;
+    }
+  }
+
+  // Simply go with the surface mesh of the control mesh.
+  driven_meshes.emplace_back(internal::MakeDrivenSurfaceMesh(control_mesh));
+  render_meshes.emplace_back(MakeRenderMeshFromTriangleSurfaceMesh(
+      driven_meshes.back().triangle_surface_mesh(), properties));
+  driven_mesh_data_[role].SetMeshes(geometry_id, std::move(driven_meshes),
+                                    std::move(render_meshes));
 }
 
 template <typename T>
@@ -1751,8 +2129,12 @@ bool GeometryState<T>::RemovePerceptionRole(GeometryId geometry_id) {
   if (!geometry->has_perception_role()) return false;
 
   // Geometry has a perception role; do the work to remove it from whichever
-  // render engines it happens to present in.
+  // render engines it happens to be present in and also remove its driven
+  // perception meshes.
   RemoveFromAllRenderersUnchecked(geometry_id);
+  if (IsDeformableGeometry(geometry_id)) {
+    driven_mesh_data_[Role::kPerception].Remove(geometry_id);
+  }
   geometry->RemovePerceptionRole();
   return true;
 }
@@ -1768,12 +2150,11 @@ const InternalFrame& GeometryState<T>::ValidateAndGetFrame(
     return frames_.at(frame_id);
   } else {
     // The generic test that the frame_id is owned by the source_id.
-    const FrameIdSet& set =
-        GetValueOrThrow(source_id, source_frame_id_map_);
+    const FrameIdSet& set = GetValueOrThrow(source_id, source_frame_id_map_);
     FindOrThrow(frame_id, set, [frame_id, source_id]() {
       return "Referenced frame " + to_string(frame_id) + " for source " +
-          to_string(source_id) +
-          ", but the frame doesn't belong to the source.";
+             to_string(source_id) +
+             ", but the frame doesn't belong to the source.";
     });
   }
   return frames_.at(frame_id);
@@ -1821,4 +2202,7 @@ template GeometryState<Expression>::GeometryState(const GeometryState<AutoDiffXd
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::geometry::GeometryState)
+    class ::drake::geometry::GeometryState);
+DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
+    (&drake::geometry::internal::DrivenMeshData::
+         template SetControlMeshPositions<T>));

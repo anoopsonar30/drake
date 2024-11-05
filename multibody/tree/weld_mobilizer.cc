@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "drake/multibody/tree/body_node_impl.h"
 #include "drake/multibody/tree/multibody_tree.h"
 
 namespace drake {
@@ -9,47 +10,53 @@ namespace multibody {
 namespace internal {
 
 template <typename T>
+WeldMobilizer<T>::~WeldMobilizer() = default;
+
+template <typename T>
+std::unique_ptr<internal::BodyNode<T>> WeldMobilizer<T>::CreateBodyNode(
+    const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+    const Mobilizer<T>* mobilizer) const {
+  return std::make_unique<internal::BodyNodeImpl<T, WeldMobilizer>>(
+      parent_node, body, mobilizer);
+}
+
+template <typename T>
 math::RigidTransform<T> WeldMobilizer<T>::CalcAcrossMobilizerTransform(
-    const systems::Context<T>&) const { return X_FM_.cast<T>(); }
+    const systems::Context<T>&) const {
+  return X_FM_.cast<T>();
+}
 
 template <typename T>
 SpatialVelocity<T> WeldMobilizer<T>::CalcAcrossMobilizerSpatialVelocity(
-    const systems::Context<T>&,
-    const Eigen::Ref<const VectorX<T>>& v) const {
-  DRAKE_ASSERT(v.size() == kNv);
+    const systems::Context<T>&, const Eigen::Ref<const VectorX<T>>&) const {
   return SpatialVelocity<T>::Zero();
 }
 
 template <typename T>
-SpatialAcceleration<T>
-WeldMobilizer<T>::CalcAcrossMobilizerSpatialAcceleration(
-    const systems::Context<T>&,
-    const Eigen::Ref<const VectorX<T>>& vdot) const {
-  DRAKE_ASSERT(vdot.size() == kNv);
+SpatialAcceleration<T> WeldMobilizer<T>::CalcAcrossMobilizerSpatialAcceleration(
+    const systems::Context<T>&, const Eigen::Ref<const VectorX<T>>&) const {
   return SpatialAcceleration<T>::Zero();
 }
 
 template <typename T>
-void WeldMobilizer<T>::ProjectSpatialForce(
-    const systems::Context<T>&,
-    const SpatialForce<T>&,
-    Eigen::Ref<VectorX<T>> tau) const {
+void WeldMobilizer<T>::ProjectSpatialForce(const systems::Context<T>&,
+                                           const SpatialForce<T>&,
+                                           Eigen::Ref<VectorX<T>> tau) const {
   DRAKE_ASSERT(tau.size() == kNv);
 }
 
 template <typename T>
-void WeldMobilizer<T>::DoCalcNMatrix(
-    const systems::Context<T>&, EigenPtr<MatrixX<T>>) const {}
+void WeldMobilizer<T>::DoCalcNMatrix(const systems::Context<T>&,
+                                     EigenPtr<MatrixX<T>>) const {}
 
 template <typename T>
-void WeldMobilizer<T>::DoCalcNplusMatrix(
-    const systems::Context<T>&, EigenPtr<MatrixX<T>>) const {}
+void WeldMobilizer<T>::DoCalcNplusMatrix(const systems::Context<T>&,
+                                         EigenPtr<MatrixX<T>>) const {}
 
 template <typename T>
-void WeldMobilizer<T>::MapVelocityToQDot(
-    const systems::Context<T>&,
-    const Eigen::Ref<const VectorX<T>>& v,
-    EigenPtr<VectorX<T>> qdot) const {
+void WeldMobilizer<T>::MapVelocityToQDot(const systems::Context<T>&,
+                                         const Eigen::Ref<const VectorX<T>>& v,
+                                         EigenPtr<VectorX<T>> qdot) const {
   DRAKE_ASSERT(v.size() == kNv);
   DRAKE_ASSERT(qdot != nullptr);
   DRAKE_ASSERT(qdot->size() == kNq);
@@ -57,8 +64,7 @@ void WeldMobilizer<T>::MapVelocityToQDot(
 
 template <typename T>
 void WeldMobilizer<T>::MapQDotToVelocity(
-    const systems::Context<T>&,
-    const Eigen::Ref<const VectorX<T>>& qdot,
+    const systems::Context<T>&, const Eigen::Ref<const VectorX<T>>& qdot,
     EigenPtr<VectorX<T>> v) const {
   DRAKE_ASSERT(qdot.size() == kNq);
   DRAKE_ASSERT(v != nullptr);
@@ -67,15 +73,15 @@ void WeldMobilizer<T>::MapQDotToVelocity(
 
 template <typename T>
 template <typename ToScalar>
-std::unique_ptr<Mobilizer<ToScalar>>
-WeldMobilizer<T>::TemplatedDoCloneToScalar(
+std::unique_ptr<Mobilizer<ToScalar>> WeldMobilizer<T>::TemplatedDoCloneToScalar(
     const MultibodyTree<ToScalar>& tree_clone) const {
   const Frame<ToScalar>& inboard_frame_clone =
       tree_clone.get_variant(this->inboard_frame());
   const Frame<ToScalar>& outboard_frame_clone =
       tree_clone.get_variant(this->outboard_frame());
   return std::make_unique<WeldMobilizer<ToScalar>>(
-      inboard_frame_clone, outboard_frame_clone, this->get_X_FM());
+      tree_clone.get_mobod(this->mobod().index()), inboard_frame_clone,
+      outboard_frame_clone, this->get_X_FM());
 }
 
 template <typename T>
@@ -102,4 +108,4 @@ WeldMobilizer<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::WeldMobilizer)
+    class ::drake::multibody::internal::WeldMobilizer);

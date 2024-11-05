@@ -7,6 +7,7 @@
 
 #include "drake/common/find_resource.h"
 #include "drake/common/fmt_eigen.h"
+#include "drake/common/overloaded.h"
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
 #include "drake/common/test_utilities/expect_no_throw.h"
 #include "drake/common/test_utilities/expect_throws_message.h"
@@ -16,6 +17,8 @@
 namespace drake {
 namespace geometry {
 namespace {
+
+namespace fs = std::filesystem;
 
 using math::RigidTransformd;
 using std::unique_ptr;
@@ -253,6 +256,49 @@ TEST_F(ReifierTest, CloningShapes) {
   ASSERT_TRUE(sphere_made_);
 }
 
+GTEST_TEST(VisitTest, ReturnTypeVoid) {
+  const Box box(1.0, 2.0, 3.0);
+  box.Visit(overloaded{
+      [&](const Box& arg) {
+        EXPECT_EQ(&arg, &box);
+      },
+      [](const auto&) {
+        GTEST_FAIL();
+      },
+  });
+
+  const Sphere sphere(1.0);
+  sphere.Visit(overloaded{
+      [&](const Sphere& arg) {
+        EXPECT_EQ(&arg, &sphere);
+      },
+      [](const auto&) {
+        GTEST_FAIL();
+      },
+  });
+}
+
+GTEST_TEST(VisitTest, ReturnTypeConversion) {
+  const Box box(1.0, 2.0, 3.0);
+  const Sphere sphere(1.0);
+
+  auto get_size = overloaded{
+      [](const Box& arg) {
+        return arg.size();
+      },
+      [](const Sphere& arg) {
+        return Vector1d(arg.radius());
+      },
+      [](const auto&) -> Eigen::VectorXd {
+        DRAKE_UNREACHABLE();
+      },
+  };
+
+  Eigen::VectorXd dims;
+  dims = box.Visit<Eigen::VectorXd>(get_size);
+  dims = sphere.Visit<Eigen::VectorXd>(get_size);
+}
+
 // Given the pose of a plane and its expected translation and z-axis, confirms
 // that the pose conforms to expectations. Also confirms that the rotational
 // component is orthonormal.
@@ -428,8 +474,13 @@ GTEST_TEST(ShapeTest, Constructors) {
   EXPECT_EQ(capsule2.length(), 5);
 
   const Convex convex{kFilename, 1.5};
-  EXPECT_EQ(convex.filename(), kFilename);
+  EXPECT_EQ(convex.source().description(), kFilename);
+  EXPECT_EQ(convex.extension(), ".obj");
   EXPECT_EQ(convex.scale(), 1.5);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  EXPECT_EQ(convex.filename(), kFilename);
+#pragma GCC diagnostic pop
 
   const Cylinder cylinder{1, 2};
   EXPECT_EQ(cylinder.radius(), 1);
@@ -453,8 +504,13 @@ GTEST_TEST(ShapeTest, Constructors) {
   unused(hs);
 
   const Mesh mesh{kFilename, 1.4};
-  EXPECT_EQ(mesh.filename(), kFilename);
+  EXPECT_EQ(mesh.source().description(), kFilename);
+  EXPECT_EQ(mesh.extension(), ".obj");
   EXPECT_EQ(mesh.scale(), 1.4);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  EXPECT_EQ(mesh.filename(), kFilename);
+#pragma GCC diagnostic pop
 
   const MeshcatCone cone{1.2, 3.4, 5.6};
   EXPECT_EQ(cone.height(), 1.2);
@@ -493,8 +549,13 @@ GTEST_TEST(ShapeTest, NumericalValidation) {
                               "Capsule radius and length should both be > 0.+");
 
   DRAKE_EXPECT_THROWS_MESSAGE(Convex("bar", 0),
-                              "Convex .scale. cannot be < 1e-8.");
-  DRAKE_EXPECT_NO_THROW(Convex("foo", -1));  // Special case for negative scale.
+                              "Convex .scale. cannot be < 1e-8.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      Convex(InMemoryMesh{MemoryFile("a", ".a", "a")}, 0),
+      "Convex .scale. cannot be < 1e-8.*");
+  // Special case for negative scale.
+  DRAKE_EXPECT_NO_THROW(Convex("foo", -1));
+  DRAKE_EXPECT_NO_THROW(Convex(InMemoryMesh{MemoryFile("a", ".a", "a")}, -1));
 
   DRAKE_EXPECT_THROWS_MESSAGE(
       Cylinder(0, 1), "Cylinder radius and length should both be > 0.+");
@@ -518,8 +579,12 @@ GTEST_TEST(ShapeTest, NumericalValidation) {
                               "and c should all be > 0.+");
 
   DRAKE_EXPECT_THROWS_MESSAGE(Mesh("foo", 1e-9),
-                              "Mesh .scale. cannot be < 1e-8.");
-  DRAKE_EXPECT_NO_THROW(Mesh("foo", -1));  // Special case for negative scale.
+                              "Mesh .scale. cannot be < 1e-8.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(Mesh(InMemoryMesh{MemoryFile("a", ".a", "a")}, 0),
+                              "Mesh .scale. cannot be < 1e-8.*");
+  // Special case for negative scale.
+  DRAKE_EXPECT_NO_THROW(Mesh("foo", -1));
+  DRAKE_EXPECT_NO_THROW(Mesh(InMemoryMesh{MemoryFile("a", ".a", "a")}, -1));
 
   DRAKE_EXPECT_THROWS_MESSAGE(MeshcatCone(0, 1, 1),
                               "MeshcatCone parameters .+ should all be > 0.*");
@@ -530,9 +595,114 @@ GTEST_TEST(ShapeTest, NumericalValidation) {
   DRAKE_EXPECT_THROWS_MESSAGE(MeshcatCone(Vector3<double>{1, 1, 0}),
                               "MeshcatCone parameters .+ should all be > 0.*");
 
-  DRAKE_EXPECT_THROWS_MESSAGE(Sphere(-0.5),
-                              "Sphere radius should be >= 0.+");
+  DRAKE_EXPECT_THROWS_MESSAGE(Sphere(-0.5), "Sphere radius should be >= 0.+");
   DRAKE_EXPECT_NO_THROW(Sphere(0));  // Special case for 0 radius.
+}
+
+// Confirms that Convex and Mesh can report their convex hull.
+GTEST_TEST(ShapeTest, ConvexHull) {
+  const std::string cube_path =
+      FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
+
+  auto expect_convex_hull = [](const auto& mesh_like) {
+    SCOPED_TRACE(
+        fmt::format("Testing convex hull for {}.", mesh_like.type_name()));
+    using MeshType = decltype(mesh_like);
+    // First call should work for a valid mesh file name.
+    const PolygonSurfaceMesh<double>& hull = mesh_like.GetConvexHull();
+    // Subsequent calls return references to the same value.
+    EXPECT_EQ(&hull, &mesh_like.GetConvexHull());
+    const MeshType mesh2(mesh_like);
+    // Copies of the mesh share the same hull.
+    EXPECT_EQ(&mesh2.GetConvexHull(), &hull);
+  };
+  expect_convex_hull(Mesh(cube_path));
+  expect_convex_hull(Convex(cube_path));
+}
+
+GTEST_TEST(ShapeTest, ConvexFromMemory) {
+  // This will get normalized to ".obj".
+  const std::string mesh_name = "a_mesh.OBJ";
+  const std::string obj_contents = R"""(
+    v 0 0 0
+    v 1 0 0
+    v 1 1 0
+    v 0 1 0
+    v 0 0 1
+    v 1 0 1
+    v 1 1 1
+    v 0 1 1
+    # intentionally omit faces.
+  )""";
+  InMemoryMesh mesh_data{MemoryFile(obj_contents, ".OBJ", mesh_name)};
+  const Convex convex(std::move(mesh_data), 2.0);
+  EXPECT_EQ(convex.scale(), 2.0);
+  EXPECT_EQ(convex.extension(), ".obj");
+  const MeshSource& source = convex.source();
+  ASSERT_TRUE(source.is_in_memory());
+  EXPECT_EQ(source.in_memory().mesh_file.filename_hint(), mesh_name);
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  EXPECT_THROW(convex.filename(), std::exception);
+#pragma GCC diagnostic pop
+
+  const Convex from_source(source, 3.0);
+  ASSERT_TRUE(from_source.source().is_in_memory());
+  EXPECT_EQ(from_source.source().in_memory().mesh_file.filename_hint(),
+            mesh_name);
+  EXPECT_EQ(from_source.scale(), 3);
+
+  // Also confirm that we can compute the convex hull from the in-memory
+  // representation. We don't test all file formats; we trust that visual
+  // inspection of the code under test shows that it doesn't depend on file
+  // format.
+  const PolygonSurfaceMesh<double>& hull = convex.GetConvexHull();
+  EXPECT_EQ(hull.num_vertices(), 8);
+  EXPECT_EQ(hull.num_elements(), 6);
+}
+
+GTEST_TEST(ShapeTest, MeshFromMemory) {
+  // This will get normalized to ".obj".
+  const std::string mesh_name = "a_mesh.OBJ";
+  const std::string obj_contents = R"""(
+    v 0 0 0
+    v 1 0 0
+    v 1 1 0
+    v 0 1 0
+    v 0 0 1
+    v 1 0 1
+    v 1 1 1
+    v 0 1 1
+    f 1 2 3 4
+    f 5 6 7 8
+  )""";
+  InMemoryMesh mesh_data{MemoryFile(obj_contents, ".OBJ", mesh_name)};
+  const Mesh mesh(std::move(mesh_data), 2.0);
+  EXPECT_EQ(mesh.scale(), 2.0);
+  EXPECT_EQ(mesh.extension(), ".obj");
+  const MeshSource& source = mesh.source();
+  ASSERT_TRUE(source.is_in_memory());
+  EXPECT_EQ(source.in_memory().mesh_file.filename_hint(), mesh_name);
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  EXPECT_THROW(mesh.filename(), std::exception);
+#pragma GCC diagnostic pop
+
+  const Mesh from_source(source, 3.0);
+  ASSERT_TRUE(from_source.source().is_in_memory());
+  EXPECT_EQ(from_source.source().in_memory().mesh_file.filename_hint(),
+            mesh_name);
+  EXPECT_EQ(from_source.scale(), 3);
+
+  // Also confirm that we can compute the convex hull from the in-memory
+  // representation. We don't test all file formats; we trust that visual
+  // inspection of the code under test shows that it doesn't depend on file
+  // format.
+  const PolygonSurfaceMesh<double>& hull = mesh.GetConvexHull();
+  EXPECT_EQ(hull.num_vertices(), 8);
+  EXPECT_EQ(hull.num_elements(), 6);
 }
 
 class DefaultReifierTest : public ShapeReifier, public ::testing::Test {};
@@ -547,9 +717,9 @@ TEST_F(DefaultReifierTest, UnsupportedGeometry) {
                               "This class (.+) does not support Convex.");
   DRAKE_EXPECT_THROWS_MESSAGE(this->ImplementGeometry(Cylinder(1, 2), nullptr),
                               "This class (.+) does not support Cylinder.");
-  DRAKE_EXPECT_THROWS_MESSAGE(this->ImplementGeometry(Ellipsoid(1, 1, 1),
-                              nullptr),
-                              "This class (.+) does not support Ellipsoid.");
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      this->ImplementGeometry(Ellipsoid(1, 1, 1), nullptr),
+      "This class (.+) does not support Ellipsoid.");
   DRAKE_EXPECT_THROWS_MESSAGE(this->ImplementGeometry(HalfSpace(), nullptr),
                               "This class (.+) does not support HalfSpace.");
   DRAKE_EXPECT_THROWS_MESSAGE(this->ImplementGeometry(Mesh("foo", 1), nullptr),
@@ -590,57 +760,74 @@ TEST_F(OverrideDefaultGeometryTest, UnsupportedGeometry) {
   EXPECT_NO_THROW(this->ImplementGeometry(Sphere(0.5), nullptr));
 }
 
-GTEST_TEST(ShapeName, SimpleReification) {
-  ShapeName name;
 
-  EXPECT_EQ(name.name(), "");
+GTEST_TEST(ShapeTest, TypeNameAndToString) {
+  // In-memory mesh we'll use on Convex and Mesh.
+  const InMemoryMesh in_memory{
+      MemoryFile("a", ".a", "A"),
+      {{"bb", MemoryFile("b", ".b", "B")}, {"cc", fs::path("path/to/c")}}};
+  // Mesh and Convex both defer to InMemoryMesh to format the member, so we
+  // simply need to prove that it calls the right method based on the type of
+  // the source (we don't have to worry about *how* InMemoryMesh is written as
+  // a string.
+  static constexpr const char* mem_fmt = "{}(mesh_data={}, scale=1.5)";
 
-  Box(1, 2, 3).Reify(&name);
-  EXPECT_EQ(name.name(), "Box");
+  const Box box(1.5, 2.5, 3.5);
+  const Capsule capsule(1.25, 2.5);
+  const Convex convex("/some/file", 1.5);
+  const Convex mem_convex(in_memory, 1.5);
+  const Cylinder cylinder(1.25, 2.5);
+  const Ellipsoid ellipsoid(1.25, 2.5, 0.5);
+  const HalfSpace half_space;
+  const Mesh mesh("/some/file", 1.5);
+  const Mesh mem_mesh(in_memory, 1.5);
+  const MeshcatCone cone(1.5, 0.25, 0.5);
+  const Sphere sphere(1.25);
 
-  Capsule(1, 2).Reify(&name);
-  EXPECT_EQ(name.name(), "Capsule");
+  EXPECT_EQ(box.type_name(), "Box");
+  EXPECT_EQ(capsule.type_name(), "Capsule");
+  EXPECT_EQ(convex.type_name(), "Convex");
+  EXPECT_EQ(mem_convex.type_name(), "Convex");
+  EXPECT_EQ(cylinder.type_name(), "Cylinder");
+  EXPECT_EQ(ellipsoid.type_name(), "Ellipsoid");
+  EXPECT_EQ(half_space.type_name(), "HalfSpace");
+  EXPECT_EQ(mesh.type_name(), "Mesh");
+  EXPECT_EQ(mem_mesh.type_name(), "Mesh");
+  EXPECT_EQ(cone.type_name(), "MeshcatCone");
+  EXPECT_EQ(sphere.type_name(), "Sphere");
 
-  Convex("filepath", 1.0).Reify(&name);
-  EXPECT_EQ(name.name(), "Convex");
+  EXPECT_EQ(box.to_string(), "Box(width=1.5, depth=2.5, height=3.5)");
+  EXPECT_EQ(capsule.to_string(), "Capsule(radius=1.25, length=2.5)");
+  EXPECT_EQ(convex.to_string(), "Convex(filename='/some/file', scale=1.5)");
+  EXPECT_EQ(mem_convex.to_string(),
+            fmt::format(mem_fmt, "Convex", in_memory.to_string()));
+  EXPECT_EQ(cylinder.to_string(), "Cylinder(radius=1.25, length=2.5)");
+  EXPECT_EQ(ellipsoid.to_string(), "Ellipsoid(a=1.25, b=2.5, c=0.5)");
+  EXPECT_EQ(half_space.to_string(), "HalfSpace()");
+  EXPECT_EQ(mesh.to_string(), "Mesh(filename='/some/file', scale=1.5)");
+  EXPECT_EQ(mem_mesh.to_string(),
+            fmt::format(mem_fmt, "Mesh", in_memory.to_string()));
+  EXPECT_EQ(cone.to_string(), "MeshcatCone(height=1.5, a=0.25, b=0.5)");
+  EXPECT_EQ(sphere.to_string(), "Sphere(radius=1.25)");
 
-  Cylinder(1, 2).Reify(&name);
-  EXPECT_EQ(name.name(), "Cylinder");
+  EXPECT_EQ(fmt::to_string(box), "Box(width=1.5, depth=2.5, height=3.5)");
+  EXPECT_EQ(fmt::to_string(capsule), "Capsule(radius=1.25, length=2.5)");
+  EXPECT_EQ(fmt::to_string(convex), "Convex(filename='/some/file', scale=1.5)");
+  EXPECT_EQ(fmt::to_string(mem_convex), mem_convex.to_string());
+  EXPECT_EQ(fmt::to_string(cylinder), "Cylinder(radius=1.25, length=2.5)");
+  EXPECT_EQ(fmt::to_string(ellipsoid), "Ellipsoid(a=1.25, b=2.5, c=0.5)");
+  EXPECT_EQ(fmt::to_string(half_space), "HalfSpace()");
+  EXPECT_EQ(fmt::to_string(mesh), "Mesh(filename='/some/file', scale=1.5)");
+  EXPECT_EQ(fmt::to_string(mem_mesh), mem_mesh.to_string());
+  EXPECT_EQ(fmt::to_string(cone), "MeshcatCone(height=1.5, a=0.25, b=0.5)");
+  EXPECT_EQ(fmt::to_string(sphere), "Sphere(radius=1.25)");
 
-  Ellipsoid(1, 2, 3).Reify(&name);
-  EXPECT_EQ(name.name(), "Ellipsoid");
-
-  HalfSpace().Reify(&name);
-  EXPECT_EQ(name.name(), "HalfSpace");
-
-  Mesh("filepath", 1.0).Reify(&name);
-  EXPECT_EQ(name.name(), "Mesh");
-
-  MeshcatCone(1.0, 0.25, 0.5).Reify(&name);
-  EXPECT_EQ(name.name(), "MeshcatCone");
-
-  Sphere(0.5).Reify(&name);
-  EXPECT_EQ(name.name(), "Sphere");
+  const Shape& base = box;
+  EXPECT_EQ(base.type_name(), "Box");
+  EXPECT_EQ(base.to_string(), "Box(width=1.5, depth=2.5, height=3.5)");
+  EXPECT_EQ(fmt::to_string(base), "Box(width=1.5, depth=2.5, height=3.5)");
 }
 
-GTEST_TEST(ShapeName, ReifyOnConstruction) {
-  EXPECT_EQ(ShapeName(Box(1, 2, 3)).name(), "Box");
-  EXPECT_EQ(ShapeName(Capsule(1, 2)).name(), "Capsule");
-  EXPECT_EQ(ShapeName(Convex("filepath", 1.0)).name(), "Convex");
-  EXPECT_EQ(ShapeName(Cylinder(1, 2)).name(), "Cylinder");
-  EXPECT_EQ(ShapeName(Ellipsoid(1, 2, 3)).name(), "Ellipsoid");
-  EXPECT_EQ(ShapeName(HalfSpace()).name(), "HalfSpace");
-  EXPECT_EQ(ShapeName(Mesh("filepath", 1.0)).name(), "Mesh");
-  EXPECT_EQ(ShapeName(Sphere(0.5)).name(), "Sphere");
-}
-
-GTEST_TEST(ShapeName, Streaming) {
-  ShapeName name(Sphere(0.5));
-  std::stringstream ss;
-  ss << name;
-  EXPECT_EQ(name.name(), "Sphere");
-  EXPECT_EQ(ss.str(), name.name());
-}
 
 GTEST_TEST(ShapeTest, Volume) {
   EXPECT_NEAR(CalcVolume(Box(1, 2, 3)), 6.0, 1e-14);
@@ -653,42 +840,50 @@ GTEST_TEST(ShapeTest, Volume) {
   EXPECT_NEAR(CalcVolume(MeshcatCone(4, 2, 3)), 8.0 * M_PI, 1e-14);
   EXPECT_NEAR(CalcVolume(Sphere(3)), 36.0 * M_PI, 1e-13);
 
+  // The convex hull of the cube with a hole, should have the same volume as
+  // a cube without the hole.
+  const std::string holey_cube_obj =
+      FindResourceOrThrow("drake/geometry/test/cube_with_hole.obj");
+  EXPECT_NEAR(CalcVolume(Convex(holey_cube_obj, 1.0)), 8.0, 1e-14);
   const std::string cube_obj =
       FindResourceOrThrow("drake/geometry/test/quad_cube.obj");
-  EXPECT_NEAR(CalcVolume(Convex(cube_obj, 1.0)), 8.0, 1e-14);
   EXPECT_NEAR(CalcVolume(Mesh(cube_obj, 1.0)), 8.0, 1e-14);
 
-  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Convex("fakename.obj", 1.0)),
-                              "Cannot open file.*");
-  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Mesh("fakename.obj", 1.0)),
-                              "Cannot open file.*");
+  // Error thrown in ReadObjFile() (read_obj.cc). Note: this passes the tinyobj
+  // error along -- those terminate in new lines and has to be handled in the
+  // matching expression explicitly.
+  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Convex("fakename.obj")),
+                              ".*cannot read the file[^]*");
+  // Error thrown in ReadObjToTriangleSurfaceMesh() (obj_to_surface_mesh.cc).
+  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Mesh("fakename.obj")),
+                              ".*cannot read the file[^]*");
 
-  // We only support obj but should eventually support vtk.
   const std::string non_obj = "only_extension_matters.not_obj";
-  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Convex(non_obj, 1.0)),
-                              ".*only supports .obj files.*");
-  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Mesh(non_obj, 1.0)),
+  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Convex(non_obj)),
+                              ".*only applies to .obj, .vtk.*");
+  // We only support obj but should eventually support vtk.
+  DRAKE_EXPECT_THROWS_MESSAGE(CalcVolume(Mesh(non_obj)),
                               ".*only supports .obj files.*");
 }
 
 GTEST_TEST(ShapeTest, Pathname) {
   const Mesh abspath_mesh("/absolute_path.obj");
-  EXPECT_TRUE(std::filesystem::path(abspath_mesh.filename()).is_absolute());
-  EXPECT_EQ(abspath_mesh.filename(), "/absolute_path.obj");
+  EXPECT_TRUE(abspath_mesh.source().path().is_absolute());
+  EXPECT_EQ(abspath_mesh.source().path(), "/absolute_path.obj");
 
   const Convex abspath_convex("/absolute_path.obj");
-  EXPECT_TRUE(std::filesystem::path(abspath_convex.filename()).is_absolute());
-  EXPECT_EQ(abspath_convex.filename(), "/absolute_path.obj");
+  EXPECT_TRUE(abspath_convex.source().path().is_absolute());
+  EXPECT_EQ(abspath_convex.source().path(), "/absolute_path.obj");
 
   const Mesh relpath_mesh("relative_path.obj");
-  EXPECT_TRUE(std::filesystem::path(relpath_mesh.filename()).is_absolute());
-  EXPECT_EQ(relpath_mesh.filename(),
-            std::filesystem::current_path() / "relative_path.obj");
+  EXPECT_TRUE(relpath_mesh.source().path().is_absolute());
+  EXPECT_EQ(relpath_mesh.source().path(),
+            fs::current_path() / "relative_path.obj");
 
   const Convex relpath_convex("relative_path.obj");
-  EXPECT_TRUE(std::filesystem::path(relpath_convex.filename()).is_absolute());
-  EXPECT_EQ(relpath_convex.filename(),
-            std::filesystem::current_path() / "relative_path.obj");
+  EXPECT_TRUE(relpath_convex.source().path().is_absolute());
+  EXPECT_EQ(relpath_convex.source().path(),
+            fs::current_path() / "relative_path.obj");
 }
 
 GTEST_TEST(ShapeTest, MeshExtensions) {
@@ -713,16 +908,17 @@ GTEST_TEST(ShapeTest, MeshExtensions) {
 GTEST_TEST(ShapeTest, MoveConstructor) {
   // Create an original mesh.
   Mesh orig("foo.obj");
-  const std::string orig_filename = orig.filename();
+  const std::string orig_filename = orig.source().description();
   EXPECT_EQ(orig.extension(), ".obj");
 
   // Move it into a different mesh.
   Mesh next(std::move(orig));
-  EXPECT_EQ(next.filename(), orig_filename);
+  EXPECT_EQ(next.source().description(), orig_filename);
   EXPECT_EQ(next.extension(), ".obj");
 
-  // The moved-from mesh is in a valid by indeterminate state.
-  EXPECT_EQ(orig.filename().empty(), orig.extension().empty());
+  // The moved-from mesh has its source revert to an empty in-memory mesh.
+  ASSERT_TRUE(orig.source().is_in_memory());
+  EXPECT_TRUE(orig.source().in_memory().mesh_file.contents().empty());
 }
 
 }  // namespace

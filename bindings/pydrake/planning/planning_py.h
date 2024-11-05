@@ -20,6 +20,12 @@ void DefinePlanningCollisionChecker(py::module m);
 /* Defines bindings per planning_py_collision_checker_interface_types.cc. */
 void DefinePlanningCollisionCheckerInterfaceTypes(py::module m);
 
+/* Defines bindings per planning_py_graph_algorithms.cc. */
+void DefinePlanningGraphAlgorithms(py::module m);
+
+/* Defines bindings per planning_py_iris_from_clique_cover.cc. */
+void DefinePlanningIrisFromCliqueCover(py::module m);
+
 /* Defines bindings per planning_py_robot_diagram.cc. */
 void DefinePlanningRobotDiagram(py::module m);
 
@@ -28,6 +34,9 @@ void DefinePlanningTrajectoryOptimization(py::module m);
 
 /* Defines bindings per planning_py_visibility_graph.cc. */
 void DefinePlanningVisibilityGraph(py::module m);
+
+/* Defines bindings per planning_py_zmp_planner.cc. */
+void DefinePlanningZmpPlanner(py::module m);
 
 }  // namespace internal
 }  // namespace pydrake

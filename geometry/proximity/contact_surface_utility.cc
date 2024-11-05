@@ -174,10 +174,9 @@ TriMeshBuilder<T>::MakeMeshAndField() {
   auto mesh = std::make_unique<TriangleSurfaceMesh<T>>(std::move(faces_),
                                                        std::move(vertices_B_));
   auto* raw = mesh.get();
-  const bool calculate_gradient = false;
   return {std::move(mesh),
           std::make_unique<TriangleSurfaceMeshFieldLinear<T, T>>(
-              std::move(pressures_), raw, calculate_gradient)};
+              std::move(pressures_), raw, MeshGradientMode::kNone)};
 }
 
 template <typename T>
@@ -361,13 +360,13 @@ bool IsFaceNormalInNormalDirection(const Vector3<T>& normal_F,
 // Instantiation to facilitate unit testing of this support function.
 DRAKE_DEFINE_FUNCTION_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
     (&AddPolygonToTriangleMeshData<T>, &IsFaceNormalInNormalDirection<T>,
-     &CalcPolygonCentroid<T>))
+     &CalcPolygonCentroid<T>));
 
 }  // namespace internal
 }  // namespace geometry
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::TriMeshBuilder)
+    class ::drake::geometry::internal::TriMeshBuilder);
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::geometry::internal::PolyMeshBuilder)
+    class ::drake::geometry::internal::PolyMeshBuilder);

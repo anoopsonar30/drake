@@ -1,7 +1,9 @@
 #include "drake/bindings/pydrake/documentation_pybind.h"
 #include "drake/bindings/pydrake/geometry/optimization_pybind.h"
+#include "drake/bindings/pydrake/planning/planning_py.h"
 #include "drake/bindings/pydrake/pydrake_pybind.h"
 #include "drake/bindings/pydrake/symbolic_types_pybind.h"
+#include "drake/geometry/optimization/convex_set.h"
 #include "drake/planning/trajectory_optimization/direct_collocation.h"
 #include "drake/planning/trajectory_optimization/direct_transcription.h"
 #include "drake/planning/trajectory_optimization/gcs_trajectory_optimization.h"
@@ -334,7 +336,9 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py::arg("weight") = 1.0, cls_doc.AddDurationCost.doc)
         .def("AddPathLengthCost", &Class::AddPathLengthCost,
             py::arg("weight") = 1.0, py::arg("use_conic_constraint") = false,
-            cls_doc.AddPathLengthCost.doc);
+            cls_doc.AddPathLengthCost.doc)
+        .def("AddPathEnergyCost", &Class::AddPathEnergyCost,
+            py::arg("weight") = 1.0, cls_doc.AddPathEnergyCost.doc);
   }
 
   {
@@ -348,6 +352,16 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
         .def("name", &Class::Subgraph::name, subgraph_doc.name.doc)
         .def("order", &Class::Subgraph::order, subgraph_doc.order.doc)
         .def("size", &Class::Subgraph::size, subgraph_doc.size.doc)
+        .def("Vertices",
+            overload_cast_explicit<const std::vector<
+                geometry::optimization::GraphOfConvexSets::Vertex*>&>(
+                &Class::Subgraph::Vertices),
+            py_rvp::reference_internal, subgraph_doc.Vertices.doc)
+        .def("Edges",
+            overload_cast_explicit<const std::vector<
+                geometry::optimization::GraphOfConvexSets::Edge*>&>(
+                &Class::Subgraph::Edges),
+            py_rvp::reference_internal, subgraph_doc.Edges.doc)
         .def(
             "regions",
             [](Class::Subgraph* self) {
@@ -368,12 +382,34 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
                 &Class::Subgraph::AddPathLengthCost),
             py::arg("weight_matrix"),
             subgraph_doc.AddPathLengthCost.doc_1args_weight_matrix)
+        .def("AddPathEnergyCost",
+            // Equivalent structure to path length cost
+            py::overload_cast<const Eigen::MatrixXd&>(
+                &Class::Subgraph::AddPathEnergyCost),
+            py::arg("weight_matrix"),
+            subgraph_doc.AddPathEnergyCost.doc_1args_weight_matrix)
         .def("AddPathLengthCost",
             py::overload_cast<double>(&Class::Subgraph::AddPathLengthCost),
             py::arg("weight") = 1.0,
             subgraph_doc.AddPathLengthCost.doc_1args_weight)
+        .def("AddPathEnergyCost",
+            py::overload_cast<double>(&Class::Subgraph::AddPathEnergyCost),
+            py::arg("weight") = 1.0,
+            subgraph_doc.AddPathEnergyCost.doc_1args_weight)
         .def("AddVelocityBounds", &Class::Subgraph::AddVelocityBounds,
-            py::arg("lb"), py::arg("ub"), subgraph_doc.AddVelocityBounds.doc);
+            py::arg("lb"), py::arg("ub"), subgraph_doc.AddVelocityBounds.doc)
+        .def("AddNonlinearDerivativeBounds",
+            &Class::Subgraph::AddNonlinearDerivativeBounds, py::arg("lb"),
+            py::arg("ub"), py::arg("derivative_order"),
+            subgraph_doc.AddNonlinearDerivativeBounds.doc)
+        .def("AddPathContinuityConstraints",
+            &Class::Subgraph::AddPathContinuityConstraints,
+            py::arg("continuity_order"),
+            subgraph_doc.AddPathContinuityConstraints.doc)
+        .def("AddContinuityConstraints",
+            &Class::Subgraph::AddContinuityConstraints,
+            py::arg("continuity_order"),
+            subgraph_doc.AddContinuityConstraints.doc);
 
     // EdgesBetweenSubgraphs
     const auto& subgraph_edges_doc =
@@ -382,29 +418,84 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
         gcs_traj_opt, "EdgesBetweenSubgraphs", subgraph_edges_doc.doc)
         .def("AddVelocityBounds",
             &Class::EdgesBetweenSubgraphs::AddVelocityBounds, py::arg("lb"),
-            py::arg("ub"), subgraph_edges_doc.AddVelocityBounds.doc);
+            py::arg("ub"), subgraph_edges_doc.AddVelocityBounds.doc)
+        .def("AddNonlinearDerivativeBounds",
+            &Class::EdgesBetweenSubgraphs::AddNonlinearDerivativeBounds,
+            py::arg("lb"), py::arg("ub"), py::arg("derivative_order"),
+            subgraph_edges_doc.AddNonlinearDerivativeBounds.doc)
+        .def("AddZeroDerivativeConstraints",
+            &Class::EdgesBetweenSubgraphs::AddZeroDerivativeConstraints,
+            py::arg("derivative_order"),
+            subgraph_edges_doc.AddZeroDerivativeConstraints.doc)
+        .def("AddPathContinuityConstraints",
+            &Class::EdgesBetweenSubgraphs::AddPathContinuityConstraints,
+            py::arg("continuity_order"),
+            subgraph_edges_doc.AddPathContinuityConstraints.doc)
+        .def("AddContinuityConstraints",
+            &Class::EdgesBetweenSubgraphs::AddContinuityConstraints,
+            py::arg("continuity_order"),
+            subgraph_edges_doc.AddContinuityConstraints.doc)
+        .def("Edges",
+            overload_cast_explicit<const std::vector<
+                geometry::optimization::GraphOfConvexSets::Edge*>&>(
+                &Class::EdgesBetweenSubgraphs::Edges),
+            py_rvp::reference_internal, subgraph_edges_doc.Edges.doc);
 
     gcs_traj_opt  // BR
-        .def(py::init<int>(), py::arg("num_positions"), cls_doc.ctor.doc)
+        .def(py::init<int, const std::vector<int>&>(), py::arg("num_positions"),
+            py::arg("continuous_revolute_joints") = std::vector<int>(),
+            cls_doc.ctor.doc)
         .def("num_positions", &Class::num_positions, cls_doc.num_positions.doc)
-        .def("GetGraphvizString", &Class::GetGraphvizString,
-            py::arg("result") = std::nullopt, py::arg("show_slack") = true,
-            py::arg("precision") = 3, py::arg("scientific") = false,
+        .def("continuous_revolute_joints", &Class::continuous_revolute_joints,
+            cls_doc.continuous_revolute_joints.doc)
+        .def("GetGraphvizString",
+            overload_cast_explicit<std::string,
+                const solvers::MathematicalProgramResult*,
+                const geometry::optimization::GcsGraphvizOptions&>(
+                &Class::GetGraphvizString),
+            py::arg("result") = nullptr,
+            py::arg("options") = geometry::optimization::GcsGraphvizOptions(),
             cls_doc.GetGraphvizString.doc)
         .def(
+            "GetGraphvizString",
+            [](const GcsTrajectoryOptimization& self,
+                const solvers::MathematicalProgramResult* result,
+                bool show_slacks, bool show_vars, bool show_flows,
+                bool show_costs, bool scientific, int precision) {
+              geometry::optimization::GcsGraphvizOptions options;
+              options.show_slacks = show_slacks;
+              options.show_vars = show_vars;
+              options.show_flows = show_flows;
+              options.show_costs = show_costs;
+              options.scientific = scientific;
+              options.precision = precision;
+              return self.GetGraphvizString(result, options);
+            },
+            py::arg("result") = nullptr, py::arg("show_slacks") = true,
+            py::arg("show_vars") = true, py::arg("show_flows") = true,
+            py::arg("show_costs") = true, py::arg("scientific") = false,
+            py::arg("precision") = 3, cls_doc.GetGraphvizString.doc)
+        .def(
             "AddRegions",
+            // Pybind does not support None arguments for pointers to built-in
+            // and STL types, so we must use optional.
+            // https://pybind11.readthedocs.io/en/stable/advanced/functions.html#allow-prohibiting-none-arguments
             [](Class& self,
                 const std::vector<geometry::optimization::ConvexSet*>& regions,
                 const std::vector<std::pair<int, int>>& edges_between_regions,
-                int order, double h_min, double h_max,
-                std::string name) -> Class::Subgraph& {
+                int order, double h_min, double h_max, std::string name,
+                std::optional<std::vector<Eigen::VectorXd>> edge_offsets)
+                -> Class::Subgraph& {
               return self.AddRegions(CloneConvexSets(regions),
-                  edges_between_regions, order, h_min, h_max, std::move(name));
+                  edges_between_regions, order, h_min, h_max, std::move(name),
+                  edge_offsets ? std::addressof(edge_offsets.value())
+                               : nullptr);
             },
             py_rvp::reference_internal, py::arg("regions"),
             py::arg("edges_between_regions"), py::arg("order"),
             py::arg("h_min") = 1e-6, py::arg("h_max") = 20,
-            py::arg("name") = "", cls_doc.AddRegions.doc_6args)
+            py::arg("name") = "", py::arg("edge_offsets") = py::none(),
+            cls_doc.AddRegions.doc_7args)
         .def(
             "AddRegions",
             [](Class& self,
@@ -417,9 +508,31 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
             py_rvp::reference_internal, py::arg("regions"), py::arg("order"),
             py::arg("h_min") = 1e-6, py::arg("h_max") = 20,
             py::arg("name") = "", cls_doc.AddRegions.doc_5args)
-        .def("AddEdges", &Class::AddEdges, py_rvp::reference_internal,
-            py::arg("from_subgraph"), py::arg("to_subgraph"),
-            py::arg("subspace") = py::none(), cls_doc.AddEdges.doc)
+        .def("RemoveSubgraph", &Class::RemoveSubgraph, py::arg("subgraph"),
+            cls_doc.RemoveSubgraph.doc)
+        .def(
+            "AddEdges",
+            // Pybind does not support None arguments for pointers to built-in
+            // and STL types, so we must use optional.
+            // https://pybind11.readthedocs.io/en/stable/advanced/functions.html#allow-prohibiting-none-arguments
+            [](Class& self, const Class::Subgraph& from_subgraph,
+                const Class::Subgraph& to_subgraph,
+                const geometry::optimization::ConvexSet* subspace,
+                const std::optional<std::vector<std::pair<int, int>>>
+                    edges_between_regions,
+                const std::optional<std::vector<Eigen::VectorXd>> edge_offsets)
+                -> Class::EdgesBetweenSubgraphs& {
+              return self.AddEdges(from_subgraph, to_subgraph, subspace,
+                  edges_between_regions
+                      ? std::addressof(edges_between_regions.value())
+                      : nullptr,
+                  edge_offsets ? std::addressof(edge_offsets.value())
+                               : nullptr);
+            },
+            py_rvp::reference_internal, py::arg("from_subgraph"),
+            py::arg("to_subgraph"), py::arg("subspace") = py::none(),
+            py::arg("edges_between_regions") = py::none(),
+            py::arg("edge_offsets") = py::none(), cls_doc.AddEdges.doc)
         .def("AddTimeCost", &Class::AddTimeCost, py::arg("weight") = 1.0,
             cls_doc.AddTimeCost.doc)
         .def("AddPathLengthCost",
@@ -427,19 +540,56 @@ void DefinePlanningTrajectoryOptimization(py::module m) {
                 &Class::AddPathLengthCost),
             py::arg("weight_matrix"),
             cls_doc.AddPathLengthCost.doc_1args_weight_matrix)
+        .def("AddPathEnergyCost",
+            py::overload_cast<const Eigen::MatrixXd&>(
+                &Class::AddPathEnergyCost),
+            py::arg("weight_matrix"),
+            cls_doc.AddPathEnergyCost.doc_1args_weight_matrix)
         .def("AddPathLengthCost",
             py::overload_cast<double>(&Class::AddPathLengthCost),
             py::arg("weight") = 1.0, cls_doc.AddPathLengthCost.doc_1args_weight)
+        .def("AddPathEnergyCost",
+            py::overload_cast<double>(&Class::AddPathEnergyCost),
+            py::arg("weight") = 1.0, cls_doc.AddPathEnergyCost.doc_1args_weight)
         .def("AddVelocityBounds", &Class::AddVelocityBounds, py::arg("lb"),
             py::arg("ub"), cls_doc.AddVelocityBounds.doc)
+        .def("AddNonlinearDerivativeBounds",
+            &Class::AddNonlinearDerivativeBounds, py::arg("lb"), py::arg("ub"),
+            py::arg("derivative_order"),
+            cls_doc.AddNonlinearDerivativeBounds.doc)
+        .def("AddPathContinuityConstraints",
+            &Class::AddPathContinuityConstraints, py::arg("continuity_order"),
+            cls_doc.AddPathContinuityConstraints.doc)
+        .def("AddContinuityConstraints", &Class::AddContinuityConstraints,
+            py::arg("continuity_order"), cls_doc.AddContinuityConstraints.doc)
         .def("SolvePath", &Class::SolvePath, py::arg("source"),
             py::arg("target"),
             py::arg("options") =
                 geometry::optimization::GraphOfConvexSetsOptions(),
             cls_doc.SolvePath.doc)
+        .def("SolveConvexRestriction", &Class::SolveConvexRestriction,
+            py::arg("active_vertices"),
+            py::arg("options") =
+                geometry::optimization::GraphOfConvexSetsOptions(),
+            cls_doc.SolveConvexRestriction.doc)
+        .def("GetSubgraphs", &Class::GetSubgraphs, py_rvp::reference_internal,
+            cls_doc.GetSubgraphs.doc)
+        .def("GetEdgesBetweenSubgraphs", &Class::GetEdgesBetweenSubgraphs,
+            py_rvp::reference_internal, cls_doc.GetEdgesBetweenSubgraphs.doc)
         .def("graph_of_convex_sets", &Class::graph_of_convex_sets,
-            py_rvp::reference_internal, cls_doc.graph_of_convex_sets.doc);
+            py_rvp::reference_internal, cls_doc.graph_of_convex_sets.doc)
+        .def_static("NormalizeSegmentTimes", &Class::NormalizeSegmentTimes,
+            py::arg("trajectory"), cls_doc.NormalizeSegmentTimes.doc)
+        .def_static("UnwrapToContinousTrajectory",
+            &Class::UnwrapToContinousTrajectory, py::arg("gcs_trajectory"),
+            py::arg("continuous_revolute_joints"),
+            py::arg("starting_rounds") = std::nullopt, py::arg("tol") = 1e-8,
+            cls_doc.UnwrapToContinousTrajectory.doc);
   }
+
+  m.def("GetContinuousRevoluteJointIndices", &GetContinuousRevoluteJointIndices,
+      py::arg("plant"), doc.GetContinuousRevoluteJointIndices.doc);
+  // NOLINTNEXTLINE(readability/fn_size)
 }
 
 }  // namespace internal

@@ -49,9 +49,8 @@ TEST_F(PrismaticMobilizerTest, CanRotateOrTranslate) {
 
 // Verify that PrismaticMobilizer normalizes its axis on construction.
 TEST_F(PrismaticMobilizerTest, AxisIsNormalizedAtConstruction) {
-  EXPECT_TRUE(CompareMatrices(
-      slider_->translation_axis(), axis_F_.normalized(),
-      kTolerance, MatrixCompareType::relative));
+  EXPECT_TRUE(CompareMatrices(slider_->translation_axis(), axis_F_.normalized(),
+                              kTolerance, MatrixCompareType::relative));
 }
 
 // Verifies method to mutate and access the context.
@@ -59,16 +58,16 @@ TEST_F(PrismaticMobilizerTest, StateAccess) {
   const double some_value1 = 1.5;
   const double some_value2 = std::sqrt(2);
   // Verify we can set a prismatic mobilizer position given the model's context.
-  slider_->set_translation(context_.get(), some_value1);
+  slider_->SetTranslation(context_.get(), some_value1);
   EXPECT_EQ(slider_->get_translation(*context_), some_value1);
-  slider_->set_translation(context_.get(), some_value2);
+  slider_->SetTranslation(context_.get(), some_value2);
   EXPECT_EQ(slider_->get_translation(*context_), some_value2);
 
   // Verify we can set a prismatic mobilizer position rate given the model's
   // context.
-  slider_->set_translation_rate(context_.get(), some_value1);
+  slider_->SetTranslationRate(context_.get(), some_value1);
   EXPECT_EQ(slider_->get_translation_rate(*context_), some_value1);
-  slider_->set_translation_rate(context_.get(), some_value2);
+  slider_->SetTranslationRate(context_.get(), some_value2);
   EXPECT_EQ(slider_->get_translation_rate(*context_), some_value2);
 }
 
@@ -76,21 +75,21 @@ TEST_F(PrismaticMobilizerTest, ZeroState) {
   const double some_value1 = 1.5;
   const double some_value2 = std::sqrt(2);
   // Set the state to some arbitrary non-zero value.
-  slider_->set_translation(context_.get(), some_value1);
+  slider_->SetTranslation(context_.get(), some_value1);
   EXPECT_EQ(slider_->get_translation(*context_), some_value1);
-  slider_->set_translation_rate(context_.get(), some_value2);
+  slider_->SetTranslationRate(context_.get(), some_value2);
   EXPECT_EQ(slider_->get_translation_rate(*context_), some_value2);
 
   // Set the "zero state" for this mobilizer, which does happen to be that of
   // zero position and velocity.
-  slider_->set_zero_state(*context_, &context_->get_mutable_state());
+  slider_->SetZeroState(*context_, &context_->get_mutable_state());
   EXPECT_EQ(slider_->get_translation(*context_), 0);
   EXPECT_EQ(slider_->get_translation_rate(*context_), 0);
 }
 
 TEST_F(PrismaticMobilizerTest, CalcAcrossMobilizerTransform) {
   const double translation = 1.5;
-  slider_->set_translation(context_.get(), translation);
+  slider_->SetTranslation(context_.get(), translation);
   const math::RigidTransformd X_FM(
       slider_->CalcAcrossMobilizerTransform(*context_));
 
@@ -101,15 +100,15 @@ TEST_F(PrismaticMobilizerTest, CalcAcrossMobilizerTransform) {
   // introduce no rotations at all.
   EXPECT_EQ(X_FM.rotation().matrix(), Matrix3d::Identity());
   EXPECT_TRUE(CompareMatrices(X_FM.GetAsMatrix34(),
-                              X_FM_expected.GetAsMatrix34(),
-                              kTolerance, MatrixCompareType::relative));
+                              X_FM_expected.GetAsMatrix34(), kTolerance,
+                              MatrixCompareType::relative));
 }
 
 TEST_F(PrismaticMobilizerTest, CalcAcrossMobilizerSpatialVeloctiy) {
   const double translation_rate = 1.5;
   const SpatialVelocity<double> V_FM =
-      slider_->CalcAcrossMobilizerSpatialVelocity(
-          *context_, Vector1d(translation_rate));
+      slider_->CalcAcrossMobilizerSpatialVelocity(*context_,
+                                                  Vector1d(translation_rate));
 
   const SpatialVelocity<double> V_FM_expected(
       Vector3d::Zero(), axis_F_.normalized() * translation_rate);
@@ -163,8 +162,9 @@ TEST_F(PrismaticMobilizerTest, MapVelocityToQDotAndBack) {
 TEST_F(PrismaticMobilizerTest, KinematicMapping) {
   // For this joint, Nplus = 1 independently of the state. We therefore set the
   // state to NaN in order to verify this.
-  tree().GetMutablePositionsAndVelocities(context_.get()).
-      setConstant(std::numeric_limits<double>::quiet_NaN());
+  tree()
+      .GetMutablePositionsAndVelocities(context_.get())
+      .setConstant(std::numeric_limits<double>::quiet_NaN());
 
   // Compute N.
   MatrixX<double> N(1, 1);
@@ -179,7 +179,7 @@ TEST_F(PrismaticMobilizerTest, KinematicMapping) {
 
 TEST_F(PrismaticMobilizerTest, MapUsesN) {
   // Set an arbitrary "non-zero" state.
-  slider_->set_translation(context_.get(), 1.5);
+  slider_->SetTranslation(context_.get(), 1.5);
 
   // Set arbitrary v and MapVelocityToQDot.
   Vector1d v(1.5);
@@ -196,7 +196,7 @@ TEST_F(PrismaticMobilizerTest, MapUsesN) {
 
 TEST_F(PrismaticMobilizerTest, MapUsesNplus) {
   // Set an arbitrary "non-zero" state.
-  slider_->set_translation(context_.get(), 1.5);
+  slider_->SetTranslation(context_.get(), 1.5);
 
   // Set arbitrary qdot and MapQDotToVelocity.
   Vector1d qdot(1.5);

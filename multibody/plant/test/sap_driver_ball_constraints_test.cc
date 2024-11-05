@@ -12,7 +12,13 @@
 #include "drake/multibody/plant/sap_driver.h"
 #include "drake/multibody/plant/test/compliant_contact_manager_tester.h"
 
-/* @file This file tests SapDriver's support for ball constraints. */
+/* @file This file tests SapDriver's support for ball constraints.
+
+  Constraints are only supported by the SAP solver. Therefore, to exercise the
+  relevant code paths, we arbitrarily choose one contact approximation that uses
+  the SAP solver. More precisely, in the unit tests below we call
+  set_discrete_contact_approximation(DiscreteContactApproximation::kSap) on the
+  MultibodyPlant used for testing, before constraints are added. */
 
 using drake::math::RigidTransformd;
 using drake::multibody::contact_solvers::internal::SapContactProblem;
@@ -59,7 +65,8 @@ class TwoBodiesTest : public ::testing::TestWithParam<TestConfig> {
   // @param[in] anchor_bodyA If true, body A will be anchored to the world.
   // Otherwise body A has 6 DOFs as body B does.
   void MakeModel(bool anchor_bodyA) {
-    plant_.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+    plant_.set_discrete_contact_approximation(
+        DiscreteContactApproximation::kSap);
 
     // Arbitrary inertia values only used by the driver to build a valid contact
     // problem.
@@ -140,10 +147,11 @@ TEST_P(TwoBodiesTest, ConfirmConstraintProperties) {
   // One clique if body A is anchored, two if not.
   const int expected_num_cliques = config.bodyA_anchored ? 1 : 2;
   EXPECT_EQ(constraint->num_cliques(), expected_num_cliques);
-  EXPECT_EQ(constraint->first_clique(), 0);
   if (expected_num_cliques == 1) {
+    EXPECT_EQ(constraint->first_clique(), 1);  // i.e., bodyB's tree
     EXPECT_THROW(constraint->second_clique(), std::exception);
   } else {
+    EXPECT_EQ(constraint->first_clique(), 0);
     EXPECT_EQ(constraint->second_clique(), 1);
   }
 
@@ -230,11 +238,11 @@ INSTANTIATE_TEST_SUITE_P(SapBallConstraintTests, TwoBodiesTest,
 
 GTEST_TEST(BallConstraintsTests, VerifyIdMapping) {
   MultibodyPlant<double> plant{0.1};
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   const RigidBody<double>& bodyA =
-      plant.AddRigidBody("A", SpatialInertia<double>{});
+      plant.AddRigidBody("A", SpatialInertia<double>::NaN());
   const RigidBody<double>& bodyB =
-      plant.AddRigidBody("B", SpatialInertia<double>{});
+      plant.AddRigidBody("B", SpatialInertia<double>::NaN());
   const Vector3d p_AP(1, 2, 3);
   const Vector3d p_BQ(4, 5, 6);
   MultibodyConstraintId ball_id =
@@ -270,13 +278,32 @@ GTEST_TEST(BallConstraintsTests, VerifyIdMapping) {
   EXPECT_THROW(plant.get_weld_constraint_specs(ball_id), std::exception);
 }
 
+// Ensure that SAP runs on a constraint specified with p_BQ = std::nullopt.
+GTEST_TEST(BallConstraintTests, FinalizedConstraint) {
+  MultibodyPlant<double> plant{0.1};
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
+  const RigidBody<double>& bodyA =
+      plant.AddRigidBody("A", SpatialInertia<double>::MakeUnitary());
+  const RigidBody<double>& bodyB =
+      plant.AddRigidBody("B", SpatialInertia<double>::MakeUnitary());
+  plant.AddBallConstraint(bodyA, Vector3d{0, 0, 0}, bodyB,
+                          /* p_BQ = */ std::nullopt);
+  plant.Finalize();
+  auto context = plant.CreateDefaultContext();
+
+  EXPECT_NO_THROW(
+      plant.get_contact_results_output_port().Eval<ContactResults<double>>(
+          *context));
+}
+
 GTEST_TEST(BallConstraintTests, FailOnTAMSI) {
   MultibodyPlant<double> plant{0.1};
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kTamsi);
+  plant.set_discrete_contact_approximation(
+      DiscreteContactApproximation::kTamsi);
   const RigidBody<double>& bodyA =
-      plant.AddRigidBody("A", SpatialInertia<double>{});
+      plant.AddRigidBody("A", SpatialInertia<double>::NaN());
   const RigidBody<double>& bodyB =
-      plant.AddRigidBody("B", SpatialInertia<double>{});
+      plant.AddRigidBody("B", SpatialInertia<double>::NaN());
   DRAKE_EXPECT_THROWS_MESSAGE(plant.AddBallConstraint(bodyA, Vector3d{0, 0, 0},
                                                       bodyB, Vector3d{0, 0, 0}),
                               ".*TAMSI does not support ball constraints.*");
@@ -285,9 +312,9 @@ GTEST_TEST(BallConstraintTests, FailOnTAMSI) {
 GTEST_TEST(BallConstraintTests, FailOnContinuous) {
   MultibodyPlant<double> plant{0.0};
   const RigidBody<double>& bodyA =
-      plant.AddRigidBody("A", SpatialInertia<double>{});
+      plant.AddRigidBody("A", SpatialInertia<double>::NaN());
   const RigidBody<double>& bodyB =
-      plant.AddRigidBody("B", SpatialInertia<double>{});
+      plant.AddRigidBody("B", SpatialInertia<double>::NaN());
   DRAKE_EXPECT_THROWS_MESSAGE(
       plant.AddBallConstraint(bodyA, Vector3d{0, 0, 0}, bodyB,
                               Vector3d{0, 0, 0}),
@@ -297,11 +324,11 @@ GTEST_TEST(BallConstraintTests, FailOnContinuous) {
 
 GTEST_TEST(BallConstraintTests, FailOnFinalized) {
   MultibodyPlant<double> plant{0.1};
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   const RigidBody<double>& bodyA =
-      plant.AddRigidBody("A", SpatialInertia<double>{});
+      plant.AddRigidBody("A", SpatialInertia<double>::NaN());
   const RigidBody<double>& bodyB =
-      plant.AddRigidBody("B", SpatialInertia<double>{});
+      plant.AddRigidBody("B", SpatialInertia<double>::NaN());
   plant.Finalize();
   DRAKE_EXPECT_THROWS_MESSAGE(
       plant.AddBallConstraint(bodyA, Vector3d{0, 0, 0}, bodyB,
@@ -311,9 +338,9 @@ GTEST_TEST(BallConstraintTests, FailOnFinalized) {
 
 GTEST_TEST(BallConstraintTests, FailOnSameBody) {
   MultibodyPlant<double> plant{0.1};
-  plant.set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  plant.set_discrete_contact_approximation(DiscreteContactApproximation::kSap);
   const RigidBody<double>& bodyA =
-      plant.AddRigidBody("A", SpatialInertia<double>{});
+      plant.AddRigidBody("A", SpatialInertia<double>::NaN());
   DRAKE_EXPECT_THROWS_MESSAGE(
       plant.AddBallConstraint(bodyA, Vector3d{0, 0, 0}, bodyA,
                               Vector3d{0, 0, 0}),

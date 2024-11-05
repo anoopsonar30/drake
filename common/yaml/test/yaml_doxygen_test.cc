@@ -1,6 +1,7 @@
 #include <fstream>
 #include <sstream>
 
+#include <fmt/ranges.h>
 #include <gtest/gtest.h>
 
 #include "drake/common/find_resource.h"
@@ -28,16 +29,6 @@ std::string WriteTemp(const std::string& data) {
   std::ofstream output(filename);
   output << data;
   return filename;
-}
-
-// Read data from a scratch file.
-// (This is a test helper, not part of the Doxygen header.)
-std::string ReadTemp(const std::string& filename) {
-  std::ifstream input(filename, std::ios::binary);
-  DRAKE_DEMAND(!input.fail());
-  std::stringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
 }
 
 // This is an example from the Doxygen header.
@@ -80,7 +71,7 @@ GTEST_TEST(YamlDoxygenTest, ExamplesSaving) {
   SaveYamlFile(output_filename, data);
 
   // This data is an example from the Doxygen header.
-  const std::string output = ReadTemp(output_filename);
+  const std::string output = ReadFileOrThrow(output_filename);
   const std::string expected_output = R"""(
 foo: 4.0
 bar: [5.0, 6.0]

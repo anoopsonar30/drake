@@ -1,9 +1,9 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -24,7 +24,7 @@ drake_cc_library(
     data = [
         ":collision_ground_plane.sdf",
         ":flying_robot_base.sdf",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         "//multibody/parsing",

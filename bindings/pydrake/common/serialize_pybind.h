@@ -26,7 +26,7 @@ namespace internal {
 template <typename PyClass, typename Docs>
 class DefAttributesArchive {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DefAttributesArchive)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DefAttributesArchive);
 
   using CxxClass = typename PyClass::type;
 
@@ -168,15 +168,15 @@ class DefAttributesArchive {
   }
 
   // Partial specialization for List.
-  template <typename U>
-  static py::object CalcSchemaType(const std::vector<U>*) {
+  template <typename U, typename A>
+  static py::object CalcSchemaType(const std::vector<U, A>*) {
     auto u_type = CalcSchemaType(static_cast<U*>(nullptr));
     return GetTemplateClass("List")[u_type];
   }
 
   // Partial specialization for Dict.
-  template <typename U, typename V>
-  static py::object CalcSchemaType(const std::map<U, V>*) {
+  template <typename U, typename V, typename C, typename A>
+  static py::object CalcSchemaType(const std::map<U, V, C, A>*) {
     auto u_type = CalcSchemaType(static_cast<U*>(nullptr));
     auto v_type = CalcSchemaType(static_cast<V*>(nullptr));
     auto inner_types = py::make_tuple(u_type, v_type);
@@ -260,7 +260,7 @@ namespace internal {
 // Helper for DefReprUsingSerialize.
 class DefReprArchive {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DefReprArchive)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DefReprArchive);
   DefReprArchive() = default;
 
   // Appends the visited item's name to the list of names.

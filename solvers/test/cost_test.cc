@@ -141,6 +141,8 @@ GTEST_TEST(testCost, testLinearCost) {
   EXPECT_EQ(
       fmt::format("{}", *new_cost),
       "LinearCost (100 + $(0) + 2 * $(1)) described as 'simple linear cost'");
+
+  EXPECT_TRUE(cost->is_thread_safe());
 }
 
 GTEST_TEST(TestQuadraticCost, NonconvexCost) {
@@ -256,6 +258,8 @@ GTEST_TEST(TestQuadraticCost, NonconvexCost) {
   cost->UpdateCoefficients(Q + 100 * Eigen::Matrix2d::Identity(),
                            Eigen::Vector2d::Zero(), 0., false);
   EXPECT_FALSE(cost->is_convex());
+
+  EXPECT_TRUE(cost->is_thread_safe());
 }
 
 GTEST_TEST(TestQuadraticCost, ConvexCost) {
@@ -289,6 +293,8 @@ GTEST_TEST(TestQuadraticCost, ConvexCost) {
   cost = Make2NormSquaredCost((Eigen::Matrix2d() << 1, 2, 3, 4).finished(),
                               Eigen::Vector2d(2, 3));
   EXPECT_TRUE(cost->is_convex());
+
+  EXPECT_TRUE(cost->is_thread_safe());
 }
 
 // TODO(eric.cousineau): Move QuadraticErrorCost and L2NormCost tests here from
@@ -444,7 +450,8 @@ GTEST_TEST(TestL2NormCost, Eval) {
   const Vector2d b{.42, -3.2};
 
   L2NormCost cost(A, b);
-  EXPECT_TRUE(CompareMatrices(A, cost.A()));
+  EXPECT_TRUE(CompareMatrices(A, cost.GetDenseA()));
+  EXPECT_TRUE(CompareMatrices(A, cost.get_sparse_A().toDense()));
   EXPECT_TRUE(CompareMatrices(b, cost.b()));
 
   const Vector4d x0{5.2, 3.4, -1.3, 2.1};
@@ -478,13 +485,31 @@ GTEST_TEST(TestL2NormCost, Eval) {
     env.insert(x, x0);
     EXPECT_NEAR(z.norm(), y[0].Evaluate(env), 1e-14);
   }
+
+  {
+    // Test constructor with sparse A.
+    L2NormCost cost_sparse(A.sparseView(), b);
+    EXPECT_TRUE(CompareMatrices(cost_sparse.GetDenseA(), A));
+    EXPECT_TRUE(CompareMatrices(cost_sparse.get_sparse_A().toDense(), A));
+    EXPECT_TRUE(CompareMatrices(cost_sparse.b(), b));
+  }
 }
 
 GTEST_TEST(TestL2NormCost, UpdateCoefficients) {
   L2NormCost cost(Matrix2d::Identity(), Vector2d::Zero());
 
-  cost.UpdateCoefficients(Matrix<double, 4, 2>::Identity(), Vector4d::Zero());
-  EXPECT_EQ(cost.A().rows(), 4);
+  Matrix<double, 4, 2> new_A = Matrix<double, 4, 2>::Identity();
+  // Call UpdateCoefficients with a dense A.
+  cost.UpdateCoefficients(new_A, Vector4d::Zero());
+  EXPECT_TRUE(CompareMatrices(cost.get_sparse_A().toDense(), new_A));
+  EXPECT_TRUE(CompareMatrices(cost.GetDenseA(), new_A));
+  EXPECT_EQ(cost.b().rows(), 4);
+
+  // Call UpdateCoefficients with a sparse A.
+  new_A << 1, 2, 3, 0, 1, 3, 5, 0;
+  cost.UpdateCoefficients(new_A.sparseView(), Vector4d::Zero());
+  EXPECT_TRUE(CompareMatrices(cost.get_sparse_A().toDense(), new_A));
+  EXPECT_TRUE(CompareMatrices(cost.GetDenseA(), new_A));
   EXPECT_EQ(cost.b().rows(), 4);
 
   // Can't change the number of variables.
@@ -734,8 +759,8 @@ GTEST_TEST(EvaluatorCost, Eval) {
 }
 
 GTEST_TEST(ExpressionCost, Basic) {
-  using std::sin;
   using std::cos;
+  using std::sin;
   Variable x("x"), y("y");
   symbolic::Expression e = x * sin(y);
   ExpressionCost cost(e);
@@ -754,7 +779,7 @@ GTEST_TEST(ExpressionCost, Basic) {
 
   AutoDiffVecXd x_ad = math::InitializeAutoDiff(x_d);
   AutoDiffVecXd y_ad;
-  RowVector2d y_deriv_expected(sin(3.5), 1.2*cos(3.5));
+  RowVector2d y_deriv_expected(sin(3.5), 1.2 * cos(3.5));
   cost.Eval(x_ad, &y_ad);
   EXPECT_TRUE(CompareMatrices(math::ExtractValue(y_ad), y_expected));
   EXPECT_TRUE(CompareMatrices(math::ExtractGradient(y_ad), y_deriv_expected));
@@ -773,11 +798,12 @@ GTEST_TEST(ExpressionCost, Basic) {
 }
 
 GTEST_TEST(ToLatex, GenericCost) {
-  test::GenericTrivialCost1 c;
+  test::GenericTrivialCost1 c{false};
   c.set_description("test");
   Vector3<Variable> vars = symbolic::MakeVectorVariable<3>("x");
   EXPECT_EQ(c.ToLatex(vars),
             "\\text{GenericTrivialCost1}(x_{0}, x_{1}, x_{2}) \\tag{test}");
+  EXPECT_FALSE(c.is_thread_safe());
 }
 
 GTEST_TEST(ToLatex, LinearCost) {
@@ -839,6 +865,50 @@ GTEST_TEST(ToLatex, ExpressionCost) {
   c.set_description("test");
   Vector2<Variable> vars(x, y);
   EXPECT_EQ(c.ToLatex(vars), "x \\sin{y} \\tag{test}");
+}
+
+GTEST_TEST(IsThreadSafe, GenericCost) {
+  test::GenericTrivialCost1 c1{true};
+  EXPECT_TRUE(c1.is_thread_safe());
+  test::GenericTrivialCost1 c2{false};
+  EXPECT_FALSE(c2.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, LinearCost) {
+  LinearCost c(Vector3d(1, 2, 3), 4);
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, QuadraticCost) {
+  QuadraticCost c(Matrix3d::Identity(), Vector3d(1, 2, 3), 4);
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, L1NormCost) {
+  L1NormCost c(Matrix3d::Identity(), Vector3d(1, 2, 3));
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, L2NormCost) {
+  L2NormCost c(Matrix3d::Identity(), Vector3d(1, 2, 3));
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, LInfNormCost) {
+  LInfNormCost c(Matrix3d::Identity(), Vector3d(1, 2, 3));
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, PerspectiveQuadraticCost) {
+  PerspectiveQuadraticCost c(Matrix3d::Identity(), Vector3d(1, 2, 3));
+  EXPECT_TRUE(c.is_thread_safe());
+}
+
+GTEST_TEST(IsThreadSafe, ExpressionCost) {
+  Variable x("x"), y("y");
+  Expression e = x * sin(y);
+  ExpressionCost c(e);
+  EXPECT_FALSE(c.is_thread_safe());
 }
 
 }  // namespace

@@ -10,6 +10,7 @@
 
 #include "drake/common/symbolic/decompose.h"
 #include "drake/common/symbolic/latex.h"
+#include "drake/common/text_logging.h"
 #include "drake/math/autodiff_gradient.h"
 #include "drake/math/matrix_util.h"
 
@@ -98,11 +99,11 @@ std::string ToLatexConstraint(const Constraint& constraint,
                               int precision) {
   VectorX<symbolic::Expression> y(constraint.num_constraints());
   constraint.Eval(vars, &y);
-  return fmt::format(
-      "{}{}{}", ToLatexLowerBound(constraint, precision),
-      constraint.num_constraints() == 1 ? symbolic::ToLatex(y[0], precision)
-                                        : symbolic::ToLatex(y, precision),
-      ToLatexUpperBound(constraint, precision));
+  return fmt::format("{}{}{}", ToLatexLowerBound(constraint, precision),
+                     constraint.num_constraints() == 1
+                         ? symbolic::ToLatex(y[0], precision)
+                         : symbolic::ToLatex(y, precision),
+                     ToLatexUpperBound(constraint, precision));
 }
 
 }  // namespace
@@ -136,6 +137,8 @@ symbolic::Formula Constraint::DoCheckSatisfied(
   return f;
 }
 
+QuadraticConstraint::~QuadraticConstraint() = default;
+
 bool QuadraticConstraint::is_convex() const {
   switch (hessian_type_) {
     case HessianType::kPositiveSemidefinite: {
@@ -161,12 +164,27 @@ void QuadraticConstraint::UpdateHessianType(
   }
   Eigen::LDLT<Eigen::MatrixXd> ldlt_solver;
   ldlt_solver.compute(Q_);
-  if (ldlt_solver.isPositive()) {
-    hessian_type_ = HessianType::kPositiveSemidefinite;
-  } else if (ldlt_solver.isNegative()) {
-    hessian_type_ = HessianType::kNegativeSemidefinite;
-  } else {
+  if (ldlt_solver.info() != Eigen::Success) {
+    // Fall back to an indefinite Hessian type if we cannot determine the
+    // Hessian type.
+    drake::log()->warn(
+        "UpdateHessianType(): Unable to determine Hessian type of the "
+        "Quadratic Constraint. Falling back to indefinite Hessian type. To get "
+        "rid of this warning, if you know the type of the hessian (positive "
+        "semidefinite, negative semidefinite, or indefinite), then set "
+        "hessian_type explicitly when you construct "
+        "or set the quadratic constraint, such as in"
+        "QuadraticConstraint(), UpdateCoefficients() or "
+        "AddQuadraticConstraint() functions.");
     hessian_type_ = HessianType::kIndefinite;
+  } else {
+    if (ldlt_solver.isPositive()) {
+      hessian_type_ = HessianType::kPositiveSemidefinite;
+    } else if (ldlt_solver.isNegative()) {
+      hessian_type_ = HessianType::kNegativeSemidefinite;
+    } else {
+      hessian_type_ = HessianType::kIndefinite;
+    }
   }
 }
 
@@ -230,9 +248,12 @@ LorentzConeConstraint::LorentzConeConstraint(
       A_dense_(A),
       b_(b),
       eval_type_{eval_type} {
-  DRAKE_DEMAND(A_.rows() >= 2);
-  DRAKE_ASSERT(A_.rows() == b_.rows());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A_.rows() >= 2);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
 }
+
+LorentzConeConstraint::~LorentzConeConstraint() = default;
 
 void LorentzConeConstraint::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
@@ -246,8 +267,8 @@ void LorentzConeConstraint::UpdateCoefficients(
   A_ = new_A.sparseView();
   A_dense_ = new_A;
   b_ = new_b;
-  DRAKE_DEMAND(A_.rows() >= 2);
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  DRAKE_THROW_UNLESS(A_.rows() >= 2);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
   // Note that we don't need to update the lower and upper bounds as the
   // constraints lower/upper bounds are fixed (independent of A and b). The
   // bounds only depend on EvalType. When EvalType=kNonconvex, the lower/upper
@@ -333,6 +354,8 @@ std::string LorentzConeConstraint::DoToLatex(
                      symbolic::ToLatex(z(0), precision));
 }
 
+RotatedLorentzConeConstraint::~RotatedLorentzConeConstraint() = default;
+
 void RotatedLorentzConeConstraint::UpdateCoefficients(
     const Eigen::Ref<const Eigen::MatrixXd>& new_A,
     const Eigen::Ref<const Eigen::VectorXd>& new_b) {
@@ -345,8 +368,8 @@ void RotatedLorentzConeConstraint::UpdateCoefficients(
   A_ = new_A.sparseView();
   A_dense_ = new_A;
   b_ = new_b;
-  DRAKE_DEMAND(A_.rows() >= 3);
-  DRAKE_DEMAND(A_.rows() == b_.rows());
+  DRAKE_THROW_UNLESS(A_.rows() >= 3);
+  DRAKE_THROW_UNLESS(A_.rows() == b_.rows());
   // Note that we don't need to update the lower and upper bounds as the
   // constraints lower/upper bounds are fixed (independent of A and b).
 }
@@ -393,21 +416,27 @@ std::string RotatedLorentzConeConstraint::DoToLatex(
       symbolic::ToLatex(z(0) * z(1), precision));
 }
 
+PolynomialConstraint::~PolynomialConstraint() = default;
+
 LinearConstraint::LinearConstraint(const Eigen::Ref<const Eigen::MatrixXd>& A,
                                    const Eigen::Ref<const Eigen::VectorXd>& lb,
                                    const Eigen::Ref<const Eigen::VectorXd>& ub)
     : Constraint(A.rows(), A.cols(), lb, ub), A_(A) {
-  DRAKE_DEMAND(A.rows() == lb.rows());
-  DRAKE_DEMAND(A.array().isFinite().all());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A.rows() == lb.rows());
+  DRAKE_THROW_UNLESS(A.array().allFinite());
 }
 
 LinearConstraint::LinearConstraint(const Eigen::SparseMatrix<double>& A,
                                    const Eigen::Ref<const Eigen::VectorXd>& lb,
                                    const Eigen::Ref<const Eigen::VectorXd>& ub)
     : Constraint(A.rows(), A.cols(), lb, ub), A_(A) {
-  DRAKE_DEMAND(A.rows() == lb.rows());
-  DRAKE_DEMAND(A_.IsFinite());
+  set_is_thread_safe(true);
+  DRAKE_THROW_UNLESS(A.rows() == lb.rows());
+  DRAKE_THROW_UNLESS(A_.IsFinite());
 }
+
+LinearConstraint::~LinearConstraint() = default;
 
 const Eigen::MatrixXd& LinearConstraint::GetDenseA() const {
   return A_.GetAsDense();
@@ -426,7 +455,7 @@ void LinearConstraint::UpdateCoefficients(
   }
 
   A_ = new_A;
-  DRAKE_DEMAND(A_.IsFinite());
+  DRAKE_THROW_UNLESS(A_.IsFinite());
   set_num_outputs(A_.get_as_sparse().rows());
   set_bounds(new_lb, new_ub);
 }
@@ -443,7 +472,7 @@ void LinearConstraint::UpdateCoefficients(
     throw std::runtime_error("Can't change the number of decision variables");
   }
   A_ = new_A;
-  DRAKE_DEMAND(A_.IsFinite());
+  DRAKE_THROW_UNLESS(A_.IsFinite());
   set_num_outputs(A_.get_as_sparse().rows());
   set_bounds(new_lb, new_ub);
 }
@@ -466,6 +495,10 @@ void LinearConstraint::RemoveTinyCoefficient(double tol) {
   Eigen::SparseMatrix<double> new_A(A_sparse.rows(), A_sparse.cols());
   new_A.setFromTriplets(new_A_triplets.begin(), new_A_triplets.end());
   UpdateCoefficients(new_A, lower_bound(), upper_bound());
+}
+
+bool LinearConstraint::is_dense_A_constructed() const {
+  return A_.is_dense_constructed();
 }
 
 template <typename DerivedX, typename ScalarY>
@@ -496,18 +529,18 @@ std::ostream& LinearConstraint::DoDisplay(
   return DisplayConstraint(*this, os, "LinearConstraint", vars, false);
 }
 
-std::string LinearConstraint::DoToLatex(
-    const VectorX<symbolic::Variable>& vars, int precision) const {
+std::string LinearConstraint::DoToLatex(const VectorX<symbolic::Variable>& vars,
+                                        int precision) const {
   if (num_constraints() == 1) {
     return fmt::format(
         "{}{}{}", ToLatexLowerBound(*this, precision),
         symbolic::ToLatex((A_.get_as_sparse() * vars)[0], precision),
         ToLatexUpperBound(*this, precision));
   }
-  return fmt::format(
-      "{}{} {}{}", ToLatexLowerBound(*this, precision),
-      symbolic::ToLatex(GetDenseA(), precision), symbolic::ToLatex(vars),
-      ToLatexUpperBound(*this, precision));
+  return fmt::format("{}{} {}{}", ToLatexLowerBound(*this, precision),
+                     symbolic::ToLatex(GetDenseA(), precision),
+                     symbolic::ToLatex(vars),
+                     ToLatexUpperBound(*this, precision));
 }
 
 std::ostream& LinearEqualityConstraint::DoDisplay(
@@ -515,18 +548,20 @@ std::ostream& LinearEqualityConstraint::DoDisplay(
   return DisplayConstraint(*this, os, "LinearEqualityConstraint", vars, true);
 }
 
-namespace internal {
+namespace {
 Eigen::SparseMatrix<double> ConstructSparseIdentity(int rows) {
   Eigen::SparseMatrix<double> mat(rows, rows);
   mat.setIdentity();
   return mat;
 }
-}  // namespace internal
+}  // namespace
 
 BoundingBoxConstraint::BoundingBoxConstraint(
     const Eigen::Ref<const Eigen::VectorXd>& lb,
     const Eigen::Ref<const Eigen::VectorXd>& ub)
-    : LinearConstraint(internal::ConstructSparseIdentity(lb.rows()), lb, ub) {}
+    : LinearConstraint(ConstructSparseIdentity(lb.rows()), lb, ub) {}
+
+BoundingBoxConstraint::~BoundingBoxConstraint() = default;
 
 template <typename DerivedX, typename ScalarY>
 void BoundingBoxConstraint::DoEvalGeneric(const Eigen::MatrixBase<DerivedX>& x,
@@ -562,6 +597,8 @@ std::string BoundingBoxConstraint::DoToLatex(
                                             : symbolic::ToLatex(vars),
                      ToLatexUpperBound(*this, precision));
 }
+
+LinearComplementarityConstraint::~LinearComplementarityConstraint() = default;
 
 template <typename DerivedX, typename ScalarY>
 void LinearComplementarityConstraint::DoEvalGeneric(
@@ -629,16 +666,38 @@ std::string LinearComplementarityConstraint::DoToLatex(
                      symbolic::ToLatex((M_ * vars + q_).eval(), precision));
 }
 
+PositiveSemidefiniteConstraint::PositiveSemidefiniteConstraint(int rows)
+    : Constraint(rows, rows * rows, Eigen::VectorXd::Zero(rows),
+                 Eigen::VectorXd::Constant(
+                     rows, std::numeric_limits<double>::infinity())),
+      matrix_rows_(rows) {
+  // TODO(hongkai.dai): remove the warning when we change the solver backend.
+  if (matrix_rows_ == 1) {
+    drake::log()->warn(
+        "PositiveSemidefiniteConstraint: rows==1, please consider "
+        "reformulating this as a linear inequality constraint for better "
+        "speed/numerics.");
+  } else if (matrix_rows_ == 2) {
+    drake::log()->warn(
+        "PositiveSemidefiniteConstraint: rows==2, please consider to "
+        "reformulating this as a rotated Lorentz cone constraint for better "
+        "speed/numerics.");
+  }
+  set_is_thread_safe(true);
+}
+
+PositiveSemidefiniteConstraint::~PositiveSemidefiniteConstraint() = default;
+
 void PositiveSemidefiniteConstraint::DoEval(
     const Eigen::Ref<const Eigen::VectorXd>& x, Eigen::VectorXd* y) const {
-  DRAKE_ASSERT(x.rows() == num_constraints() * num_constraints());
+  DRAKE_THROW_UNLESS(x.rows() == num_constraints() * num_constraints());
   Eigen::MatrixXd S(num_constraints(), num_constraints());
 
   for (int i = 0; i < num_constraints(); ++i) {
     S.col(i) = x.segment(i * num_constraints(), num_constraints());
   }
 
-  DRAKE_ASSERT(S.rows() == num_constraints());
+  DRAKE_THROW_UNLESS(S.rows() == num_constraints());
 
   // This uses the lower diagonal part of S to compute the eigen values.
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen_solver(S);
@@ -662,14 +721,16 @@ void PositiveSemidefiniteConstraint::DoEval(
 
 std::string PositiveSemidefiniteConstraint::DoToLatex(
     const VectorX<symbolic::Variable>& vars, int precision) const {
-  Eigen::Map<const MatrixX<symbolic::Variable>> S(
-      vars.data(), matrix_rows(), matrix_rows());
+  Eigen::Map<const MatrixX<symbolic::Variable>> S(vars.data(), matrix_rows(),
+                                                  matrix_rows());
   return fmt::format("{} \\succeq 0", symbolic::ToLatex(S.eval(), precision));
 }
 
+LinearMatrixInequalityConstraint::~LinearMatrixInequalityConstraint() = default;
+
 void LinearMatrixInequalityConstraint::DoEval(
     const Eigen::Ref<const Eigen::VectorXd>& x, Eigen::VectorXd* y) const {
-  DRAKE_ASSERT(x.rows() == static_cast<int>(F_.size()) - 1);
+  DRAKE_THROW_UNLESS(x.rows() == static_cast<int>(F_.size()) - 1);
   Eigen::MatrixXd S = F_[0];
   for (int i = 1; i < static_cast<int>(F_.size()); ++i) {
     S += x(i - 1) * F_[i];
@@ -694,20 +755,35 @@ void LinearMatrixInequalityConstraint::DoEval(
 }
 
 LinearMatrixInequalityConstraint::LinearMatrixInequalityConstraint(
-    const std::vector<Eigen::Ref<const Eigen::MatrixXd>>& F,
-    double symmetry_tolerance)
+    std::vector<Eigen::MatrixXd> F, double symmetry_tolerance)
     : Constraint(F.empty() ? 0 : F.front().rows(),
                  F.empty() ? 0 : F.size() - 1),
-      F_(F.begin(), F.end()),
-      matrix_rows_(F.empty() ? 0 : F.front().rows()) {
-  DRAKE_DEMAND(!F.empty());
+      F_{std::move(F)},
+      matrix_rows_(F_.empty() ? 0 : F_.front().rows()) {
+  DRAKE_THROW_UNLESS(!F_.empty());
+  // TODO(hongkai.dai): remove the warning when we change the solver backend.
+  if (matrix_rows_ == 1) {
+    drake::log()->warn(
+        "LinearMatrixInequalityConstraint: the matrix has size 1. Please "
+        "consider"
+        "reformulating this as a linear inequality constraint for better "
+        "speed/numerics.");
+  } else if (matrix_rows_ == 2) {
+    drake::log()->warn(
+        "LinearMatrixInequalityConstraint: the matrix has size 2. Please "
+        "consider "
+        "reformulating this as a rotated Lorentz cone constraint for better "
+        "speed/numerics.");
+  }
+
   set_bounds(Eigen::VectorXd::Zero(matrix_rows_),
              Eigen::VectorXd::Constant(
                  matrix_rows_, std::numeric_limits<double>::infinity()));
-  for (const auto& Fi : F) {
-    DRAKE_ASSERT(Fi.rows() == matrix_rows_);
-    DRAKE_ASSERT(math::IsSymmetric(Fi, symmetry_tolerance));
+  for (const auto& Fi : F_) {
+    DRAKE_THROW_UNLESS(Fi.rows() == matrix_rows_);
+    DRAKE_THROW_UNLESS(math::IsSymmetric(Fi, symmetry_tolerance));
   }
+  set_is_thread_safe(true);
 }
 
 std::string LinearMatrixInequalityConstraint::DoToLatex(
@@ -740,7 +816,7 @@ ExpressionConstraint::ExpressionConstraint(
 
 void ExpressionConstraint::DoEval(const Eigen::Ref<const Eigen::VectorXd>& x,
                                   Eigen::VectorXd* y) const {
-  DRAKE_DEMAND(x.rows() == vars_.rows());
+  DRAKE_THROW_UNLESS(x.rows() == vars_.rows());
 
   // Set environment with current x values.
   for (int i = 0; i < vars_.size(); i++) {
@@ -756,7 +832,7 @@ void ExpressionConstraint::DoEval(const Eigen::Ref<const Eigen::VectorXd>& x,
 
 void ExpressionConstraint::DoEval(const Eigen::Ref<const AutoDiffVecXd>& x,
                                   AutoDiffVecXd* y) const {
-  DRAKE_DEMAND(x.rows() == vars_.rows());
+  DRAKE_THROW_UNLESS(x.rows() == vars_.rows());
 
   // Set environment with current x values.
   for (int i = 0; i < vars_.size(); i++) {
@@ -786,7 +862,7 @@ void ExpressionConstraint::DoEval(const Eigen::Ref<const AutoDiffVecXd>& x,
 void ExpressionConstraint::DoEval(
     const Eigen::Ref<const VectorX<symbolic::Variable>>& x,
     VectorX<symbolic::Expression>* y) const {
-  DRAKE_DEMAND(x.rows() == vars_.rows());
+  DRAKE_THROW_UNLESS(x.rows() == vars_.rows());
   symbolic::Substitution subst;
   for (int i = 0; i < vars_.size(); ++i) {
     if (!vars_[i].equal_to(x[i])) {
@@ -821,8 +897,11 @@ ExponentialConeConstraint::ExponentialConeConstraint(
           Eigen::Vector2d::Constant(std::numeric_limits<double>::infinity())),
       A_{A},
       b_{b} {
-  DRAKE_DEMAND(A.rows() == 3);
+  DRAKE_THROW_UNLESS(A.rows() == 3);
+  set_is_thread_safe(true);
 }
+
+ExponentialConeConstraint::~ExponentialConeConstraint() = default;
 
 template <typename DerivedX, typename ScalarY>
 void ExponentialConeConstraint::DoEvalGeneric(

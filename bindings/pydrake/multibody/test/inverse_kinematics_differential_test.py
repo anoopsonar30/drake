@@ -6,10 +6,10 @@ import unittest
 import numpy as np
 
 from pydrake.common import FindResourceOrThrow
-from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.math import RigidTransform
 from pydrake.multibody.plant import MultibodyPlant
 from pydrake.multibody.parsing import Parser
+from pydrake.solvers import SolverId
 
 
 class TestPlanner(unittest.TestCase):
@@ -61,6 +61,8 @@ class TestPlanner(unittest.TestCase):
         np.testing.assert_equal(
             params.get_end_effector_translational_velocity_limits()[1],
             [1, 2, 3])
+        params.get_mutable_solver_options().SetOption(
+            SolverId("dummy"), "dummy", 0.0)
 
         # Test a basic call for the API. These values intentionally have no
         # physical meaning.
@@ -98,13 +100,40 @@ class TestPlanner(unittest.TestCase):
 
         context = plant.CreateDefaultContext()
         frame = plant.GetFrameByName("Link2")
+
+        world_frame = plant.world_frame()
+
         parameters = mut.DifferentialInverseKinematicsParameters(2, 2)
 
-        mut.DoDifferentialInverseKinematics(plant, context,
-                                            np.zeros(6), frame, parameters)
+        mut.DoDifferentialInverseKinematics(
+            robot=plant,
+            context=context,
+            V_WE_desired=np.zeros(6),
+            frame_E=frame,
+            parameters=parameters)
 
-        mut.DoDifferentialInverseKinematics(plant, context, RigidTransform(),
-                                            frame, parameters)
+        mut.DoDifferentialInverseKinematics(
+            robot=plant,
+            context=context,
+            X_WE_desired=RigidTransform(),
+            frame_E=frame,
+            parameters=parameters)
+
+        mut.DoDifferentialInverseKinematics(
+            robot=plant,
+            context=context,
+            V_AE_desired=np.zeros(6),
+            frame_A=world_frame,
+            frame_E=frame,
+            parameters=parameters)
+
+        mut.DoDifferentialInverseKinematics(
+            robot=plant,
+            context=context,
+            X_AE_desired=RigidTransform(),
+            frame_A=world_frame,
+            frame_E=frame,
+            parameters=parameters)
 
     def test_diff_ik_integrator(self):
         file_name = FindResourceOrThrow(
@@ -113,18 +142,34 @@ class TestPlanner(unittest.TestCase):
         Parser(plant).AddModels(file_name)
         plant.Finalize()
 
-        context = plant.CreateDefaultContext()
+        robot_context = plant.CreateDefaultContext()
         frame = plant.GetFrameByName("Link2")
         time_step = 0.1
         parameters = mut.DifferentialInverseKinematicsParameters(2, 2)
 
         integrator = mut.DifferentialInverseKinematicsIntegrator(
             robot=plant,
+            frame_A=plant.world_frame(),
             frame_E=frame,
             time_step=time_step,
             parameters=parameters,
-            robot_context=context,
+            robot_context=robot_context,
             log_only_when_result_state_changes=True)
+
+        context = integrator.CreateDefaultContext()
+        X_AE = integrator.ForwardKinematics(context=context)
 
         integrator.get_mutable_parameters().set_time_step(0.2)
         self.assertEqual(integrator.get_parameters().get_time_step(), 0.2)
+
+        integrator2 = mut.DifferentialInverseKinematicsIntegrator(
+            robot=plant,
+            frame_E=frame,
+            time_step=time_step,
+            parameters=parameters,
+            robot_context=robot_context,
+            log_only_when_result_state_changes=True)
+
+        context2 = integrator2.CreateDefaultContext()
+        X_WE = integrator2.ForwardKinematics(context2)
+        self.assertTrue(X_AE.IsExactlyEqualTo(X_WE))

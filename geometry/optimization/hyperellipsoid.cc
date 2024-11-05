@@ -6,9 +6,12 @@
 #include <Eigen/Eigenvalues>
 #include <fmt/format.h>
 
+#include "drake/common/overloaded.h"
+#include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/math/matrix_util.h"
 #include "drake/math/rotation_matrix.h"
 #include "drake/solvers/choose_best_solver.h"
+#include "drake/solvers/clarabel_solver.h"
 #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/ipopt_solver.h"
 #include "drake/solvers/mosek_solver.h"
@@ -44,10 +47,24 @@ Hyperellipsoid::Hyperellipsoid(const QueryObject<double>& query_object,
                                GeometryId geometry_id,
                                std::optional<FrameId> reference_frame)
     : ConvexSet(3, true) {
-  Eigen::Matrix3d A_G;
-  query_object.inspector().GetShape(geometry_id).Reify(this, &A_G);
+  const Shape& shape = query_object.inspector().GetShape(geometry_id);
+  const Eigen::Matrix3d A_G = shape.Visit<Eigen::Matrix3d>(overloaded{
+      // We only handle certain shape types.
+      [](const Ellipsoid& ellipsoid) {
+        // x²/a² + y²/b² + z²/c² = 1 in quadratic form is
+        // xᵀ * diag(1/a^2, 1/b^2, 1/c^2) * x = 1 and A is the square root.
+        return Eigen::DiagonalMatrix<double, 3>(
+            1.0 / ellipsoid.a(), 1.0 / ellipsoid.b(), 1.0 / ellipsoid.c());
+      },
+      [](const Sphere& sphere) {
+        return Eigen::Matrix3d::Identity() / sphere.radius();
+      },
+      [&geometry_id](const auto& unsupported) -> Eigen::Matrix3d {
+        throw std::logic_error(fmt::format(
+            "{} (geometry_id={}) cannot be converted to a Hyperellipsoid",
+            unsupported, geometry_id));
+      }});
   // p_GG_varᵀ * A_Gᵀ * A_G * p_GG_var ≤ 1
-
   const RigidTransformd X_WE =
       reference_frame ? query_object.GetPoseInWorld(*reference_frame)
                       : RigidTransformd::Identity();
@@ -59,6 +76,16 @@ Hyperellipsoid::Hyperellipsoid(const QueryObject<double>& query_object,
   A_ = A_G * X_GE.rotation().matrix();
   center_ = X_GE.inverse().translation();
 }
+namespace {
+MatrixXd CalcQuadraticFormA(const AffineBall& ellipsoid) {
+  const auto B_QR = Eigen::ColPivHouseholderQR<MatrixXd>(ellipsoid.B());
+  DRAKE_THROW_UNLESS(B_QR.isInvertible());
+  return B_QR.inverse();
+}
+}  // namespace
+
+Hyperellipsoid::Hyperellipsoid(const AffineBall& ellipsoid)
+    : Hyperellipsoid(CalcQuadraticFormA(ellipsoid), ellipsoid.center()) {}
 
 Hyperellipsoid::~Hyperellipsoid() = default;
 
@@ -94,8 +121,9 @@ std::pair<double, VectorXd> Hyperellipsoid::MinimumUniformScalingToTouch(
   // Specify a list of solvers by preference, to avoid IPOPT getting used for
   // conic constraints.  See discussion at #15320.
   // TODO(russt): Revisit this pending resolution of #15320.
-  std::vector<solvers::SolverId> preferred_solvers{solvers::MosekSolver::id(),
-                                                   solvers::GurobiSolver::id()};
+  std::vector<solvers::SolverId> preferred_solvers{
+      solvers::MosekSolver::id(), solvers::GurobiSolver::id(),
+      solvers::ClarabelSolver::id()};
 
   // If we have only linear constraints, then add a quadratic cost and solve the
   // QP.  Otherwise add a slack variable and solve the SOCP.
@@ -147,6 +175,12 @@ std::pair<double, VectorXd> Hyperellipsoid::MinimumUniformScalingToTouch(
                                      result.GetSolution(x));
 }
 
+Hyperellipsoid Hyperellipsoid::Scale(double scale) const {
+  DRAKE_THROW_UNLESS(scale > 0);
+  return Hyperellipsoid(A_ / std::pow(scale, 1.0 / ambient_dimension()),
+                        center_);
+}
+
 Hyperellipsoid Hyperellipsoid::MakeAxisAligned(
     const Eigen::Ref<const VectorXd>& radius,
     const Eigen::Ref<const VectorXd>& center) {
@@ -190,7 +224,11 @@ Hyperellipsoid Hyperellipsoid::MinimumVolumeCircumscribedEllipsoid(
     svd.setThreshold(rank_tol);
     rank = svd.rank();
     if (rank < dim) {
-      U = svd.matrixU().leftCols(rank);
+      throw std::runtime_error(
+          "The numerical rank of the points appears to be less than the "
+          "ambient dimension. The smallest singular value is {}, which is "
+          "below rank_tol = {}. Decrease rank_tol or consider using "
+          "AffineBall::MinimumVolumeCircumscribedEllipsoid instead.");
     }
   }
 
@@ -202,17 +240,11 @@ Hyperellipsoid Hyperellipsoid::MinimumVolumeCircumscribedEllipsoid(
   // TODO(russt): Avoid the symbolic computation here and write A_lorentz
   // directly, s.t. v = A_lorentz * vars + b_lorentz, where A=Aᵀ and b are the
   // vars.
-  VectorX<Expression> v(rank + 1);
+  VectorX<Expression> v(dim + 1);
   v[0] = 1;
   for (int i = 0; i < n; ++i) {
-    if (U) {  // rank < dim
-      // |AUᵀ(x-mean) + b|₂ <= 1, written as a Lorentz cone with v = [1;
-      // AUᵀ(x-mean) + b].
-      v.tail(rank) = A * U->transpose() * (points.col(i) - mean) + b;
-    } else {  // rank == dim
-      // |Ax + b|₂ <= 1, written as a Lorentz cone with v = [1; A * x + b].
-      v.tail(rank) = A * points.col(i) + b;
-    }
+    // |Ax + b|₂ <= 1, written as a Lorentz cone with v = [1; A * x + b].
+    v.tail(dim) = A * points.col(i) + b;
     prog.AddLorentzConeConstraint(v);
   }
 
@@ -233,12 +265,7 @@ Hyperellipsoid Hyperellipsoid::MinimumVolumeCircumscribedEllipsoid(
   // the convex hull of the points is guaranteed to be bounded.
   const VectorXd c = A_sol.llt().solve(-b_sol);
 
-  if (U) {
-    // AUᵀ(x-mean) + b => AUᵀ(x - center), so center = -UA⁻¹b + mean.
-    return Hyperellipsoid(A_sol * U->transpose(), (*U) * c + mean);
-  } else {
-    return Hyperellipsoid(A_sol, c);
-  }
+  return Hyperellipsoid(A_sol, c);
 }
 
 std::unique_ptr<ConvexSet> Hyperellipsoid::DoClone() const {
@@ -261,8 +288,8 @@ std::optional<Eigen::VectorXd> Hyperellipsoid::DoMaybeGetFeasiblePoint() const {
   return center_;
 }
 
-bool Hyperellipsoid::DoPointInSet(const Eigen::Ref<const VectorXd>& x,
-                                  double tol) const {
+std::optional<bool> Hyperellipsoid::DoPointInSetShortcut(
+    const Eigen::Ref<const VectorXd>& x, double tol) const {
   DRAKE_DEMAND(A_.cols() == x.size());
   const VectorXd v = A_ * (x - center_);
   return v.dot(v) <= 1.0 + tol;
@@ -368,7 +395,8 @@ double Hyperellipsoid::DoCalcVolume() const {
     return std::numeric_limits<double>::infinity();
   }
   // Note: this will (correctly) return infinity if the determinant is zero.
-  return volume_of_unit_sphere(ambient_dimension()) / A_.determinant();
+  return volume_of_unit_sphere(ambient_dimension()) /
+         std::abs(A_.determinant());
 }
 
 void Hyperellipsoid::CheckInvariants() const {
@@ -377,17 +405,14 @@ void Hyperellipsoid::CheckInvariants() const {
   DRAKE_THROW_UNLESS(A_.allFinite());  // to ensure the set is non-empty.
 }
 
-void Hyperellipsoid::ImplementGeometry(const Ellipsoid& ellipsoid, void* data) {
-  // x²/a² + y²/b² + z²/c² = 1 in quadratic form is
-  // xᵀ * diag(1/a^2, 1/b^2, 1/c^2) * x = 1 and A is the square root.
-  auto* A = static_cast<Eigen::Matrix3d*>(data);
-  *A = Eigen::DiagonalMatrix<double, 3>(
-      1.0 / ellipsoid.a(), 1.0 / ellipsoid.b(), 1.0 / ellipsoid.c());
-}
-
-void Hyperellipsoid::ImplementGeometry(const Sphere& sphere, void* data) {
-  auto* A = static_cast<Eigen::Matrix3d*>(data);
-  *A = Eigen::Matrix3d::Identity() / sphere.radius();
+std::unique_ptr<ConvexSet> Hyperellipsoid::DoAffineHullShortcut(
+    std::optional<double> tol) const {
+  // Hyperellipsoids are always positive volume, so we can trivially construct
+  // their affine hull as the whole vector space.
+  unused(tol);
+  const int n = ambient_dimension();
+  return std::make_unique<AffineSubspace>(Eigen::MatrixXd::Identity(n, n),
+                                          Eigen::VectorXd::Zero(n));
 }
 
 }  // namespace optimization

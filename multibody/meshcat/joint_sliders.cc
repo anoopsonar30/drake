@@ -9,15 +9,10 @@
 #include <fmt/format.h>
 
 #include "drake/common/autodiff_overloads.h"
+#include "drake/common/overloaded.h"
 #include "drake/common/scope_exit.h"
 #include "drake/common/unused.h"
 #include "drake/geometry/meshcat_graphviz.h"
-
-namespace {
-// Boilerplate for std::visit.
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-}  // namespace
 
 namespace drake {
 namespace multibody {
@@ -74,7 +69,7 @@ std::map<int, std::string> GetPositionNames(
 
   // Map all joints into the positions-to-name result.
   std::map<int, std::string> result;
-  for (JointIndex i{0}; i < plant->num_joints(); ++i) {
+  for (JointIndex i : plant->GetJointIndices()) {
     const Joint<T>& joint = plant->get_joint(i);
     for (int j = 0; j < joint.num_positions(); ++j) {
       const int position_index = joint.position_start() + j;
@@ -112,14 +107,14 @@ std::map<int, std::string> GetPositionNames(
 VectorXd Broadcast(
     const char* diagnostic_name, double default_value, int num_positions,
     std::variant<std::monostate, double, VectorXd> value) {
-  return std::visit(overloaded{
-    [num_positions, default_value](std::monostate) -> VectorXd {
+  return std::visit<VectorXd>(overloaded{
+    [num_positions, default_value](std::monostate) {
       return VectorXd::Constant(num_positions, default_value);
     },
-    [num_positions](double arg) -> VectorXd {
+    [num_positions](double arg) {
       return VectorXd::Constant(num_positions, arg);
     },
-    [num_positions, diagnostic_name](VectorXd&& arg) -> VectorXd {
+    [num_positions, diagnostic_name](VectorXd&& arg) {
       if (arg.size() != num_positions) {
         throw std::logic_error(fmt::format(
             "Expected {} of size {}, but got size {} instead",
@@ -222,14 +217,20 @@ void JointSliders<T>::Delete() {
   if (was_registered) {
     for (const auto& [position_index, slider_name] : position_names_) {
       unused(position_index);
-      meshcat_->DeleteSlider(slider_name);
+      meshcat_->DeleteSlider(slider_name, /*strict = */ false);
     }
   }
 }
 
 template <typename T>
 JointSliders<T>::~JointSliders() {
-  Delete();
+  // Destructors are not allowed to throw. Ensure this by catching any
+  // exceptions and failing fast.
+  try {
+    Delete();
+  } catch (...) {
+    DRAKE_UNREACHABLE();
+  }
 }
 
 template <typename T>
@@ -350,4 +351,4 @@ void JointSliders<T>::SetPositions(const Eigen::VectorXd& q) {
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
-    class ::drake::multibody::meshcat::JointSliders)
+    class ::drake::multibody::meshcat::JointSliders);

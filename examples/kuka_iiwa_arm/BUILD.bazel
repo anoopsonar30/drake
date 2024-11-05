@@ -1,3 +1,4 @@
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_binary",
@@ -8,21 +9,14 @@ load(
     "//tools/skylark:drake_py.bzl",
     "drake_py_unittest",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
+load("//tools/skylark:drake_sh.bzl", "drake_sh_test")
 
-package(
-    default_visibility = [":__subpackages__"],
-)
+package(default_visibility = ["//visibility:private"])
 
 drake_cc_library(
     name = "iiwa_common",
-    srcs = [
-        "iiwa_common.cc",
-    ],
-    hdrs = [
-        "iiwa_common.h",
-    ],
-    visibility = ["//visibility:public"],
+    srcs = ["iiwa_common.cc"],
+    hdrs = ["iiwa_common.h"],
     deps = [
         "//manipulation/kuka_iiwa:iiwa_constants",
     ],
@@ -32,7 +26,6 @@ drake_cc_library(
     name = "iiwa_lcm",
     srcs = ["iiwa_lcm.cc"],
     hdrs = ["iiwa_lcm.h"],
-    visibility = ["//visibility:public"],
     deps = [
         "//manipulation/kuka_iiwa",
     ],
@@ -41,11 +34,7 @@ drake_cc_library(
 drake_cc_library(
     name = "lcm_plan_interpolator",
     srcs = ["lcm_plan_interpolator.cc"],
-    hdrs = [
-        "lcm_plan_interpolator.h",
-    ],
-    # TODO(hongkai.dai): move this package to manipulation folder.
-    visibility = ["//visibility:public"],
+    hdrs = ["lcm_plan_interpolator.h"],
     deps = [
         ":iiwa_common",
         ":iiwa_lcm",
@@ -59,7 +48,6 @@ drake_cc_library(
     name = "kuka_torque_controller",
     srcs = ["kuka_torque_controller.cc"],
     hdrs = ["kuka_torque_controller.h"],
-    visibility = ["//visibility:public"],
     deps = [
         "//multibody/plant",
         "//systems/controllers:inverse_dynamics",
@@ -77,7 +65,7 @@ drake_cc_binary(
     srcs = ["iiwa_controller.cc"],
     data = [
         ":models",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":iiwa_common",
@@ -94,7 +82,7 @@ drake_cc_binary(
     add_test_rule = 1,
     data = [
         ":models",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     test_rule_args = ["--simulation_sec=0.1 --target_realtime_rate=0.0"],
     # TODO(kyle.edwards@kitware.com): Re-enable this test when it no longer
@@ -123,7 +111,7 @@ drake_cc_binary(
     srcs = ["kuka_plan_runner.cc"],
     data = [
         ":models",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         "//common/trajectories:piecewise_polynomial",
@@ -140,7 +128,7 @@ drake_cc_binary(
     srcs = ["move_iiwa_ee.cc"],
     data = [
         ":models",
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":iiwa_common",
@@ -163,7 +151,7 @@ alias(
 drake_cc_googletest(
     name = "kuka_torque_controller_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":iiwa_common",
@@ -175,13 +163,12 @@ drake_cc_googletest(
 
 alias(
     name = "dual_iiwa14_polytope_collision.urdf",
-    actual = "//manipulation/models/iiwa_description:urdf/dual_iiwa14_polytope_collision.urdf",  # noqa
+    actual = "@drake_models//:iiwa_description/urdf/dual_iiwa14_polytope_collision.urdf",  # noqa
 )
 
 # Test that kuka_simulation can load the dual arm urdf
-sh_test(
+drake_sh_test(
     name = "dual_kuka_simulation_test",
-    size = "small",
     srcs = ["kuka_simulation"],
     args = [
         "$(location :kuka_simulation)",

@@ -5,6 +5,7 @@
 
 #include "drake/common/eigen_types.h"
 #include "drake/math/rotation_matrix.h"
+#include "drake/multibody/tree/body_node_impl.h"
 #include "drake/multibody/tree/multibody_tree.h"
 
 namespace drake {
@@ -12,8 +13,19 @@ namespace multibody {
 namespace internal {
 
 template <typename T>
+PlanarMobilizer<T>::~PlanarMobilizer() = default;
+
+template <typename T>
+std::unique_ptr<internal::BodyNode<T>> PlanarMobilizer<T>::CreateBodyNode(
+    const internal::BodyNode<T>* parent_node, const RigidBody<T>* body,
+    const Mobilizer<T>* mobilizer) const {
+  return std::make_unique<internal::BodyNodeImpl<T, PlanarMobilizer>>(
+      parent_node, body, mobilizer);
+}
+
+template <typename T>
 std::string PlanarMobilizer<T>::position_suffix(
-  int position_index_in_mobilizer) const {
+    int position_index_in_mobilizer) const {
   switch (position_index_in_mobilizer) {
     case 0:
       return "x";
@@ -27,7 +39,7 @@ std::string PlanarMobilizer<T>::position_suffix(
 
 template <typename T>
 std::string PlanarMobilizer<T>::velocity_suffix(
-  int velocity_index_in_mobilizer) const {
+    int velocity_index_in_mobilizer) const {
   switch (velocity_index_in_mobilizer) {
     case 0:
       return "vx";
@@ -66,7 +78,7 @@ const T& PlanarMobilizer<T>::get_angle(
 }
 
 template <typename T>
-const PlanarMobilizer<T>& PlanarMobilizer<T>::set_angle(
+const PlanarMobilizer<T>& PlanarMobilizer<T>::SetAngle(
     systems::Context<T>* context, const T& angle) const {
   auto q = this->GetMutablePositions(context);
   DRAKE_ASSERT(q.size() == kNq);
@@ -83,7 +95,7 @@ Vector2<T> PlanarMobilizer<T>::get_translation_rates(
 }
 
 template <typename T>
-const PlanarMobilizer<T>& PlanarMobilizer<T>::set_translation_rates(
+const PlanarMobilizer<T>& PlanarMobilizer<T>::SetTranslationRates(
     systems::Context<T>* context,
     const Eigen::Ref<const Vector2<T>>& v_FM_F) const {
   auto v = this->GetMutableVelocities(context);
@@ -101,7 +113,7 @@ const T& PlanarMobilizer<T>::get_angular_rate(
 }
 
 template <typename T>
-const PlanarMobilizer<T>& PlanarMobilizer<T>::set_angular_rate(
+const PlanarMobilizer<T>& PlanarMobilizer<T>::SetAngularRate(
     systems::Context<T>* context, const T& theta_dot) const {
   auto v = this->GetMutableVelocities(context);
   DRAKE_ASSERT(v.size() == kNv);
@@ -114,19 +126,14 @@ math::RigidTransform<T> PlanarMobilizer<T>::CalcAcrossMobilizerTransform(
     const systems::Context<T>& context) const {
   const auto& q = this->get_positions(context);
   DRAKE_ASSERT(q.size() == kNq);
-  Vector3<T> X_FM_translation;
-  X_FM_translation << q[0], q[1], 0.0;
-  return math::RigidTransform<T>(math::RotationMatrix<T>::MakeZRotation(q[2]),
-                                 X_FM_translation);
+  return calc_X_FM(q.data());
 }
 
 template <typename T>
 SpatialVelocity<T> PlanarMobilizer<T>::CalcAcrossMobilizerSpatialVelocity(
     const systems::Context<T>&, const Eigen::Ref<const VectorX<T>>& v) const {
   DRAKE_ASSERT(v.size() == kNv);
-  Vector6<T> V_FM_vector;
-  V_FM_vector << 0.0, 0.0, v[2], v[0], v[1], 0.0;
-  return SpatialVelocity<T>(V_FM_vector);
+  return calc_V_FM(nullptr, v.data());
 }
 
 template <typename T>
@@ -135,18 +142,15 @@ PlanarMobilizer<T>::CalcAcrossMobilizerSpatialAcceleration(
     const systems::Context<T>&,
     const Eigen::Ref<const VectorX<T>>& vdot) const {
   DRAKE_ASSERT(vdot.size() == kNv);
-  Vector6<T> A_FM_vector;
-  A_FM_vector << 0.0, 0.0, vdot[2], vdot[0], vdot[1], 0.0;
-  return SpatialAcceleration<T>(A_FM_vector);
+  return calc_A_FM(nullptr, nullptr, vdot.data());
 }
 
 template <typename T>
 void PlanarMobilizer<T>::ProjectSpatialForce(const systems::Context<T>&,
-                                             const SpatialForce<T>& F_Mo_F,
+                                             const SpatialForce<T>& F_BMo_F,
                                              Eigen::Ref<VectorX<T>> tau) const {
   DRAKE_ASSERT(tau.size() == kNv);
-  tau.head(2) = F_Mo_F.translational().head(2);
-  tau[2] = F_Mo_F.rotational()[2];
+  calc_tau(nullptr, F_BMo_F, tau.data());
 }
 
 template <typename T>
@@ -190,8 +194,9 @@ PlanarMobilizer<T>::TemplatedDoCloneToScalar(
       tree_clone.get_variant(this->inboard_frame());
   const Frame<ToScalar>& outboard_frame_clone =
       tree_clone.get_variant(this->outboard_frame());
-  return std::make_unique<PlanarMobilizer<ToScalar>>(inboard_frame_clone,
-                                                     outboard_frame_clone);
+  return std::make_unique<PlanarMobilizer<ToScalar>>(
+      tree_clone.get_mobod(this->mobod().index()), inboard_frame_clone,
+      outboard_frame_clone);
 }
 
 template <typename T>
@@ -218,4 +223,4 @@ PlanarMobilizer<T>::DoCloneToScalar(
 }  // namespace drake
 
 DRAKE_DEFINE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::multibody::internal::PlanarMobilizer)
+    class ::drake::multibody::internal::PlanarMobilizer);

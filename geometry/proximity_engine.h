@@ -27,7 +27,8 @@
 namespace drake {
 namespace geometry {
 
-template <typename T> class GeometryState;
+template <typename T>
+class GeometryState;
 
 namespace internal {
 
@@ -116,6 +117,9 @@ class ProximityEngine {
    @param id      The id of the geometry in SceneGraph to which this mesh
                   belongs. */
   void AddDeformableGeometry(const VolumeMesh<double>& mesh_W, GeometryId id);
+
+  /* Reports if the engine requires a convex hull for the given geometry. */
+  bool NeedsConvexHull(const InternalGeometry& geometry) const;
 
   /* Possibly updates the proximity representation of the given `geometry`
    based on the relationship between its _current_ proximity properties and the
@@ -206,8 +210,7 @@ class ProximityEngine {
    GeometryState::ComputeSignedDistancePairwiseClosestPoints().
    This includes `X_WGs`, the current poses of all geometries in World in the
    current scalar type, keyed on each geometry's GeometryId.  */
-  std::vector<SignedDistancePair<T>>
-  ComputeSignedDistancePairwiseClosestPoints(
+  std::vector<SignedDistancePair<T>> ComputeSignedDistancePairwiseClosestPoints(
       const std::unordered_map<GeometryId, math::RigidTransform<T>>& X_WGs,
       const double max_distance) const;
 
@@ -223,13 +226,11 @@ class ProximityEngine {
   /* Implementation of GeometryState::ComputeSignedDistanceToPoint().
    This includes `X_WGs`, the current poses of all geometries in World in the
    current scalar type, keyed on each geometry's GeometryId.  */
-  std::vector<SignedDistanceToPoint<T>>
-  ComputeSignedDistanceToPoint(
+  std::vector<SignedDistanceToPoint<T>> ComputeSignedDistanceToPoint(
       const Vector3<T>& p_WQ,
       const std::unordered_map<GeometryId, math::RigidTransform<T>>& X_WGs,
       const double threshold = std::numeric_limits<double>::infinity()) const;
   //@}
-
 
   //----------------------------------------------------------------------------
   /* @name                Collision Queries
@@ -323,7 +324,8 @@ class ProximityEngine {
   explicit ProximityEngine(Impl* impl);
 
   // Engine on one scalar can see the members of other engines.
-  template <typename> friend class ProximityEngine;
+  template <typename>
+  friend class ProximityEngine;
 
   // Facilitate testing.
   friend class ProximityEngineTester;
@@ -336,6 +338,12 @@ class ProximityEngine {
   // underlying shape is *mathematically* convex, just that it is implemented
   // as fcl::Convex.
   bool IsFclConvexType(GeometryId id) const;
+
+  // Returns the fcl::CollisionObjectd associated with the geometry id. In order
+  // to keep the fcl dependency in the implementation only, we type erase the
+  // pointer type. But if the return value is not null, it can be safely cast to
+  // fcl::CollisionObjectd*. This is for testing only.
+  void* GetCollisionObject(GeometryId id) const;
 };
 
 }  // namespace internal

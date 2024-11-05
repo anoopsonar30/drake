@@ -1,7 +1,7 @@
 #include "drake/manipulation/schunk_wsg/schunk_wsg_trajectory_generator.h"
 
 #include "drake/common/trajectories/piecewise_polynomial.h"
-#include "drake/manipulation/schunk_wsg/gen/schunk_wsg_trajectory_generator_state_vector.h"
+#include "drake/manipulation/schunk_wsg/schunk_wsg_trajectory_generator_state_vector.h"
 
 namespace drake {
 namespace manipulation {
@@ -30,8 +30,7 @@ SchunkWsgTrajectoryGenerator::SchunkWsgTrajectoryGenerator(int input_size,
                                      systems::kUseDefaultName, 1,
                                      &SchunkWsgTrajectoryGenerator::OutputForce)
                                  .get_index()) {
-  this->DeclareDiscreteState(
-      SchunkWsgTrajectoryGeneratorStateVector<double>());
+  this->DeclareDiscreteState(SchunkWsgTrajectoryGeneratorStateVector<double>());
   // The update period below matches the polling rate from
   // drake-schunk-driver.
   this->DeclarePeriodicDiscreteUpdateEvent(
@@ -89,8 +88,8 @@ EventStatus SchunkWsgTrajectoryGenerator::CalcDiscreteUpdate(
   const double max_force = get_force_limit_input_port().Eval(context)[0];
   new_traj_state->set_max_force(max_force);
 
-  if (std::abs(last_traj_state->last_target_position() - target_position) >
-      kTargetEpsilon) {
+  if (!trajectory_ || std::abs(last_traj_state->last_target_position() -
+                               target_position) > kTargetEpsilon) {
     UpdateTrajectory(cur_position, target_position);
     new_traj_state->set_last_target_position(target_position);
     new_traj_state->set_trajectory_start_time(context.get_time());
@@ -124,6 +123,11 @@ void SchunkWsgTrajectoryGenerator::UpdateTrajectory(
 
   const double direction = (cur_position < target_position) ? 1 : -1;
   const double delta = std::abs(target_position - cur_position);
+  if (delta == 0) {
+    // Create the constant trajectory.
+    trajectory_.reset(new trajectories::PiecewisePolynomial<double>(knots[0]));
+    return;
+  }
 
   // The trajectory creation code below is, to say the best, a bit
   // primitive.  I (sam.creasey) would not be surprised if it could

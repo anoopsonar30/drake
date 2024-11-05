@@ -2,3 +2,5 @@
 # vi: set ft=ruby :
 
 brew 'bazelisk'
+brew 'cmake'
+brew 'nasm'

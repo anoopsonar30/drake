@@ -17,11 +17,15 @@
 #include <libqhullcpp/QhullFacet.h>
 #include <libqhullcpp/QhullFacetList.h>
 
+#include "drake/common/overloaded.h"
+#include "drake/common/ssize.h"
 #include "drake/geometry/optimization/affine_subspace.h"
 #include "drake/geometry/optimization/vpolytope.h"
 #include "drake/math/matrix_util.h"
 #include "drake/math/rotation_matrix.h"
+#include "drake/solvers/aggregate_costs_constraints.h"
 #include "drake/solvers/constraint.h"
+#include "drake/solvers/get_program_type.h"
 #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/solve.h"
 
@@ -104,6 +108,16 @@ bool IsRedundant(const Eigen::Ref<const MatrixXd>& c, double d,
   return !(polyhedron_is_empty || -result.get_optimal_cost() > d + tol);
 }
 
+/* Returns a trivially-infeasible HPolyhedron of a given dimension. */
+HPolyhedron ConstructInfeasibleHPolyhedron(int dimension) {
+  MatrixXd A_infeasible(2, dimension);
+  A_infeasible.setZero();
+  A_infeasible(0, 0) = 1;
+  A_infeasible(1, 0) = -1;
+  Eigen::Vector2d b_infeasible(-1, 0);
+  return HPolyhedron(A_infeasible, b_infeasible);
+}
+
 }  // namespace
 
 HPolyhedron::HPolyhedron() : ConvexSet(0, false) {}
@@ -118,20 +132,45 @@ HPolyhedron::HPolyhedron(const QueryObject<double>& query_object,
                          GeometryId geometry_id,
                          std::optional<FrameId> reference_frame)
     : ConvexSet(3, false) {
-  std::pair<MatrixXd, VectorXd> Ab_G;
-  query_object.inspector().GetShape(geometry_id).Reify(this, &Ab_G);
-
+  const Shape& shape = query_object.inspector().GetShape(geometry_id);
+  MatrixXd A_G;
+  VectorXd b_G;
+  std::tie(A_G, b_G) = shape.Visit<std::pair<MatrixXd, VectorXd>>(overloaded{
+      // We only handle certain shape types.
+      // TODO(russt): Support [](const Convex& convex); it is already supported
+      // by VPolytope.
+      [](const Box& box) {
+        Eigen::Matrix<double, 6, 3> A;
+        A << Eigen::Matrix3d::Identity(), -Eigen::Matrix3d::Identity();
+        Vector6d b;
+        // clang-format off
+        b << box.width()/2.0, box.depth()/2.0, box.height()/2.0,
+             box.width()/2.0, box.depth()/2.0, box.height()/2.0;
+        // clang-format on
+        return std::make_pair(A, b);
+      },
+      [](const HalfSpace&) {
+        // z <= 0.0.
+        Eigen::RowVector3d A{0.0, 0.0, 1.0};
+        Vector1d b{0.0};
+        return std::make_pair(A, b);
+      },
+      [&geometry_id](const auto& unsupported) -> std::pair<MatrixXd, VectorXd> {
+        throw std::logic_error(fmt::format(
+            "{} (geometry_id={}) cannot be converted to a HPolyhedron",
+            unsupported, geometry_id));
+      }});
   const RigidTransformd X_WE =
       reference_frame ? query_object.GetPoseInWorld(*reference_frame)
                       : RigidTransformd::Identity();
   const RigidTransformd& X_WG = query_object.GetPoseInWorld(geometry_id);
   const RigidTransformd X_GE = X_WG.InvertAndCompose(X_WE);
   // A_G*(p_GE + R_GE*p_EE_var) ≤ b_G
-  A_ = Ab_G.first * X_GE.rotation().matrix();
-  b_ = Ab_G.second - Ab_G.first * X_GE.translation();
+  A_ = A_G * X_GE.rotation().matrix();
+  b_ = b_G - A_G * X_GE.translation();
 }
 
-HPolyhedron::HPolyhedron(const VPolytope& vpoly)
+HPolyhedron::HPolyhedron(const VPolytope& vpoly, double tol)
     : ConvexSet(vpoly.ambient_dimension(), false) {
   // First, handle the case where the VPolytope is empty.
   if (vpoly.IsEmpty()) {
@@ -141,20 +180,25 @@ HPolyhedron::HPolyhedron(const VPolytope& vpoly)
           "a HPolyhedron.");
     } else {
       // Just create an infeasible HPolyhedron.
-      Eigen::MatrixXd A = Eigen::MatrixXd::Zero(2, vpoly.ambient_dimension());
-      Eigen::VectorXd b = Eigen::VectorXd::Zero(2);
-      // x <= 1
-      A(0, 0) = 1;
-      b[0] = 1;
-      // -x <= -2, equivalent to x >= 2
-      A(1, 0) = -1;
-      b[1] = -2;
-      *this = HPolyhedron(A, b);
+      *this = ConstructInfeasibleHPolyhedron(vpoly.ambient_dimension());
       return;
     }
   }
+  if (vpoly.ambient_dimension() == 1) {
+    // In 1D, QHull doesn't work. We can simply choose the largest and smallest
+    // points, and add a hyperplane there.
+    double min_val = vpoly.vertices().minCoeff();
+    double max_val = vpoly.vertices().maxCoeff();
+    Eigen::MatrixXd A(2, 1);
+    Eigen::VectorXd b(2);
+    // x <= max_val and x >= min_val (written as -x <= -min_val)
+    A << 1, -1;
+    b << max_val, -min_val;
+    *this = HPolyhedron(A, b);
+    return;
+  }
   // Next, handle the case where the VPolytope is not full dimensional.
-  const AffineSubspace affine_hull(vpoly);
+  const AffineSubspace affine_hull(vpoly, tol);
   if (affine_hull.AffineDimension() < affine_hull.ambient_dimension()) {
     // This special case avoids two QHull errors: QH6214 and QH6154.
     // QH6214 is due to the VPolytope not having enough vertices to make a
@@ -228,20 +272,22 @@ HPolyhedron::HPolyhedron(const VPolytope& vpoly)
                  hpoly_subspace.A() * P * affine_hull.translation();
     }
 
-    // Finally, we add additional constraints from the perpendicular basis. This
-    // ensures that the points in the new HPolyhedron lie along the affine hull
-    // of the VPolytope.
-    Eigen::MatrixXd perpendicular_basis =
+    // Finally, we add additional constraints from the orthogonal complement
+    // basis. This ensures that the points in the new HPolyhedron lie along the
+    // affine hull of the VPolytope.
+    Eigen::MatrixXd orthogonal_complement_basis =
         affine_hull.OrthogonalComplementBasis();
-    Eigen::MatrixXd perp_A(2 * perpendicular_basis.cols(), ambient_dimension());
-    perp_A << perpendicular_basis.transpose(), -perpendicular_basis.transpose();
-    Eigen::VectorXd perp_b = perp_A * affine_hull.translation();
-
-    Eigen::MatrixXd full_A(global_A.rows() + perp_A.rows(),
+    Eigen::MatrixXd orth_A(2 * orthogonal_complement_basis.cols(),
                            ambient_dimension());
-    full_A << global_A, perp_A;
-    Eigen::VectorXd full_b(global_b.size() + perp_b.size());
-    full_b << global_b, perp_b;
+    orth_A << orthogonal_complement_basis.transpose(),
+        -orthogonal_complement_basis.transpose();
+    Eigen::VectorXd orth_b = orth_A * affine_hull.translation();
+
+    Eigen::MatrixXd full_A(global_A.rows() + orth_A.rows(),
+                           ambient_dimension());
+    full_A << global_A, orth_A;
+    Eigen::VectorXd full_b(global_b.size() + orth_b.size());
+    full_b << global_b, orth_b;
     *this = HPolyhedron(full_A, full_b);
     return;
   }
@@ -266,6 +312,107 @@ HPolyhedron::HPolyhedron(const VPolytope& vpoly)
   }
 }
 
+HPolyhedron::HPolyhedron(const MathematicalProgram& prog)
+    : ConvexSet(prog.num_vars(), false) {
+  // Preconditions
+  DRAKE_THROW_UNLESS(prog.num_vars() > 0);
+  DRAKE_THROW_UNLESS(prog.GetAllConstraints().size() > 0);
+  DRAKE_THROW_UNLESS(solvers::GetProgramType(prog) ==
+                     solvers::ProgramType::kLP);
+
+  // Get linear equality constraints.
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count = 0;
+  std::vector<int> unused_linear_eq_y_start_indices;
+  int unused_num_rows_added = 0;
+  solvers::internal::ParseLinearEqualityConstraints(
+      prog, &A_triplets, &b, &A_row_count, &unused_linear_eq_y_start_indices,
+      &unused_num_rows_added);
+
+  // Linear equality constraints Ax = b are parsed in the form Ax <= b. So we
+  // add in the reverse of the constraint, Ax >= b, encoded as -Ax <= -b. This
+  // is implemented by taking each triplet (i, j, v) and adding in
+  // (i + N, j, -v), where N is the number of rows of A before we start adding
+  // new triplets.
+  const int num_equality_triplets = A_triplets.size();
+  const int& num_equality_constraints = A_row_count;
+  for (int i = 0; i < num_equality_triplets; ++i) {
+    const Eigen::Triplet<double>& triplet = A_triplets.at(i);
+    A_triplets.emplace_back(triplet.row() + num_equality_constraints,
+                            triplet.col(), -triplet.value());
+  }
+  // We also set b := [b; -b].
+  for (int i = 0; i < num_equality_constraints; ++i) {
+    b.push_back(-1 * b[i]);
+  }
+  A_row_count *= 2;
+
+  // Get linear inequality constraints.
+  std::vector<std::vector<std::pair<int, int>>>
+      unused_linear_constraint_dual_indices;
+  solvers::internal::ParseLinearConstraints(
+      prog, &A_triplets, &b, &A_row_count,
+      &unused_linear_constraint_dual_indices, &unused_num_rows_added);
+
+  // Check that none of the linear inequality constraints are trivially
+  // infeasible by requiring a variable be at least ∞ or at most -∞. If this is
+  // the case, return a trivially infeasible HPolyhedron. Constraints that
+  // violate this condition may not be returned by ParseLinearConstraints.
+  for (const auto& binding : prog.linear_constraints()) {
+    if (binding.evaluator()->lower_bound().maxCoeff() == kInf ||
+        binding.evaluator()->upper_bound().minCoeff() == -kInf) {
+      *this = ConstructInfeasibleHPolyhedron(prog.num_vars());
+      return;
+    }
+  }
+
+  // Get bounding box constraints.
+  VectorXd lb;
+  VectorXd ub;
+  solvers::AggregateBoundingBoxConstraints(prog, &lb, &ub);
+
+  for (int i = 0; i < lb.size(); ++i) {
+    // If lb[i] == Infinity or ub[i] == -Infinity, we have a trivial
+    // infeasibility, so we make a trivially infeasible HPolyhedron by just
+    // including the constraints x <= -1, x >= 0, where x is the first decision
+    // variable.
+    if (lb[i] == kInf || ub[i] == -kInf) {
+      *this = ConstructInfeasibleHPolyhedron(prog.num_vars());
+      return;
+    } else {
+      A_triplets.emplace_back(A_row_count, i, 1);
+      b.push_back(ub[i]);
+      ++A_row_count;
+      A_triplets.emplace_back(A_row_count, i, -1);
+      b.push_back(-lb[i]);
+      ++A_row_count;
+    }
+  }
+  // Form the A and b matrices of the HPolyhedron.
+  Eigen::SparseMatrix<double, Eigen::RowMajor> A_sparse(A_row_count,
+                                                        prog.num_vars());
+  A_sparse.setFromTriplets(A_triplets.begin(), A_triplets.end());
+
+  // Identify the rows that do not contain any infinities, as the rows to keep.
+  // Since we have filtered out infinities that render the problem infeasible
+  // above, these correspond to inequalities that are trivially satisfied by all
+  // vectors x, and need not be included in the HPolyhedron.
+  std::vector<int> rows_to_keep;
+  rows_to_keep.reserve(A_sparse.rows());
+  for (int i = 0; i < ssize(b); ++i) {
+    if (std::abs(b[i]) < kInf) {
+      rows_to_keep.push_back(i);
+    }
+  }
+
+  VectorXd b_eigen(b.size());
+  b_eigen = VectorXd::Map(b.data(), b.size());
+
+  *this = HPolyhedron(A_sparse.toDense()(rows_to_keep, Eigen::all),
+                      b_eigen(rows_to_keep));
+}
+
 HPolyhedron::~HPolyhedron() = default;
 
 Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
@@ -274,6 +421,11 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   MatrixXDecisionVariable C = prog.NewSymmetricContinuousVariables(N, "C");
   VectorXDecisionVariable d = prog.NewContinuousVariables(N, "d");
 
+  // Compute rowwise norms for later use in normalization of linear constraints.
+  MatrixXd augmented_matrix(A_.rows(), A_.cols() + b_.cols());
+  augmented_matrix << A_, b_;
+  VectorXd row_norms = augmented_matrix.rowwise().norm();
+
   // max log det (C).  This method also imposes C ≽ 0.
   prog.AddMaximizeLogDeterminantCost(C.cast<Expression>());
   // |aᵢC|₂ ≤ bᵢ - aᵢd, ∀i
@@ -281,6 +433,8 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   // vars = [d; C.col(0); C.col(1); ...; C.col(n-1)]
   // A_lorentz = block_diagonal(-A_.row(i), A_.row(i), ..., A_.row(i))
   // b_lorentz = [b_(i); 0; ...; 0]
+  // We also normalize each row, by dividing each instance of aᵢ and bᵢ with the
+  // corresponding row norm.
   VectorX<symbolic::Variable> vars(C.rows() * C.cols() + d.rows());
   vars.head(d.rows()) = d;
   for (int i = 0; i < C.cols(); ++i) {
@@ -292,11 +446,12 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
   Eigen::VectorXd b_lorentz = Eigen::VectorXd::Zero(1 + C.cols());
   for (int i = 0; i < b_.size(); ++i) {
     A_lorentz.setZero();
-    A_lorentz.block(0, 0, 1, A_.cols()) = -A_.row(i);
+    A_lorentz.block(0, 0, 1, A_.cols()) = -A_.row(i) / row_norms(i);
     for (int j = 0; j < C.cols(); ++j) {
-      A_lorentz.block(j + 1, (j + 1) * C.cols(), 1, A_.cols()) = A_.row(i);
+      A_lorentz.block(j + 1, (j + 1) * C.cols(), 1, A_.cols()) =
+          A_.row(i) / row_norms(i);
     }
-    b_lorentz(0) = b_(i);
+    b_lorentz(0) = b_(i) / row_norms(i);
     prog.AddLorentzConeConstraint(A_lorentz, b_lorentz, vars);
   }
   auto result = solvers::Solve(prog);
@@ -385,47 +540,110 @@ HPolyhedron HPolyhedron::Intersection(const HPolyhedron& other,
 
 VectorXd HPolyhedron::UniformSample(
     RandomGenerator* generator,
-    const Eigen::Ref<const Eigen::VectorXd>& previous_sample) const {
-  std::normal_distribution<double> gaussian;
-  // Choose a random direction.
-  VectorXd direction(ambient_dimension());
-  for (int i = 0; i < direction.size(); ++i) {
-    direction[i] = gaussian(*generator);
+    const Eigen::Ref<const Eigen::VectorXd>& previous_sample,
+    const int mixing_steps,
+    const std::optional<Eigen::Ref<const Eigen::MatrixXd>>& subspace,
+    double tol) const {
+  DRAKE_THROW_UNLESS(mixing_steps >= 1);
+  if (subspace.has_value()) {
+    DRAKE_THROW_UNLESS(subspace->rows() == ambient_dimension());
   }
-  // Find max and min θ subject to
-  //   A(previous_sample + θ*direction) ≤ b,
-  // aka ∀i, θ * (A * direction)[i] ≤ (b - A * previous_sample)[i].
-  VectorXd line_b = b_ - A_ * previous_sample;
-  VectorXd line_a = A_ * direction;
-  double theta_max = std::numeric_limits<double>::infinity();
-  double theta_min = -theta_max;
-  for (int i = 0; i < line_a.size(); ++i) {
-    if (line_a[i] < 0.0) {
-      theta_min = std::max(theta_min, line_b[i] / line_a[i]);
-    } else if (line_a[i] > 0.0) {
-      theta_max = std::min(theta_max, line_b[i] / line_a[i]);
+
+  std::normal_distribution<double> gaussian;
+  VectorXd current_sample = previous_sample;
+
+  const int sampling_dim =
+      subspace.has_value() ? subspace->cols() : previous_sample.rows();
+  VectorXd gaussian_sample(sampling_dim);
+  VectorXd direction(ambient_dimension());
+
+  // If a row of the A matrix is orthogonal to all columns of the basis, then
+  // the constraint from that row is enforced by the sample being in the column
+  // space of the basis. Thus, we skip that constraint when performing
+  // hit-and-run sampling.
+  std::vector<bool> skip(A_.rows(), false);
+  if (subspace.has_value()) {
+    const double squared_tol = tol * tol;
+    VectorXd subspace_j_squared_norm(subspace->cols());
+    for (int j = 0; j < subspace->cols(); ++j) {
+      subspace_j_squared_norm(j) = subspace->col(j).squaredNorm();
+    }
+    for (int i = 0; i < A_.rows(); ++i) {
+      skip[i] = true;
+      const double Ai_squared_norm = A_.row(i).squaredNorm();
+      for (int j = 0; j < subspace->cols(); ++j) {
+        if (std::pow(A_.row(i) * subspace->col(j), 2) >
+            squared_tol * Ai_squared_norm * subspace_j_squared_norm(j)) {
+          skip[i] = false;
+          break;
+        }
+      }
     }
   }
-  if (std::isinf(theta_max) || std::isinf(theta_min) || theta_max < theta_min) {
-    throw std::invalid_argument(fmt::format(
-        "The Hit and Run algorithm failed to find a feasible point in the set. "
-        "The `previous_sample` must be in the set.\nmax(A * previous_sample - "
-        "b) = {}",
-        (A_ * previous_sample - b_).maxCoeff()));
+
+  for (int step = 0; step < mixing_steps; ++step) {
+    // Choose a random direction.
+    for (int i = 0; i < gaussian_sample.size(); ++i) {
+      gaussian_sample[i] = gaussian(*generator);
+    }
+    direction =
+        subspace.has_value() ? *subspace * gaussian_sample : gaussian_sample;
+    // Find max and min θ subject to
+    //   A(previous_sample + θ*direction) ≤ b,
+    // aka ∀i, θ * (A * direction)[i] ≤ (b - A * previous_sample)[i].
+    VectorXd line_b = b_ - A_ * current_sample;
+    VectorXd line_a = A_ * direction;
+    double theta_max = std::numeric_limits<double>::infinity();
+    double theta_min = -theta_max;
+    for (int i = 0; i < line_a.size(); ++i) {
+      if (skip[i]) {
+        continue;
+      } else if (line_a[i] < 0.0) {
+        theta_min = std::max(theta_min, line_b[i] / line_a[i]);
+      } else if (line_a[i] > 0.0) {
+        theta_max = std::min(theta_max, line_b[i] / line_a[i]);
+      }
+    }
+    if (std::isinf(theta_max) || std::isinf(theta_min) ||
+        theta_max < theta_min) {
+      throw std::invalid_argument(fmt::format(
+          "The Hit and Run algorithm failed to find a feasible point in the "
+          "set. The `previous_sample` must be in the set.\n"
+          "max(A * previous_sample - b) = {}",
+          (A_ * current_sample - b_).maxCoeff()));
+    }
+    // Now pick θ uniformly from [θ_min, θ_max).
+    std::uniform_real_distribution<double> uniform_theta(theta_min, theta_max);
+    const double theta = uniform_theta(*generator);
+    current_sample = current_sample + theta * direction;
   }
-  // Now pick θ uniformly from [θ_min, θ_max).
-  std::uniform_real_distribution<double> uniform_theta(theta_min, theta_max);
-  const double theta = uniform_theta(*generator);
   // The new sample is previous_sample + θ * direction.
-  return previous_sample + theta * direction;
+
+  const double kWarnTolerance = 1e-8;
+  if ((current_sample - previous_sample).template lpNorm<Eigen::Infinity>() <
+      kWarnTolerance) {
+    // If the new sample is extremely close to the previous sample, the user
+    // may have a lower-dimensional polytope. We warn them if this happens. Note
+    // that we use an absolute tolerance here, since it's unclear how to compute
+    // an appropriate relative tolerance.
+    drake::log()->warn(
+        "The Hit and Run algorithm produced a random guess that is extremely "
+        "close to `previous_sample`, which could indicate that the HPolyhedron "
+        "being sampled is not full-dimensional. To draw samples from such an "
+        "HPolyhedron, please use the `subspace` argument.");
+  }
+  return current_sample;
 }
 
 // Note: This method only exists to effectively provide ChebyshevCenter(),
 // which is a non-static class method, as a default argument for
 // previous_sample in the UniformSample method above.
-VectorXd HPolyhedron::UniformSample(RandomGenerator* generator) const {
+VectorXd HPolyhedron::UniformSample(
+    RandomGenerator* generator, const int mixing_steps,
+    const std::optional<Eigen::Ref<const Eigen::MatrixXd>>& subspace,
+    double tol) const {
   VectorXd center = ChebyshevCenter();
-  return UniformSample(generator, center);
+  return UniformSample(generator, center, mixing_steps, subspace, tol);
 }
 
 HPolyhedron HPolyhedron::MakeBox(const Eigen::Ref<const VectorXd>& lb,
@@ -589,7 +807,7 @@ HPolyhedron HPolyhedron::ReduceInequalities(double tol) const {
   VectorXd b_new(A_new.rows());
   int i = 0;
   for (int j = 0; j < A_.rows(); ++j) {
-    if (redundant_indices.count(j) == 0) {
+    if (!redundant_indices.contains(j)) {
       A_new.row(i) = A_.row(j);
       b_new.row(i) = b_.row(j);
       ++i;
@@ -631,12 +849,331 @@ std::set<int> HPolyhedron::FindRedundant(double tol) const {
   return redundant_indices;
 }
 
+namespace {
+HPolyhedron MoveFaceAndCull(const Eigen::MatrixXd& A, const Eigen::VectorXd& b,
+                            Eigen::VectorXd* face_center_distance,
+                            std::vector<bool>* face_moved_in, int* i,
+                            const std::vector<int>& i_cull) {
+  DRAKE_DEMAND(ssize(*face_moved_in) >= *i + 1);
+  (*face_moved_in)[*i] = true;
+  std::vector<int> i_not_cull;
+  i_not_cull.reserve(A.rows() - i_cull.size());
+  int num_cull_before_i = 0;
+  for (int j = 0; j < A.rows(); ++j) {
+    if (std::find(i_cull.begin(), i_cull.end(), j) == i_cull.end()) {
+      i_not_cull.push_back(j);
+    } else if (*std::find(i_cull.begin(), i_cull.end(), j) < *i) {
+      // Count how many indices before `i` are to be culled.
+      ++num_cull_before_i;
+    }
+  }
+  // Create updated matrices/lists without the elements/rows at indices in
+  // `i_cull`.
+  MatrixXd A_new(i_not_cull.size(), A.cols());
+  VectorXd b_new(i_not_cull.size());
+  std::vector<bool> face_moved_in_new;
+  face_moved_in_new.reserve(i_not_cull.size());
+  VectorXd face_center_distance_new(i_not_cull.size());
+  for (int j = 0; j < ssize(i_not_cull); ++j) {
+    A_new.row(j) = A.row(i_not_cull[j]);
+    b_new(j) = b(i_not_cull[j]);
+    face_moved_in_new.push_back((*face_moved_in)[i_not_cull[j]]);
+    face_center_distance_new[j] = (*face_center_distance)[i_not_cull[j]];
+  }
+  // The face index needs to reduce because faces at lower indices have been
+  // removed.
+  *i = *i - num_cull_before_i;
+
+  HPolyhedron inbody = HPolyhedron(A_new, b_new);
+  *face_center_distance = face_center_distance_new;
+  *face_moved_in = face_moved_in_new;
+
+  return inbody;
+}
+}  // namespace
+
+HPolyhedron HPolyhedron::SimplifyByIncrementalFaceTranslation(
+    const double min_volume_ratio, const bool do_affine_transformation,
+    const int max_iterations, const Eigen::MatrixXd& points_to_contain,
+    const std::vector<HPolyhedron>& intersecting_polytopes,
+    const bool keep_whole_intersection, const double intersection_padding,
+    const int random_seed) const {
+  DRAKE_THROW_UNLESS(min_volume_ratio > 0);
+  DRAKE_THROW_UNLESS(max_iterations > 0);
+  DRAKE_THROW_UNLESS(intersection_padding >= 0);
+
+  const HPolyhedron circumbody = this->ReduceInequalities(0);
+  MatrixXd circumbody_A = circumbody.A();
+  VectorXd circumbody_b = circumbody.b();
+  DRAKE_THROW_UNLESS(!circumbody.IsEmpty());
+  DRAKE_THROW_UNLESS(circumbody.IsBounded());
+
+  for (int i = 0; i < points_to_contain.cols(); ++i) {
+    DRAKE_DEMAND(circumbody.PointInSet(points_to_contain.col(i)));
+  }
+
+  // Ensure rows are normalized.
+  for (int i = 0; i < circumbody_A.rows(); ++i) {
+    const double initial_row_norm = circumbody_A.row(i).norm();
+    circumbody_A.row(i) /= initial_row_norm;
+    circumbody_b(i) /= initial_row_norm;
+  }
+
+  // Create vector of distances from all faces to circumbody center.
+  const VectorXd circumbody_ellipsoid_center =
+      circumbody.MaximumVolumeInscribedEllipsoid().center();
+  VectorXd face_center_distance(circumbody_b.rows());
+  for (int i = 0; i < circumbody_b.rows(); ++i) {
+    face_center_distance(i) =
+        circumbody_b(i) - circumbody_A.row(i) * circumbody_ellipsoid_center;
+  }
+
+  // Scaling factor for face distances being translated inward.
+  const double face_scale_ratio =
+      1 - std::pow(min_volume_ratio, 1.0 / ambient_dimension());
+
+  // A multiplier for cost in LP that finds how far a face can be moved inward
+  // before losing an intersection.  Maximizes or minimizes dot product between
+  // a point and the face normal, depending on `keep_whole_intersection`.
+  const int cost_multiplier = keep_whole_intersection ? -1 : 1;
+
+  // If scaled circumbody still intersects with a polytope in
+  // `intersecting_polytopes`, then we don't need to worry about losing this
+  // intersection in the face translation algorithm because the scaled
+  // circumbody will always be a subset of the inbody.
+  const HPolyhedron scaled_circumbody = circumbody.Scale(min_volume_ratio);
+  std::vector<drake::geometry::optimization::HPolyhedron>
+      reduced_intersecting_polytopes;
+  reduced_intersecting_polytopes.reserve(intersecting_polytopes.size());
+  for (size_t i = 0; i < intersecting_polytopes.size(); ++i) {
+    DRAKE_DEMAND(circumbody.IntersectsWith(intersecting_polytopes[i]));
+    if (keep_whole_intersection ||
+        !scaled_circumbody.IntersectsWith(intersecting_polytopes[i])) {
+      reduced_intersecting_polytopes.push_back(intersecting_polytopes[i]);
+    }
+  }
+
+  // Initialize inbody as circumbody.
+  HPolyhedron inbody = circumbody;
+  std::vector<bool> face_moved_in(inbody.b().rows(), false);
+  int iterations = 0;
+  bool any_faces_moved = true;
+  RandomGenerator generator(random_seed);
+  while (any_faces_moved && iterations < max_iterations) {
+    any_faces_moved = false;
+
+    // Shuffle hyperplanes.
+    std::vector<int> shuffle_inds(face_center_distance.size());
+    std::iota(shuffle_inds.begin(), shuffle_inds.end(), 0);
+    std::shuffle(shuffle_inds.begin(), shuffle_inds.end(), generator);
+    MatrixXd A_shuffled(inbody.b().size(), ambient_dimension());
+    VectorXd b_shuffled(inbody.b().size());
+    VectorXd face_center_distance_shuffled(inbody.b().size());
+    std::vector<bool> face_moved_in_shuffled(inbody.b().size());
+    for (int i_shuffle : shuffle_inds) {
+      A_shuffled.row(i_shuffle) = inbody.A().row(shuffle_inds[i_shuffle]);
+      b_shuffled(i_shuffle) = inbody.b()(shuffle_inds[i_shuffle]);
+      face_center_distance_shuffled(i_shuffle) =
+          face_center_distance(shuffle_inds[i_shuffle]);
+      face_moved_in_shuffled[i_shuffle] =
+          face_moved_in[shuffle_inds[i_shuffle]];
+    }
+    inbody = HPolyhedron(A_shuffled, b_shuffled);
+    face_center_distance = face_center_distance_shuffled;
+    face_moved_in = face_moved_in_shuffled;
+
+    int i = 0;
+    // Loop through remaining hyperplanes.
+    while (i < inbody.b().rows()) {
+      if (!face_moved_in[i]) {
+        // Lower bound on `b[i]`, to be updated by restrictions posed by
+        // intersections.
+        double b_i_min_allowed =
+            inbody.b()(i) - face_scale_ratio * face_center_distance(i);
+
+        // Loop through intersecting hyperplanes and update `b_i_min_allowed`
+        // based on how far each intersection allows the hyperplane to move.
+        for (int intersection_ind = 0;
+             intersection_ind < ssize(reduced_intersecting_polytopes);
+             ++intersection_ind) {
+          const HPolyhedron intersection = inbody.Intersection(
+              reduced_intersecting_polytopes[intersection_ind]);
+
+          MathematicalProgram prog;
+          solvers::VectorXDecisionVariable x =
+              prog.NewContinuousVariables(ambient_dimension(), "x");
+          prog.AddLinearCost(cost_multiplier * inbody.A().row(i), 0, x);
+          intersection.AddPointInSetConstraints(&prog, x);
+          solvers::MathematicalProgramResult result = Solve(prog);
+
+          if (result.is_success()) {
+            if (cost_multiplier * result.get_optimal_cost() +
+                    intersection_padding >
+                b_i_min_allowed) {
+              b_i_min_allowed = cost_multiplier * result.get_optimal_cost() +
+                                intersection_padding;
+            }
+          } else {
+            log()->warn(
+                "Intersection program did not solve properly.  Will not"
+                "  move in hyperplane.");
+            b_i_min_allowed = inbody.b()(i);
+          }
+        }
+        // Loop through points to contain and update `b_i_min_allowed`
+        // based on how far each point allows the hyperplane to move.
+        for (int i_point = 0; i_point < points_to_contain.cols(); ++i_point) {
+          b_i_min_allowed =
+              std::max(b_i_min_allowed,
+                       inbody.A().row(i).dot(points_to_contain.col(i_point)));
+        }
+
+        // Ensure `b_min_allowed` does not exceed `b(i)` (hyperplane does not
+        // move outward).  Can occur if `intersection_padding > 0.
+        b_i_min_allowed = std::min(b_i_min_allowed, inbody.b()(i));
+
+        // Find which hyperplanes become redundant if we move the hyperplane
+        // as far as is allowed.  If any, move face and cull other faces.
+        VectorXd b_proposed = inbody.b();
+        b_proposed(i) = b_i_min_allowed;
+        const HPolyhedron inbody_proposed = HPolyhedron(inbody.A(), b_proposed);
+        const std::set<int> i_redundant_set = inbody_proposed.FindRedundant(0);
+        const std::vector<int> i_redundant(i_redundant_set.begin(),
+                                           i_redundant_set.end());
+        if (i_redundant.size() > 0) {
+          any_faces_moved = true;
+          const MatrixXd A = inbody.A();
+          inbody = MoveFaceAndCull(A, b_proposed, &face_center_distance,
+                                   &face_moved_in, &i, i_redundant);
+        }
+      }
+      ++i;
+    }
+    log()->debug("{} faces saved so far",
+                 circumbody.b().size() - inbody.b().size());
+
+    ++iterations;
+  }
+
+  const HPolyhedron inbody_before_affine_transformation =
+      HPolyhedron(inbody.A(), inbody.b());
+  // Affine transformation.
+  if (do_affine_transformation) {
+    inbody = inbody.MaximumVolumeInscribedAffineTransformation(circumbody);
+  }
+
+  // Check if intersection and containment constraints are still satisfied after
+  // affine transformation, and revert if not.  There is currently no way to
+  // constrain that the affine transformation upholds these constraints.
+  for (int inter_ind = 0; inter_ind < ssize(reduced_intersecting_polytopes);
+       ++inter_ind) {
+    if (do_affine_transformation &&
+        !inbody.IntersectsWith(reduced_intersecting_polytopes[inter_ind])) {
+      inbody = inbody_before_affine_transformation;
+      log()->debug(
+          "Reverting affine transformation due to loss of intersection "
+          "with other polytope");
+    }
+  }
+  for (int i_point = 0; i_point < points_to_contain.cols(); ++i_point) {
+    if (!inbody.PointInSet(points_to_contain.col(i_point))) {
+      inbody = inbody_before_affine_transformation;
+      log()->debug(
+          "Reverting affine transformation due to loss of containment "
+          " of point");
+    }
+  }
+  return inbody;
+}
+
+HPolyhedron HPolyhedron::MaximumVolumeInscribedAffineTransformation(
+    const HPolyhedron& circumbody) const {
+  DRAKE_THROW_UNLESS(this->ambient_dimension() ==
+                     circumbody.ambient_dimension());
+
+  int n_y = circumbody.A().rows();
+  int n_x = this->A().rows();
+
+  // Affine transformation is parameterized by translation `t` and
+  // transformation matrix T.
+  MathematicalProgram prog;
+  solvers::VectorXDecisionVariable t =
+      prog.NewContinuousVariables(this->ambient_dimension(), "t");
+  solvers::MatrixXDecisionVariable T =
+      prog.NewSymmetricContinuousVariables(this->ambient_dimension(), "T");
+
+  // T being PSD is necessary for the cost to be convex, though it is
+  // restrictive.
+  prog.AddPositiveSemidefiniteConstraint(T);
+  // Log determinant is monotonic with volume.
+  prog.AddMaximizeLogDeterminantCost(T.cast<Expression>());
+
+  // Containment conditions for affine transformation of HPolyhedron
+  // in HPolyhedron.
+  solvers::MatrixXDecisionVariable Lambda =
+      prog.NewContinuousVariables(n_y, n_x, "Lambda");
+  prog.AddBoundingBoxConstraint(0, kInf, Lambda);
+
+  // Loop through and add the elements of the constraints
+  // Lambda * `this`.A() = circumbody.A() * T
+  // implemented as
+  // [this.A().col(i_col).T, -circumbody.A().row(i_row)] * [Lambda.row(i_row).T;
+  // T.col(i_col)] = 0 over rows i_row and columns i_col,
+  // and
+  // Lambda * `this`.b() + circumbody.A() * t <= circumbody.b().
+  MatrixXd left_hand_equality_matrix(1, n_x + circumbody.ambient_dimension());
+  solvers::VectorXDecisionVariable equality_variables(
+      n_x + circumbody.ambient_dimension());
+  MatrixXd left_hand_inequality_matrix(1, n_x + circumbody.ambient_dimension());
+  solvers::VectorXDecisionVariable inequality_variables(
+      n_x + circumbody.ambient_dimension());
+  for (int i_row = 0; i_row < n_y; ++i_row) {
+    for (int i_col = 0; i_col < circumbody.ambient_dimension(); ++i_col) {
+      left_hand_equality_matrix << this->A().col(i_col).transpose(),
+          -circumbody.A().row(i_row);
+      equality_variables << Lambda.row(i_row).transpose(), T.col(i_col);
+      prog.AddLinearEqualityConstraint(left_hand_equality_matrix,
+                                       VectorXd::Zero(1), equality_variables);
+    }
+    left_hand_inequality_matrix << this->b().transpose(),
+        circumbody.A().row(i_row);
+    inequality_variables << Lambda.row(i_row).transpose(), t;
+    prog.AddLinearConstraint(left_hand_inequality_matrix, -kInf,
+                             circumbody.b()[i_row], inequality_variables);
+  }
+
+  solvers::MathematicalProgramResult result = Solve(prog);
+
+  if (!result.is_success()) {
+    throw std::runtime_error(fmt::format(
+        "Solver {} failed to solve the affine transformation problem; it "
+        "terminated with SolutionResult {}). Make sure that your polyhedra are "
+        "bounded and have interiors.",
+        result.get_solver_id().name(), result.get_solution_result()));
+  }
+
+  const MatrixXd T_sol = result.GetSolution(T);
+  const VectorXd t_sol = result.GetSolution(t);
+  const MatrixXd T_inv = T_sol.inverse();
+
+  MatrixXd A_optimized = this->A() * T_inv;
+  VectorXd b_optimized = this->b() + this->A() * T_inv * t_sol;
+
+  for (int i = 0; i < n_x; ++i) {
+    const double initial_row_norm = A_optimized.row(i).norm();
+    A_optimized.row(i) /= initial_row_norm;
+    b_optimized(i) /= initial_row_norm;
+  }
+
+  return HPolyhedron(A_optimized, b_optimized);
+}
+
 std::unique_ptr<ConvexSet> HPolyhedron::DoClone() const {
   return std::make_unique<HPolyhedron>(*this);
 }
 
-bool HPolyhedron::DoPointInSet(const Eigen::Ref<const VectorXd>& x,
-                               double tol) const {
+std::optional<bool> HPolyhedron::DoPointInSetShortcut(
+    const Eigen::Ref<const VectorXd>& x, double tol) const {
   DRAKE_DEMAND(A_.cols() == x.size());
   return ((A_ * x).array() <= b_.array() + tol).all();
 }
@@ -698,26 +1235,6 @@ HPolyhedron::DoToShapeWithPose() const {
       "ToShapeWithPose is not implemented yet for HPolyhedron.  Implementing "
       "this will likely require additional support from the Convex shape "
       "class (to support in-memory mesh data, or file I/O).");
-}
-
-void HPolyhedron::ImplementGeometry(const Box& box, void* data) {
-  Eigen::Matrix<double, 6, 3> A;
-  A << Eigen::Matrix3d::Identity(), -Eigen::Matrix3d::Identity();
-  Vector6d b;
-  // clang-format off
-  b << box.width()/2.0, box.depth()/2.0, box.height()/2.0,
-        box.width()/2.0, box.depth()/2.0, box.height()/2.0;
-  // clang-format on
-  auto* Ab = static_cast<std::pair<MatrixXd, VectorXd>*>(data);
-  Ab->first = A;
-  Ab->second = b;
-}
-
-void HPolyhedron::ImplementGeometry(const HalfSpace&, void* data) {
-  auto* Ab = static_cast<std::pair<MatrixXd, VectorXd>*>(data);
-  // z <= 0.0.
-  Ab->first = Eigen::RowVector3d{0.0, 0.0, 1.0};
-  Ab->second = Vector1d{0.0};
 }
 
 HPolyhedron HPolyhedron::PontryaginDifference(const HPolyhedron& other) const {

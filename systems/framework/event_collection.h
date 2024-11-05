@@ -24,25 +24,9 @@ namespace systems {
  * abstract base class that stores simultaneous events *of the same type* that
  * occur *at the same time* (i.e., simultaneous events).
  *
- * For each concrete event type, the LeafSystem API provides a unique
- * customizable function for processing all simultaneous events of that type,
- * e.g.
- * LeafSystem::DoPublish(const Context&, const vector<const PublishEvent*>&)
- * for publish events, where the second argument represents all of the publish
- * events that occur simultaneously for that leaf system. The default
- * implementation processes the events (i.e., call their callback functions)
- * in the order in which they are stored in the second argument.
- * The developer of new classes derived from LeafSystem is responsible for
- * overriding such functions if the custom LeafSystem behavior depends on the
- * order in which events are processed. For example, suppose two publish events
- * are being processed, `events = {per-step publish, periodic publish}`.
- * Depending on the desired behavior, the developer has the freedom to ignore
- * both events, perform only one publish action, or perform both publish actions
- * in any arbitrary order. The System and Diagram API provide only dispatch
- * mechanisms that delegate actual event handling to the
- * constituent leaf systems. The Simulator promises that for each set of
- * simultaneous events of the same type, the public event handling method
- * (e.g. System::Publish(context, publish_events)) will be invoked exactly once.
+ * The Simulator promises that for each set of simultaneous events of the same
+ * type, the public event handling method (e.g.,
+ * System::Publish(context, publish_events)) will be invoked exactly once.
  *
  * The System API provides several functions for customizable event generation
  * such as System::DoCalcNextUpdateTime() or System::DoGetPerStepEvents().
@@ -86,20 +70,13 @@ namespace systems {
  *       all_events.get_discrete_update_events(), discrete_state);
  *   sys.Publish(context, all_events.get_publish_events())
  * </pre>
- * For a LeafSystem, this is equivalent to (by expanding the dispatch mechanisms
- * in the System API):
- * <pre>
- *   sys.DoCalcUnrestrictedUpdate(context, {event4}, state);
- *   sys.DoCalcDiscreteVariableUpdates(context, {event2}, discrete_state);
- *   sys.DoPublish(context, {event1, event3})
- * </pre>
  *
  * @tparam EventType a concrete derived type of Event (e.g., PublishEvent).
  */
 template <typename EventType>
 class EventCollection {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(EventCollection);
 
   virtual ~EventCollection() {}
 
@@ -166,7 +143,7 @@ class EventCollection {
 template <typename EventType>
 class DiagramEventCollection final : public EventCollection<EventType> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramEventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramEventCollection);
 
   /**
    * Note that this constructor only resizes the containers; it
@@ -308,7 +285,7 @@ class LeafEventCollection final : public EventCollection<EventType> {
    */
   static constexpr int kDefaultCapacity = 32;
 
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LeafEventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LeafEventCollection);
 
   /**
    * Constructor.
@@ -446,7 +423,7 @@ class LeafEventCollection final : public EventCollection<EventType> {
 template <typename T>
 class CompositeEventCollection {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CompositeEventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CompositeEventCollection);
 
   virtual ~CompositeEventCollection() {}
 
@@ -651,7 +628,7 @@ class CompositeEventCollection {
 template <typename T>
 class LeafCompositeEventCollection final : public CompositeEventCollection<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LeafCompositeEventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(LeafCompositeEventCollection);
 
   LeafCompositeEventCollection()
       : CompositeEventCollection<T>(
@@ -697,7 +674,7 @@ template <typename T>
 class DiagramCompositeEventCollection final
     : public CompositeEventCollection<T> {
  public:
-  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramCompositeEventCollection)
+  DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(DiagramCompositeEventCollection);
 
   /**
    * Allocated CompositeEventCollection for all constituent subsystems are
@@ -780,10 +757,10 @@ class DiagramCompositeEventCollection final
 }  // namespace drake
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::CompositeEventCollection)
+    class ::drake::systems::CompositeEventCollection);
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::LeafCompositeEventCollection)
+    class ::drake::systems::LeafCompositeEventCollection);
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_SCALARS(
-    class ::drake::systems::DiagramCompositeEventCollection)
+    class ::drake::systems::DiagramCompositeEventCollection);

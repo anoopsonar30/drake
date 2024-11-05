@@ -2,11 +2,12 @@ import pydrake.systems.sensors as mut
 
 import copy
 import gc
+import tempfile
 import unittest
 
 import numpy as np
-
 from pydrake.common import FindResourceOrThrow
+from pydrake.common.test_utilities import numpy_compare
 from pydrake.common.test_utilities.deprecation import catch_drake_warnings
 from pydrake.common.test_utilities.pickle_compare import assert_pickle
 from pydrake.common.value import AbstractValue, Value
@@ -44,17 +45,25 @@ pf = mut.PixelFormat
 # Available image / pixel types.
 pixel_types = [
     pt.kRgba8U,
+    pt.kRgb8U,
+    pt.kBgra8U,
+    pt.kBgr8U,
     pt.kDepth16U,
     pt.kDepth32F,
     pt.kLabel16I,
+    pt.kGrey8U,
 ]
 
 # Convenience aliases.
 image_type_aliases = [
     mut.ImageRgba8U,
+    mut.ImageRgb8U,
+    mut.ImageBgra8U,
+    mut.ImageBgr8U,
     mut.ImageDepth16U,
     mut.ImageDepth32F,
     mut.ImageLabel16I,
+    mut.ImageGrey8U,
 ]
 
 
@@ -65,7 +74,7 @@ class TestSensors(unittest.TestCase):
         self.assertSetEqual(
             set(pixel_types), set(mut.PixelType.__members__.values()))
 
-        # Test instantiations of ImageTraits<>.
+        # Spot-check specific instantiations of ImageTraits<>.
         t = mut.ImageTraits[pt.kRgba8U]
         self.assertEqual(t.kNumChannels, 4)
         self.assertEqual(t.ChannelType, np.uint8)
@@ -85,6 +94,19 @@ class TestSensors(unittest.TestCase):
         self.assertEqual(t.kNumChannels, 1)
         self.assertEqual(t.ChannelType, np.int16)
         self.assertEqual(t.kPixelFormat, pf.kLabel)
+
+        # Smoke test all instantiations of ImageTraits<>.
+        for pixel_type in pixel_types:
+            t = mut.ImageTraits[pixel_type]
+            self.assertGreaterEqual(t.kNumChannels, 1)
+            self.assertIsNotNone(t.ChannelType)
+            self.assertIn(t.kPixelFormat, mut.PixelFormat.__members__.values())
+
+        # Smoke test the pixel scalars.
+        mut.PixelScalar.k8U
+        mut.PixelScalar.k16I
+        mut.PixelScalar.k16U
+        mut.PixelScalar.k32F
 
     def test_image_types(self):
         # Test instantiations of Image<>.
@@ -335,9 +357,13 @@ class TestSensors(unittest.TestCase):
                 self.assertEqual(image.height, 1)
                 expected_format = {
                     pt.kRgba8U: lcmt_image.PIXEL_FORMAT_RGBA,
+                    pt.kRgb8U: lcmt_image.PIXEL_FORMAT_RGB,
+                    pt.kBgra8U: lcmt_image.PIXEL_FORMAT_BGRA,
+                    pt.kBgr8U: lcmt_image.PIXEL_FORMAT_BGR,
                     pt.kDepth16U: lcmt_image.PIXEL_FORMAT_DEPTH,
                     pt.kDepth32F: lcmt_image.PIXEL_FORMAT_DEPTH,
                     pt.kLabel16I: lcmt_image.PIXEL_FORMAT_LABEL,
+                    pt.kGrey8U: lcmt_image.PIXEL_FORMAT_GRAY,
                 }[pixel_type]
                 self.assertEqual(image.pixel_format, expected_format)
 
@@ -349,7 +375,8 @@ class TestSensors(unittest.TestCase):
             self._check_input(port)
         for port in (
                 dut.color_image_output_port(),
-                dut.depth_image_output_port()):
+                dut.depth_image_output_port(),
+                dut.label_image_output_port()):
             self._check_output(port)
 
         # Create a one-pixel lcmt_image message.
@@ -439,14 +466,45 @@ class TestSensors(unittest.TestCase):
 
         for constructor in [construct, construct_single]:
             sensor = constructor(parent_id, X_WB)
-            check_info(sensor.color_camera_info())
-            check_info(sensor.depth_camera_info())
-            self.assertIsInstance(sensor.X_BC(),
-                                  RigidTransform)
-            self.assertIsInstance(sensor.X_BD(),
-                                  RigidTransform)
-            self.assertEqual(sensor.parent_frame_id(), parent_id)
+            check_info(sensor.default_color_render_camera()
+                       .core().intrinsics())
+            check_info(sensor.default_depth_render_camera()
+                       .core().intrinsics())
+            self.assertIsInstance(sensor.default_X_PB(), RigidTransform)
+            self.assertEqual(sensor.default_parent_frame_id(), parent_id)
+            sensor.set_default_parent_frame_id(parent_id)
+
+            with catch_drake_warnings(expected_count=1):
+                check_info(sensor.color_camera_info())
+            with catch_drake_warnings(expected_count=1):
+                check_info(sensor.depth_camera_info())
+            with catch_drake_warnings(expected_count=1):
+                self.assertIsInstance(sensor.X_PB(), RigidTransform)
+            with catch_drake_warnings(expected_count=1):
+                self.assertIsInstance(sensor.X_BC(), RigidTransform)
+            with catch_drake_warnings(expected_count=1):
+                self.assertIsInstance(sensor.X_BD(), RigidTransform)
+            with catch_drake_warnings(expected_count=1):
+                self.assertEqual(sensor.parent_frame_id(), parent_id)
             check_ports(sensor)
+            # Check parameter API.
+            context = sensor.CreateDefaultContext()
+            self.assertIsInstance(sensor.GetColorRenderCamera(context=context),
+                                  ColorRenderCamera)
+            color_camera = sensor.default_color_render_camera()
+            sensor.SetColorRenderCamera(context=context,
+                                        color_camera=color_camera)
+            self.assertIsInstance(sensor.GetDepthRenderCamera(context=context),
+                                  DepthRenderCamera)
+            depth_camera = sensor.default_depth_render_camera()
+            sensor.SetDepthRenderCamera(context=context,
+                                        depth_camera=depth_camera)
+            self.assertIsInstance(sensor.GetX_PB(context=context),
+                                  RigidTransform)
+            sensor.SetX_PB(context=context, sensor_pose=X_WB)
+            self.assertEqual(sensor.GetParentFrameId(context=context),
+                             parent_id)
+            sensor.SetParentFrameId(context=context, id=parent_id)
 
         # Test discrete camera. We'll simply use the last sensor constructed.
 
@@ -498,11 +556,75 @@ class TestSensors(unittest.TestCase):
         dut.body_pose_in_world_output_port()
         dut.image_time_output_port()
 
+    def test_image_file_format(self):
+        mut.ImageFileFormat.kJpeg
+        mut.ImageFileFormat.kPng
+        mut.ImageFileFormat.kTiff
+
+    def test_image_io_metadata(self):
+        dut = mut.ImageIo.Metadata(width=640)
+        self.assertEqual(dut.width, 640)
+        self.assertIn("width=640", repr(dut))
+
+    def test_image_io_using_buffer(self):
+        orig_image = mut.ImageRgba8U(6, 4)
+
+        format = mut.ImageFileFormat.kPng
+        dut = mut.ImageIo()
+        data = dut.Save(image=orig_image, format=format)
+        self.assertIsInstance(data, bytes)
+        self.assertGreater(len(data), 0)
+
+        meta = dut.LoadMetadata(buffer=data)
+        self.assertEqual((meta.width, meta.height), (6, 4))
+
+        new_image = dut.Load(buffer=data, format=format)
+        self.assertEqual((new_image.width(), new_image.height()), (6, 4))
+
+    def test_image_io_using_file(self):
+        orig_image = mut.ImageRgba8U(6, 4)
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = f"{temp}/test_image_io_using_file.png"
+
+            dut = mut.ImageIo()
+            dut.Save(image=orig_image, path=path, format=None)
+
+            meta = dut.LoadMetadata(path=path)
+            self.assertEqual((meta.width, meta.height), (6, 4))
+
+            new_image = dut.Load(path=path, format=mut.ImageFileFormat.kPng)
+            self.assertEqual((new_image.width(), new_image.height()), (6, 4))
+
     def test_image_writer(self):
         writer = mut.ImageWriter()
-        writer.DeclareImageInputPort(
+        input_port = writer.DeclareImageInputPort(
             pixel_type=mut.PixelType.kRgba8U,
             port_name="color",
             file_name_format="/tmp/{port_name}-{time_usec}",
             publish_period=0.125,
             start_time=0.0)
+        self.assertIsNotNone(input_port)
+
+    @numpy_compare.check_all_types
+    def test_rotary_encoders(self, T):
+        encoders = mut.RotaryEncoders_[T](ticks_per_revolution=[100, 200])
+        self.assertEqual(encoders.get_input_port().size(), 2)
+
+        encoders = mut.RotaryEncoders_[T](
+            input_port_size=5, input_vector_indices=[0, 2])
+        self.assertEqual(encoders.get_input_port().size(), 5)
+
+        encoders = mut.RotaryEncoders_[T](
+            input_port_size=5,
+            input_vector_indices=[0, 2],
+            ticks_per_revolution=[100, 200])
+        self.assertEqual(encoders.get_input_port().size(), 5)
+
+        context = encoders.CreateDefaultContext()
+        offsets = [T(0.1), T(0.2)]
+        encoders.set_calibration_offsets(
+            context=context, calibration_offsets=offsets)
+        numpy_compare.assert_equal(
+            encoders.get_calibration_offsets(context=context),
+            offsets)

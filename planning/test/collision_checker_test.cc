@@ -61,7 +61,6 @@ using geometry::Sphere;
 using math::RigidTransform;
 using math::RigidTransformd;
 using math::RotationMatrixd;
-using multibody::Body;
 using multibody::BodyIndex;
 using multibody::CoulombFriction;
 using multibody::default_model_instance;
@@ -69,7 +68,6 @@ using multibody::ModelInstanceIndex;
 using multibody::MultibodyPlant;
 using multibody::RevoluteJoint;
 using multibody::RigidBody;
-using multibody::SpatialInertia;
 using multibody::world_model_instance;
 using std::optional;
 using std::pair;
@@ -89,8 +87,7 @@ ModelInstanceIndex AddEnvironmentModelInstance(MultibodyPlant<double>* plant,
   DRAKE_DEMAND(plant->geometry_source_is_registered());
 
   std::vector<const RigidBody<double>*> bodies;
-  const RigidBody<double>& body = plant->AddRigidBody(
-      "env_body", instance, SpatialInertia<double>::MakeUnitary());
+  const RigidBody<double>& body = plant->AddRigidBody("env_body", instance);
   for (int i = 0; i < num_geo; ++i) {
     plant->RegisterCollisionGeometry(body, RigidTransformd::Identity(),
                                      Sphere(0.01), fmt::format("g{}", i),
@@ -135,7 +132,7 @@ class CollisionCheckerTester : public UnimplementedCollisionChecker {
   }
 
   optional<GeometryId> DoAddCollisionShapeToBody(
-      const std::string&, const Body<double>&, const Shape&,
+      const std::string&, const RigidBody<double>&, const Shape&,
       const RigidTransform<double>&) override {
     return added_shape_id_;
   }
@@ -293,8 +290,8 @@ pair<std::unique_ptr<RobotDiagram<double>>, ModelInstanceIndex> MakeModel(
   } else if (config.on_env_base) {
     const ModelInstanceIndex instance =
         builder_plant.AddModelInstance("floating");
-    const RigidBody<double>& floater = builder_plant.AddRigidBody(
-        "floater", instance, SpatialInertia<double>::MakeUnitary());
+    const RigidBody<double>& floater =
+        builder_plant.AddRigidBody("floater", instance);
     // Connect the first chain body (1) to this floating base.
     builder_plant.AddJoint<RevoluteJoint>("floating", floater, {},
                                           builder_plant.get_body(BodyIndex(1)),
@@ -328,7 +325,7 @@ GTEST_TEST(MakeModel, EnvironmentalFloatingBase) {
   const std::set<int> base_dofs = GetFloatingBaseDofs();
   const int start = floater.floating_positions_start();
   for (int i = start; i < start + 7; ++i) {
-    EXPECT_EQ(base_dofs.count(i), 1);
+    EXPECT_TRUE(base_dofs.contains(i));
   }
 }
 
@@ -430,7 +427,7 @@ GTEST_TEST(CollisionCheckerTest, CollisionCheckerEmpty) {
                               .self_collision_padding = 0});
 
   EXPECT_THAT(dut.robot_model_instances(), testing::ElementsAre(robot));
-  RigidBody<double> free_body("free", world, {});
+  RigidBody<double> free_body("free", world);
   EXPECT_FALSE(dut.IsPartOfRobot(free_body));
   EXPECT_FALSE(dut.IsPartOfRobot(BodyIndex(0)));
 
@@ -539,7 +536,7 @@ GTEST_TEST(CollisionCheckerTest, RobotClearance) {
   const RobotClearance clearance = checker->CalcRobotClearance(q, 0);
   ASSERT_EQ(clearance.size(), 1);
   for (int i = 0; i < clearance.num_positions(); ++i) {
-    if (non_robot_dofs.count(i) > 0) {
+    if (non_robot_dofs.contains(i)) {
       EXPECT_EQ(clearance.jacobians()(i), 0);
     } else {
       EXPECT_EQ(clearance.jacobians()(i), i + 1);
@@ -1531,8 +1528,6 @@ GTEST_TEST(EdgeCheckTest, DefaultInterpolation) {
       dist, 0.1, nullptr /* default interpolator */, false /* welded */);
 
   const auto& plant = dut.plant();
-  auto context = plant.CreateDefaultContext();
-
   // Body "b0" should be floating (7 dof) and "b1" should be linked to "b0" by
   // a single revolute joint.
   ASSERT_EQ(dut.plant().num_positions(), 8);
@@ -1556,11 +1551,13 @@ GTEST_TEST(EdgeCheckTest, DefaultInterpolation) {
 
   // Given a pose of the free body and the angle theta between bodies b0 and b1,
   // returns the plant's q.
-  auto get_q = [&plant, &context](const RigidTransformd& X_B0, double theta) {
-    const Body<double>& body0 = plant.GetBodyByName("b0");
-    plant.SetFreeBodyPose(context.get(), body0, X_B0);
-    plant.GetMutablePositions(context.get())[7] = theta;
-    return plant.GetPositions(*context);
+  auto get_q = [&plant](const RigidTransformd& X_B0, double theta) {
+    const RigidBody<double>& body0 = plant.GetBodyByName("b0");
+    auto plant_context = plant.CreateDefaultContext();
+    plant.SetFreeBodyPose(plant_context.get(), body0, X_B0);
+    VectorXd positions = plant.GetPositions(*plant_context);
+    positions[7] = theta;
+    return positions;
   };
 
   const VectorXd q_init = get_q(X_WB0_init, j12_init);

@@ -2,26 +2,28 @@
 
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/lcmt_robot_plan.hpp"
+#include "drake/multibody/parsing/package_map.h"
 
 namespace drake {
 namespace manipulation {
 namespace util {
 namespace {
 
+using multibody::PackageMap;
+
 static const int kNumJoints = 7;
 const char* const kIiwaUrdf =
-    "drake/manipulation/models/iiwa_description/urdf/"
+    "package://drake_models/iiwa_description/urdf/"
     "iiwa14_polytope_collision.urdf";
 const char* const kDualIiwaUrdf =
-    "drake/manipulation/models/iiwa_description/urdf/"
+    "package://drake_models/iiwa_description/urdf/"
     "dual_iiwa14_polytope_collision.urdf";
 
 GTEST_TEST(RobotPlanInterpolatorTest, InstanceTest) {
   // Test that the constructor works and that the expected ports are
   // present.
-  RobotPlanInterpolator dut(FindResourceOrThrow(kIiwaUrdf));
+  RobotPlanInterpolator dut(PackageMap{}.ResolveUrl(kIiwaUrdf));
   EXPECT_EQ(dut.get_plan_input_port().get_data_type(),
             systems::kAbstractValued);
   EXPECT_EQ(dut.get_state_output_port().get_data_type(),
@@ -35,7 +37,7 @@ GTEST_TEST(RobotPlanInterpolatorTest, InstanceTest) {
 GTEST_TEST(RobotPlanInterpolatorTest, DualInstanceTest) {
   // Check that the port sizes come out appropriately for a dual armed
   // model.
-  RobotPlanInterpolator dut(FindResourceOrThrow(kDualIiwaUrdf));
+  RobotPlanInterpolator dut(PackageMap{}.ResolveUrl(kDualIiwaUrdf));
   EXPECT_EQ(dut.plant().num_positions(), kNumJoints * 2);
   EXPECT_EQ(dut.plant().num_velocities(), kNumJoints * 2);
 
@@ -64,7 +66,7 @@ struct TrajectoryTestCase {
 };
 
 void DoTrajectoryTest(InterpolatorType interp_type) {
-  RobotPlanInterpolator dut(FindResourceOrThrow(kIiwaUrdf), interp_type);
+  RobotPlanInterpolator dut(PackageMap{}.ResolveUrl(kIiwaUrdf), interp_type);
 
   std::vector<double> t{0, 1, 2, 3, 4};
   Eigen::MatrixXd q = Eigen::MatrixXd::Zero(kNumJoints, t.size());
@@ -85,9 +87,8 @@ void DoTrajectoryTest(InterpolatorType interp_type) {
   plan.plan.resize(num_time_steps, default_robot_state);
 
   std::vector<std::string> joint_names;
-  for (int i = 0; i < dut.plant().num_joints(); ++i) {
-    const multibody::Joint<double>& joint =
-        dut.plant().get_joint(multibody::JointIndex(i));
+  for (multibody::JointIndex i : dut.plant().GetJointIndices()) {
+    const multibody::Joint<double>& joint = dut.plant().get_joint(i);
     if (joint.num_positions() != 1) {
       continue;
     }

@@ -1,10 +1,11 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("//tools/lint:lint.bzl", "add_lint_tests")
 load(
     "//tools/skylark:drake_cc.bzl",
     "drake_cc_googletest",
     "drake_cc_library",
     "drake_cc_package_library",
 )
-load("//tools/lint:lint.bzl", "add_lint_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,7 +23,6 @@ drake_cc_package_library(
         ":pid_controlled_system",
         ":pid_controller",
         ":state_feedback_controller_interface",
-        ":zmp_planner",
     ],
 )
 
@@ -149,28 +149,7 @@ drake_cc_library(
     ],
 )
 
-drake_cc_library(
-    name = "zmp_planner",
-    srcs = ["zmp_planner.cc"],
-    hdrs = ["zmp_planner.h"],
-    deps = [
-        ":linear_quadratic_regulator",
-        "//common:essential",
-        "//common/trajectories:piecewise_polynomial",
-    ],
-)
-
 # === test/ ===
-
-drake_cc_library(
-    name = "zmp_test_util",
-    testonly = 1,
-    srcs = ["test/zmp_test_util.cc"],
-    hdrs = ["test/zmp_test_util.h"],
-    deps = [
-        ":zmp_planner",
-    ],
-)
 
 drake_cc_googletest(
     name = "dynamic_programming_test",
@@ -208,11 +187,10 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "inverse_dynamics_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":inverse_dynamics",
-        "//common:find_resource",
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "//multibody/parsing",
@@ -223,11 +201,10 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "inverse_dynamics_controller_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":inverse_dynamics_controller",
-        "//common:find_resource",
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "//multibody/parsing",
@@ -238,12 +215,11 @@ drake_cc_googletest(
 drake_cc_googletest(
     name = "joint_stiffness_controller_test",
     data = [
-        "//manipulation/models/iiwa_description:models",
         "//multibody/benchmarks/acrobot:models",
+        "@drake_models//:iiwa_description",
     ],
     deps = [
         ":joint_stiffness_controller",
-        "//common:find_resource",
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_throws_message",
         "//multibody/parsing",
@@ -289,14 +265,6 @@ drake_cc_googletest(
         ":pid_controller",
         "//common/test_utilities:eigen_matrix_compare",
         "//common/test_utilities:expect_no_throw",
-    ],
-)
-
-drake_cc_googletest(
-    name = "zmp_planner_test",
-    deps = [
-        ":zmp_test_util",
-        "//common/test_utilities:eigen_matrix_compare",
     ],
 )
 

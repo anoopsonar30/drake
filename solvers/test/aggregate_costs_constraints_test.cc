@@ -310,6 +310,15 @@ TEST_F(TestAggregateCostsAndConstraints, AggregateBoundingBoxConstraints2) {
   AggregateBoundingBoxConstraints(prog, &lower, &upper);
   EXPECT_TRUE(CompareMatrices(lower, Eigen::Vector4d(-1, -kInf, 1, 1)));
   EXPECT_TRUE(CompareMatrices(upper, Eigen::Vector4d(2, kInf, 3, 2)));
+
+  std::vector<double> lower_vec, upper_vec;
+  AggregateBoundingBoxConstraints(prog, &lower_vec, &upper_vec);
+  EXPECT_TRUE(CompareMatrices(
+      Eigen::Map<Eigen::VectorXd>(lower_vec.data(), lower_vec.size()),
+      Eigen::Vector4d(-1, -kInf, 1, 1)));
+  EXPECT_TRUE(CompareMatrices(
+      Eigen::Map<Eigen::VectorXd>(upper_vec.data(), upper_vec.size()),
+      Eigen::Vector4d(2, kInf, 3, 2)));
 }
 
 void CheckAggregateDuplicateVariables(const Eigen::SparseMatrix<double>& A,
@@ -454,6 +463,557 @@ GTEST_TEST(CheckConvexSolverAttributes, Test) {
   EXPECT_THAT(explanation, HasSubstr("foo"));
   EXPECT_THAT(explanation,
               HasSubstr(nonconvex_quadratic_constraint_description));
+}
+
+GTEST_TEST(ParseLinearCosts, Test) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<2>();
+  const auto y = prog.NewContinuousVariables<3>();
+  prog.AddLinearCost(x[0] + 2 * y[0] + 1);
+  prog.AddLinearCost(x[1] - 2 * x[0] + 3 * y[1] - y[0] + 2);
+  std::vector<double> c(prog.num_vars(), 0);
+  double constant = 0;
+  ParseLinearCosts(prog, &c, &constant);
+  // The aggregated costs are -x[0] + x[1] + y[0] + 3y[1] + 3
+  Eigen::Matrix<double, 5, 1> coeff =
+      (Eigen::Matrix<double, 5, 1>() << -1, 1, 1, 3, 0).finished();
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Matrix<double, 5, 1>>(c.data()),
+                              coeff));
+  EXPECT_EQ(constant, 3);
+  // Now start with a non-zero c and constant.
+  c = {1, 2, 3, 4, 5};
+  constant = 2;
+  Eigen::Matrix<double, 5, 1> c_expected =
+      coeff + Eigen::Map<Eigen::Matrix<double, 5, 1>>(c.data());
+  double constant_expected = constant + 3;
+  ParseLinearCosts(prog, &c, &constant);
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Matrix<double, 5, 1>>(c.data()),
+                              c_expected));
+  EXPECT_EQ(constant, constant_expected);
+}
+
+GTEST_TEST(ParseLinearEqualityConstraints, Test) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<2>();
+  const auto y = prog.NewContinuousVariables<2>();
+  prog.AddLinearEqualityConstraint(
+      Eigen::RowVector3d(1, 2, 4), 1,
+      Vector3<symbolic::Variable>(x(0), x(0), y(1)));
+  prog.AddLinearEqualityConstraint((Eigen::Matrix2d() << 1, 2, 3, 4).finished(),
+                                   Eigen::Vector2d(2, 3),
+                                   Vector2<symbolic::Variable>(x(1), y(0)));
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count = 0;
+  std::vector<int> linear_eq_y_start_indices;
+  int num_linear_equality_constraints_rows = 0;
+  ParseLinearEqualityConstraints(prog, &A_triplets, &b, &A_row_count,
+                                 &linear_eq_y_start_indices,
+                                 &num_linear_equality_constraints_rows);
+  Eigen::SparseMatrix<double> A(3, prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::MatrixXd A_expected(3, prog.num_vars());
+  // clang-format off
+  A_expected << 3, 0, 0, 4,
+                0, 1, 2, 0,
+                0, 3, 4, 0;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Vector3d>(b.data()),
+                              Eigen::Vector3d(1, 2, 3)));
+  EXPECT_EQ(A_row_count, 3);
+  std::vector<int> linear_eq_y_start_indices_expected{0, 1};
+  EXPECT_EQ(linear_eq_y_start_indices, linear_eq_y_start_indices_expected);
+  EXPECT_EQ(num_linear_equality_constraints_rows, 3);
+
+  // Use a non-zero A_row_count. The row indices should be offset by the initial
+  // A_row_count.
+  const int A_rows_offset = 2;
+  A_row_count = A_rows_offset;
+  A_triplets.clear();
+  b = std::vector<double>{0, 0};
+  linear_eq_y_start_indices.clear();
+  ParseLinearEqualityConstraints(prog, &A_triplets, &b, &A_row_count,
+                                 &linear_eq_y_start_indices,
+                                 &num_linear_equality_constraints_rows);
+  Eigen::SparseMatrix<double> A2(A_rows_offset + 3, prog.num_vars());
+  A2.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  EXPECT_TRUE(CompareMatrices(A2.toDense().bottomRows(3), A_expected));
+  EXPECT_TRUE(
+      CompareMatrices(Eigen::Map<Eigen::Vector3d>(b.data() + A_rows_offset),
+                      Eigen::Vector3d(1, 2, 3)));
+  EXPECT_EQ(A_row_count, A_rows_offset + 3);
+  linear_eq_y_start_indices_expected =
+      std::vector<int>{A_rows_offset, A_rows_offset + 1};
+  EXPECT_EQ(linear_eq_y_start_indices, linear_eq_y_start_indices_expected);
+  EXPECT_EQ(num_linear_equality_constraints_rows, 3);
+}
+
+GTEST_TEST(ParseLinearConstraints, Test) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<2>();
+  const auto y = prog.NewContinuousVariables<2>();
+  prog.AddLinearConstraint(
+      (Eigen::Matrix3d() << 1, 2, 3, 4, 5, 6, 7, 8, 9).finished(),
+      Eigen::Vector3d(-kInf, 3, 2), Eigen::Vector3d(1, kInf, 4),
+      Vector3<symbolic::Variable>(x(0), y(0), x(0)));
+  prog.AddLinearConstraint(Eigen::RowVector3d(1, 2, 3), -1, 3,
+                           Vector3<symbolic::Variable>(y(0), y(1), x(1)));
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count = 0;
+  std::vector<std::vector<std::pair<int, int>>> linear_constraint_dual_indices;
+  int num_linear_constraint_rows;
+  ParseLinearConstraints(prog, &A_triplets, &b, &A_row_count,
+                         &linear_constraint_dual_indices,
+                         &num_linear_constraint_rows);
+  EXPECT_EQ(num_linear_constraint_rows, 6);
+  Eigen::SparseMatrix<double> A(6, prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::MatrixXd A_expected(6, prog.num_vars());
+  // clang-format off
+  A_expected << 4, 0, 2, 0,
+                -10, 0, -5, 0,
+                -16, 0, -8, 0,
+                16, 0, 8, 0,
+                0, -3, -1, -2,
+                0, 3, 1, 2;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Vector6d>(b.data()),
+                              (Vector6d() << 1, -3, -2, 4, 1, 3).finished()));
+  EXPECT_EQ(A_row_count, 6);
+  std::vector<std::vector<std::pair<int, int>>>
+      linear_constraint_dual_indices_expected;
+  linear_constraint_dual_indices_expected.push_back({{-1, 0}, {1, -1}, {2, 3}});
+  linear_constraint_dual_indices_expected.push_back({{4, 5}});
+  EXPECT_EQ(linear_constraint_dual_indices,
+            linear_constraint_dual_indices_expected);
+  EXPECT_EQ(num_linear_constraint_rows, 6);
+}
+
+GTEST_TEST(ParseQuadraticCosts, Test) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>();
+  prog.AddQuadraticCost((Eigen::Matrix2d() << 1, 3, 2, 4).finished(),
+                        Eigen::Vector2d(1, 2), 1, x.tail<2>());
+  prog.AddQuadraticCost(
+      (Eigen::Matrix3d() << 1, 2, 3, 4, 5, 6, 7, 8, 9).finished(),
+      Eigen::Vector3d(2, 3, 4), 2,
+      Vector3<symbolic::Variable>(x(0), x(1), x(0)));
+  std::vector<Eigen::Triplet<double>> P_upper_triplets;
+  std::vector<double> c(prog.num_vars(), 0);
+  double constant;
+  ParseQuadraticCosts(prog, &P_upper_triplets, &c, &constant);
+  // The total cost is 0.5 * (20*x0^2 + 6*x1^2 + 4*x2^2 + 5*x1*x2 + 20*x0*x1) +
+  // 6*x0 + 4*x1 + 2*x(2) + 3
+  Eigen::SparseMatrix<double> P_upper(prog.num_vars(), prog.num_vars());
+  P_upper.setFromTriplets(P_upper_triplets.begin(), P_upper_triplets.end());
+  Eigen::Matrix3d P_upper_expected;
+  // clang-format off
+  P_upper_expected << 20, 10, 0,
+                       0,  6, 2.5,
+                       0,  0, 4;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(P_upper.toDense(), P_upper_expected));
+}
+
+GTEST_TEST(ParseL2NormCosts, Test) {
+  MathematicalProgram prog{};
+  auto x = prog.NewContinuousVariables<3>();
+  Eigen::Matrix<double, 3, 2> A1;
+  A1 << 1, 2, 3, 4, 5, 6;
+  const Eigen::Vector3d b1(-1, -2, -3);
+  auto cost1 = prog.AddL2NormCost(A1, b1, x.tail<2>());
+
+  int num_solver_variables = prog.num_vars();
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count = 0;
+  std::vector<int> second_order_cone_length;
+  std::vector<int> lorentz_cone_y_start_indices;
+  std::vector<double> cost_coeffs(prog.num_vars(), 0.0);
+  std::vector<int> t_slack_indices;
+  // First test with a single L2NormCost.
+  ParseL2NormCosts(prog, &num_solver_variables, &A_triplets, &b, &A_row_count,
+                   &second_order_cone_length, &lorentz_cone_y_start_indices,
+                   &cost_coeffs, &t_slack_indices);
+  EXPECT_EQ(num_solver_variables, 1 + prog.num_vars());
+  Eigen::SparseMatrix<double> A(1 + A1.rows(), prog.num_vars() + 1);
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::MatrixXd A_expected(1 + A1.rows(), prog.num_vars() + 1);
+  A_expected.setZero();
+  A_expected(0, prog.num_vars()) = -1;
+  A_expected.block(1, 1, A1.rows(), A1.cols()) = -A1;
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  Eigen::VectorXd b_expected(1 + b1.rows());
+  b_expected.setZero();
+  b_expected.tail(b1.rows()) = b1;
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::VectorXd>(b.data(), b.size()),
+                              b_expected));
+  EXPECT_EQ(A_row_count, 1 + A1.rows());
+  EXPECT_EQ(second_order_cone_length.size(), 1);
+  EXPECT_EQ(second_order_cone_length[0], A1.rows() + 1);
+  EXPECT_EQ(lorentz_cone_y_start_indices.size(), 1);
+  EXPECT_EQ(lorentz_cone_y_start_indices[0], 0);
+  Eigen::VectorXd cost_coeffs_expected(prog.num_vars() + 1);
+  cost_coeffs_expected.setZero();
+  cost_coeffs_expected(prog.num_vars()) = 1;
+  EXPECT_TRUE(CompareMatrices(
+      Eigen::Map<Eigen::VectorXd>(cost_coeffs.data(), cost_coeffs.size()),
+      cost_coeffs_expected));
+  EXPECT_EQ(t_slack_indices.size(), 1);
+  EXPECT_EQ(t_slack_indices[0], prog.num_vars());
+
+  // Test with multiple L2NormCost.
+  num_solver_variables = prog.num_vars();
+  A_row_count = 0;
+  A_triplets.clear();
+  b.clear();
+  second_order_cone_length.clear();
+  lorentz_cone_y_start_indices.clear();
+  cost_coeffs = std::vector<double>(prog.num_vars(), 0);
+  t_slack_indices.clear();
+  Eigen::Matrix<double, 2, 2> A2;
+  A2 << -1, -3, -5, -7;
+  const Eigen::Vector2d b2(5, 10);
+  auto cost2 = prog.AddL2NormCost(A2, b2, x.head<2>());
+  ParseL2NormCosts(prog, &num_solver_variables, &A_triplets, &b, &A_row_count,
+                   &second_order_cone_length, &lorentz_cone_y_start_indices,
+                   &cost_coeffs, &t_slack_indices);
+  EXPECT_EQ(num_solver_variables, prog.num_vars() + 2);
+  A_expected.resize(2 + A1.rows() + A2.rows(), prog.num_vars() + 2);
+  A_expected.setZero();
+  A_expected(0, prog.num_vars()) = -1;
+  A_expected.block(1, 1, A1.rows(), 2) = -A1;
+  A_expected(A1.rows() + 1, prog.num_vars() + 1) = -1;
+  A_expected.block(2 + A1.rows(), 0, A2.rows(), 2) = -A2;
+  A.resize(2 + A1.rows() + A2.rows(), 2 + prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  b_expected.resize(A1.rows() + A2.rows() + 2);
+  b_expected.setZero();
+  b_expected.segment(1, A1.rows()) = b1;
+  b_expected.segment(2 + A1.rows(), A2.rows()) = b2;
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::VectorXd>(b.data(), b.size()),
+                              b_expected));
+  EXPECT_EQ(A_row_count, 2 + A1.rows() + A2.rows());
+  EXPECT_EQ(second_order_cone_length.size(), 2);
+  EXPECT_EQ(second_order_cone_length[0], A1.rows() + 1);
+  EXPECT_EQ(second_order_cone_length[1], A2.rows() + 1);
+  EXPECT_EQ(lorentz_cone_y_start_indices.size(), 2);
+  EXPECT_EQ(lorentz_cone_y_start_indices[0], 0);
+  EXPECT_EQ(lorentz_cone_y_start_indices[1], 1 + A1.rows());
+  cost_coeffs_expected.resize(prog.num_vars() + 2);
+  cost_coeffs_expected.setZero();
+  cost_coeffs_expected(prog.num_vars()) = 1;
+  cost_coeffs_expected(prog.num_vars() + 1) = 1;
+  EXPECT_TRUE(CompareMatrices(
+      Eigen::Map<Eigen::VectorXd>(cost_coeffs.data(), cost_coeffs.size()),
+      cost_coeffs_expected));
+  EXPECT_EQ(t_slack_indices.size(), 2);
+  EXPECT_EQ(t_slack_indices[0], prog.num_vars());
+  EXPECT_EQ(t_slack_indices[1], prog.num_vars() + 1);
+}
+
+GTEST_TEST(ParseSecondOrderConeConstraints, LorentzCone) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>();
+
+  prog.AddLorentzConeConstraint(
+      (Eigen::Matrix<double, 4, 3>() << 1, 0, 2, -1, 2, 3, 1, 2, 4, -2, 1, 2)
+          .finished(),
+      Eigen::Vector4d(1, 2, 3, 4),
+      Vector3<symbolic::Variable>(x(1), x(0), x(1)));
+
+  prog.AddLorentzConeConstraint(
+      (Eigen::Matrix<double, 4, 2>() << 1, 2, 3, 4, 5, 6, 7, 8).finished(),
+      Eigen::Vector4d(-1, -2, -3, -4), Vector2<symbolic::Variable>(x(2), x(0)));
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count{0};
+  std::vector<int> second_order_cone_length;
+  std::vector<int> lorentz_cone_y_start_indices;
+  std::vector<int> rotated_lorentz_cone_y_start_indices;
+  ParseSecondOrderConeConstraints(
+      prog, &A_triplets, &b, &A_row_count, &second_order_cone_length,
+      &lorentz_cone_y_start_indices, &rotated_lorentz_cone_y_start_indices);
+  EXPECT_EQ(A_row_count, 8);
+  Eigen::SparseMatrix<double> A(8, prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::MatrixXd A_expected(8, prog.num_vars());
+  // clang-format off
+  A_expected << 0, -3, 0,
+                -2, -2, 0,
+                -2, -5, 0,
+                -1, 0, 0,
+                 -2, 0, -1,
+                 -4, 0, -3,
+                 -6, 0, -5,
+                 -8, 0, -7;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  Eigen::Matrix<double, 8, 1> b_expected;
+  b_expected << 1, 2, 3, 4, -1, -2, -3, -4;
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Matrix<double, 8, 1>>(b.data()),
+                              b_expected));
+  EXPECT_EQ(second_order_cone_length, std::vector<int>({4, 4}));
+  EXPECT_EQ(lorentz_cone_y_start_indices, std::vector<int>({0, 4}));
+  EXPECT_EQ(rotated_lorentz_cone_y_start_indices, std::vector<int>());
+}
+
+GTEST_TEST(ParseSecondOrderConeConstraints, RotatedLorentzConeConstraint) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>();
+  prog.AddRotatedLorentzConeConstraint(
+      (Eigen::Matrix<double, 4, 3>() << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+          .finished(),
+      Eigen::Vector4d(0, 1, 2, 3),
+      Vector3<symbolic::Variable>(x(1), x(0), x(1)));
+  prog.AddRotatedLorentzConeConstraint(
+      (Eigen::Matrix<double, 3, 4>() << -1, -2, -3, -4, -5, -6, -7, -8, -9, -10,
+       -11, -12)
+          .finished(),
+      Eigen::Vector3d(5, 6, 7),
+      Vector4<symbolic::Variable>(x(1), x(0), x(0), x(2)));
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count{0};
+  std::vector<int> second_order_cone_length;
+  std::vector<int> lorentz_cone_y_start_indices;
+  std::vector<int> rotated_lorentz_cone_y_start_indices;
+  ParseSecondOrderConeConstraints(
+      prog, &A_triplets, &b, &A_row_count, &second_order_cone_length,
+      &lorentz_cone_y_start_indices, &rotated_lorentz_cone_y_start_indices);
+  EXPECT_EQ(A_row_count, 7);
+  Eigen::SparseMatrix<double> A(7, prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::MatrixXd A_expected(7, prog.num_vars());
+  // clang-format off
+  A_expected << -3.5, -7, 0,
+                 1.5, 3, 0,
+                 -8, -16, 0,
+                 -11, -22, 0,
+                 9, 3, 6,
+                 -4, -2, -2,
+                 21, 9, 12;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  Eigen::Matrix<double, 7, 1> b_expected;
+  b_expected << 0.5, -0.5, 2, 3, 5.5, -0.5, 7;
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Matrix<double, 7, 1>>(b.data()),
+                              b_expected));
+  EXPECT_EQ(second_order_cone_length, std::vector<int>({4, 3}));
+  EXPECT_EQ(lorentz_cone_y_start_indices, std::vector<int>());
+  EXPECT_EQ(rotated_lorentz_cone_y_start_indices, std::vector<int>({0, 4}));
+}
+
+GTEST_TEST(ParseExponentialConeConstraints, Test) {
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>();
+  prog.AddExponentialConeConstraint(
+      (Eigen::Matrix<double, 3, 4>() << 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+          .finished()
+          .sparseView(),
+      Eigen::Vector3d(1, 2, 3),
+      Vector4<symbolic::Variable>(x(1), x(0), x(2), x(0)));
+  std::vector<Eigen::Triplet<double>> A_triplets;
+  std::vector<double> b;
+  int A_row_count = 0;
+  ParseExponentialConeConstraints(prog, &A_triplets, &b, &A_row_count);
+  EXPECT_EQ(A_row_count, 3);
+  Eigen::SparseMatrix<double> A(3, prog.num_vars());
+  A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+  Eigen::Matrix3d A_expected;
+  // clang-format off
+  A_expected << -22, -9, -11,
+                -14, -5, -7,
+                -6, -1, -3;
+  // clang-format on
+  EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+  EXPECT_EQ(b.size(), 3);
+  EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::Vector3d>(b.data()),
+                              Eigen::Vector3d(3, 2, 1)));
+}
+
+GTEST_TEST(ParsePositiveSemidefiniteConstraints, TestPsd) {
+  // Test parsing prog.positive_semidefinite_constraints.
+  MathematicalProgram prog;
+  const auto X = prog.NewSymmetricContinuousVariables<3>();
+  prog.AddPositiveSemidefiniteConstraint(X);
+  const auto Y = prog.NewSymmetricContinuousVariables<2>();
+  prog.AddPositiveSemidefiniteConstraint(Y);
+
+  auto check_psd = [&prog](bool upper_triangular) {
+    SCOPED_TRACE(fmt::format("upper_triangular = {}", upper_triangular));
+    std::vector<Eigen::Triplet<double>> A_triplets;
+    // Assume that A*x+s = b already contain `A_row_count_old` number of
+    // constraints. We check if the new constraints are appended to A*x+s = b.
+    int A_row_count_old = 2;
+    std::vector<double> b(A_row_count_old);
+    int A_row_count = A_row_count_old;
+    std::vector<int> psd_cone_length;
+    ParsePositiveSemidefiniteConstraints(prog, upper_triangular, &A_triplets,
+                                         &b, &A_row_count, &psd_cone_length);
+    EXPECT_EQ(psd_cone_length, std::vector<int>({3, 2}));
+    // We add 3 * (3+1) / 2 = 6 rows in A for "X is psd", and 2 * (2+1) / 2 = 3
+    // rows in A for "Y is psd".
+    EXPECT_EQ(A_row_count, A_row_count_old + 3 * (3 + 1) / 2 + 2 * (2 + 1) / 2);
+    const double sqrt2 = std::sqrt(2);
+    Eigen::SparseMatrix<double> A(A_row_count, prog.num_vars());
+    A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+    Eigen::MatrixXd A_expected(A_row_count_old + 9, 9);
+    A_expected.setZero();
+    // [1 √2 √2]
+    // [√2 1 √2]
+    // [√2 √2 1]
+    // and
+    // [1 √2]
+    // [√2 1]
+    if (upper_triangular) {
+      // If we use the upper triangular part of the symmetric matrix, to impose
+      // the constraint that 3 by 3 matrix X is psd, we need the constraint
+      //   -X(0, 0) + s(0) = 0
+      // -√2X(0, 1) + s(1) = 0
+      //   -X(1, 1) + s(2) = 0
+      // -√2X(0, 2) + s(3) = 0
+      // -√2X(1, 2) + s(4) = 0
+      //   -X(2, 2) + s(5) = 0
+      // and
+      // [s(0) s(1) s(3)]
+      // [s(1) s(2) s(4)]  is psd.
+      // [s(3) s(4) s(5)]
+      // Below we write
+      // A_expected(A_row_count_old + s_index, X_index) = -X_coeff.
+      A_expected(A_row_count_old + 0, 0 /* X(0, 0) */) = -1;
+      A_expected(A_row_count_old + 1, 1 /* X(0, 1) */) = -sqrt2;
+      A_expected(A_row_count_old + 2, 3 /* X(1, 1) */) = -1;
+      A_expected(A_row_count_old + 3, 2 /* X(0, 2) */) = -sqrt2;
+      A_expected(A_row_count_old + 4, 4 /* X(1, 2) */) = -sqrt2;
+      A_expected(A_row_count_old + 5, 5 /* X(2, 2) */) = -1;
+      // For the 2 by 2 matrix Y to be psd, we need the constraint
+      //   -Y(0, 0) + s(6) = 0
+      // -√2Y(0, 1) + s(7) = 0
+      //   -Y(1, 1) + s(8) = 0
+      // and
+      // [s(6) s(7)] is psd
+      // [s(7) s(8)]
+      A_expected(A_row_count_old + 6, 6) = -1;
+      A_expected(A_row_count_old + 7, 7) = -sqrt2;
+      A_expected(A_row_count_old + 8, 8) = -1;
+    } else {
+      // If we use the lower triangular part of the symmetric matrix, to impose
+      // the constraint that 3 by 3 matrix X is psd, we need the constraint
+      //   -X(0, 0) + s(0) = 0
+      // -√2X(1, 0) + s(1) = 0
+      // -√2X(2, 0) + s(2) = 0
+      //   -X(1, 1) + s(3) = 0
+      // -√2X(2, 1) + s(4) = 0
+      //   -X(2, 2) + s(5) = 0
+      // and
+      // [s(0) s(1) s(2)]
+      // [s(1) s(3) s(4)]  is psd.
+      // [s(2) s(4) s(5)]
+      // Below we write
+      // A_expected(A_row_count_old + s_index, X_index) = -X_coeff.
+      A_expected(A_row_count_old + 0, 0) = -1;
+      A_expected(A_row_count_old + 1, 1) = -sqrt2;
+      A_expected(A_row_count_old + 2, 2) = -sqrt2;
+      A_expected(A_row_count_old + 3, 3) = -1;
+      A_expected(A_row_count_old + 4, 4) = -sqrt2;
+      A_expected(A_row_count_old + 5, 5) = -1;
+      // For the 2 by 2 matrix Y to be psd, we need the constraint
+      //   -Y(0, 0) + s(6) = 0
+      // -√2Y(0, 1) + s(7) = 0
+      //   -Y(1, 1) + s(8) = 0
+      // and
+      // [s(6) s(7)] is psd
+      // [s(7) s(8)]
+      A_expected(A_row_count_old + 6, 6) = -1;
+      A_expected(A_row_count_old + 7, 7) = -sqrt2;
+      A_expected(A_row_count_old + 8, 8) = -1;
+    }
+    EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected));
+    EXPECT_EQ(b.size(), A_row_count);
+    for (int i = A_row_count_old; i < A_row_count; ++i) {
+      EXPECT_EQ(b[i], 0);
+    }
+  };
+  check_psd(true);
+  check_psd(false);
+}
+
+GTEST_TEST(ParsePositiveSemidefiniteConstraints, TestLmi) {
+  // Test parsing prog.linear_matrix_inequality_constraints.
+  MathematicalProgram prog;
+  const auto x = prog.NewContinuousVariables<3>();
+  auto symmetrize_matrix = [](const Eigen::Ref<const Eigen::MatrixXd>& A) {
+    return (A + A.transpose()) / 2;
+  };
+
+  const auto lmi_constraint = prog.AddLinearMatrixInequalityConstraint(
+      {symmetrize_matrix(
+           (Eigen::Matrix3d() << 1, 2, 3, 4, 5, 6, 7, 8, 9).finished()),
+       symmetrize_matrix(
+           (Eigen::Matrix3d() << 1, 3, 5, 7, 9, 2, 4, 6, 8).finished()),
+       symmetrize_matrix(
+           (Eigen::Matrix3d() << -1, -2, 3, 4, 5, -6, -7, -8, 9).finished()),
+       Eigen::Matrix3d::Identity()},
+      x);
+
+  auto check_lmi = [&prog, &lmi_constraint](bool upper_triangular) {
+    SCOPED_TRACE(fmt::format("upper_triangular = {}", upper_triangular));
+    std::vector<Eigen::Triplet<double>> A_triplets;
+    // Assume A*x+s=b already contains `A_row_count_old` rows. We check if the
+    // new PSD constraints are appended to the existing A*x+s=b.
+    const int A_row_count_old = 2;
+    std::vector<double> b(A_row_count_old, 0);
+    int A_row_count = A_row_count_old;
+    std::vector<int> psd_cone_length;
+    ParsePositiveSemidefiniteConstraints(prog, upper_triangular, &A_triplets,
+                                         &b, &A_row_count, &psd_cone_length);
+    EXPECT_EQ(A_row_count, A_row_count_old + 3 * (3 + 1) / 2);
+    EXPECT_EQ(psd_cone_length, std::vector<int>({3}));
+    Eigen::SparseMatrix<double> A(A_row_count_old + 6, prog.num_vars());
+    A.setFromTriplets(A_triplets.begin(), A_triplets.end());
+    Eigen::MatrixXd A_expected(A_row_count_old + 6, prog.num_vars());
+    A_expected.setZero();
+    const std::vector<Eigen::MatrixXd> F = lmi_constraint.evaluator()->F();
+    const double sqrt2 = std::sqrt(2);
+    if (upper_triangular) {
+      // clang-format off
+      A_expected.bottomRows<6>() << -F[1](0, 0), -F[2](0, 0), -F[3](0, 0),
+                  -sqrt2 * F[1](0, 1), -sqrt2 * F[2](1, 0), -sqrt2 * F[3](1, 0),
+                  -F[1](1, 1), -F[2](1, 1), -F[3](1, 1),
+                  -sqrt2*F[1](0, 2), -sqrt2*F[2](0, 2), -sqrt2*F[3](0, 2),
+                  -sqrt2 * F[1](1, 2), -sqrt2 * F[2](1, 2), -sqrt2 * F[3](1, 2),
+                  -F[1](2, 2), -F[2](2, 2), -F[3](2, 2);
+      // clang-format on
+    } else {
+      // clang-format off
+      A_expected.bottomRows<6>() << -F[1](0, 0), -F[2](0, 0), -F[3](0, 0),
+                -sqrt2 * F[1](1, 0), -sqrt2 * F[2](1, 0), -sqrt2 * F[3](1, 0),
+                -sqrt2 * F[1](2, 0), -sqrt2 * F[2](2, 0), -sqrt2 * F[3](2, 0),
+                -F[1](1, 1), -F[2](1, 1), -F[3](1, 1),
+                -sqrt2 * F[1](2, 1), -sqrt2 * F[2](2, 1), -sqrt2 * F[3](2, 1),
+                -F[1](2, 2), -F[2](2, 2), -F[3](2, 2);
+      // clang-format on
+    }
+    Eigen::VectorXd b_expected(A_row_count);
+    if (upper_triangular) {
+      b_expected << 0, 0, F[0](0, 0), sqrt2 * F[0](0, 1), F[0](1, 1),
+          sqrt2 * F[0](0, 2), sqrt2 * F[0](1, 2), F[0](2, 2);
+    } else {
+      b_expected << 0, 0, F[0](0, 0), sqrt2 * F[0](1, 0), sqrt2 * F[0](2, 0),
+          F[0](1, 1), sqrt2 * F[0](2, 1), F[0](2, 2);
+    }
+    EXPECT_TRUE(CompareMatrices(A.toDense(), A_expected, 1E-12));
+    EXPECT_EQ(b.size(), A_row_count);
+    EXPECT_TRUE(CompareMatrices(Eigen::Map<Eigen::VectorXd>(b.data(), b.size()),
+                                b_expected, 1E-12));
+  };
+  check_lmi(true);
+  check_lmi(false);
 }
 }  // namespace internal
 }  // namespace solvers

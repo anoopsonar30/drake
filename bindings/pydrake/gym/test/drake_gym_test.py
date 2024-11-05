@@ -1,3 +1,4 @@
+import sys
 import unittest
 
 import gymnasium as gym
@@ -7,7 +8,7 @@ import stable_baselines3.common.env_checker
 
 class DrakeGymTest(unittest.TestCase):
     """
-    Test that an DrakeGymEnv satisfies the OpenAI Gym Env specifications as to
+    Test that a DrakeGymEnv satisfies the OpenAI Gym Env specifications as to
     * API https://www.gymlibrary.ml/content/api/#standard-methods, and
     * semantics https://www.gymlibrary.ml/content/environment_creation/
 
@@ -25,9 +26,13 @@ class DrakeGymTest(unittest.TestCase):
     def make_env(self):
         return gym.make("DrakeCartPole-v0")
 
+    # TODO(#21577) Importing Gym on macOS Homebrew goes up in flames.
+    @unittest.skipIf(sys.platform == "darwin", "Disabled macOS")
     def test_make_env(self):
         self.make_env()
 
+    # TODO(#21577) Importing Gym on macOS Homebrew goes up in flames.
+    @unittest.skipIf(sys.platform == "darwin", "Disabled macOS")
     def test_sb3_check_env(self):
         """Run stable-baselines's built-in test suite for our env."""
         dut = self.make_env()
@@ -40,6 +45,8 @@ class DrakeGymTest(unittest.TestCase):
     # supported versions of `gymnasium` and `stable_baselines3`, stable
     # baselines vector envs do not pass stable baselines' `check_env` tests.
 
+    # TODO(#21577) Importing Gym on macOS Homebrew goes up in flames.
+    @unittest.skipIf(sys.platform == "darwin", "Disabled macOS")
     def test_reset(self):
         # reset(int) sets a deterministic seed.
         dut = self.make_env()
@@ -61,6 +68,8 @@ class DrakeGymTest(unittest.TestCase):
         self.assertIsInstance(opts, dict)
         self.assertTrue(dut.observation_space.contains(observation))
 
+    # TODO(#21577) Importing Gym on macOS Homebrew goes up in flames.
+    @unittest.skipIf(sys.platform == "darwin", "Disabled macOS")
     def test_step(self):
         dut = self.make_env()
         dut.reset()

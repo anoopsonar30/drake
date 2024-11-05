@@ -62,6 +62,28 @@ void SolverOptions::SetOption(CommonSolverOption key, OptionValue value) {
       common_solver_options_[key] = std::move(value);
       return;
     }
+    case CommonSolverOption::kStandaloneReproductionFileName: {
+      if (!std::holds_alternative<std::string>(value)) {
+        throw std::runtime_error(fmt::format(
+            "SolverOptions::SetOption support {} only with std::string value.",
+            key));
+      }
+      common_solver_options_[key] = std::move(value);
+      return;
+    }
+    case CommonSolverOption::kMaxThreads: {
+      if (!std::holds_alternative<int>(value)) {
+        throw std::runtime_error(fmt::format(
+            "SolverOptions::SetOption support {} only with int value.", key));
+      }
+      const int int_value = std::get<int>(value);
+      if (int_value <= 0) {
+        throw std::runtime_error(
+            fmt::format("kMaxThreads must be > 0, got {}", int_value));
+      }
+      common_solver_options_[key] = std::move(value);
+      return;
+    }
   }
   DRAKE_UNREACHABLE();
 }
@@ -112,6 +134,26 @@ bool SolverOptions::get_print_to_console() const {
     result = static_cast<bool>(value);
   }
   return result;
+}
+
+std::string SolverOptions::get_standalone_reproduction_file_name() const {
+  // N.B. SetOption sanity checks the value; we don't need to re-check here.
+  std::string result;
+  auto iter = common_solver_options_.find(
+      CommonSolverOption::kStandaloneReproductionFileName);
+  if (iter != common_solver_options_.end()) {
+    result = std::get<std::string>(iter->second);
+  }
+  return result;
+}
+
+std::optional<int> SolverOptions::get_max_threads() const {
+  // N.B. SetOption sanity checks the value; we don't need to re-check here.
+  auto iter = common_solver_options_.find(CommonSolverOption::kMaxThreads);
+  if (iter != common_solver_options_.end()) {
+    return std::get<int>(iter->second);
+  }
+  return std::nullopt;
 }
 
 std::unordered_set<SolverId> SolverOptions::GetSolverIds() const {
@@ -226,7 +268,7 @@ void CheckOptionKeysForSolverHelper(
     const std::unordered_set<std::string>& allowable_keys,
     const std::string& solver_name) {
   for (const auto& key_val : key_vals) {
-    if (allowable_keys.count(key_val.first) == 0) {
+    if (!allowable_keys.contains(key_val.first)) {
       throw std::invalid_argument(key_val.first +
                                   " is not allowed in the SolverOptions for " +
                                   solver_name + ".");

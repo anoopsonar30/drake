@@ -3,7 +3,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "drake/common/find_resource.h"
 #include "drake/multibody/parsing/parser.h"
 
 namespace drake {
@@ -24,34 +23,31 @@ class GeometryNamesTest : public ::testing::Test {
  public:
   void SetUp() override {
     DiagramBuilder<double> builder;
-    std::tie(plant_, scene_graph_) = AddMultibodyPlantSceneGraph(
-        &builder, 0.001);
+    std::tie(plant_, scene_graph_) =
+        AddMultibodyPlantSceneGraph(&builder, 0.001);
     Parser parser(plant_);
 
     // A single model, single body, single geometry.
-    const std::string box = FindResourceOrThrow(
-        "drake/multibody/models/box.urdf");
-    parser.AddModels(box);
+    const std::string box_url = "package://drake/multibody/models/box.urdf";
+    parser.AddModelsFromUrl(box_url);
 
     // A single model, single body, multiple geometries.
-    const std::string bin = FindResourceOrThrow(
-        "drake/examples/manipulation_station/models/bin.sdf");
-    parser.AddModels(bin);
+    const std::string bin_url =
+        "package://drake_models/manipulation_station/bin.sdf";
+    parser.AddModelsFromUrl(bin_url);
 
     // Two identical models (each one has a single body, single geometry).
-    const std::string sphere = FindResourceOrThrow(
-        "drake/examples/manipulation_station/models/sphere.sdf");
-    Parser(plant_, "sphere1").AddModels(sphere);
-    Parser(plant_, "sphere2").AddModels(sphere);
+    const std::string sphere =
+        "package://drake_models/manipulation_station/sphere.sdf";
+    Parser(plant_, "sphere1").AddModelsFromUrl(sphere);
+    Parser(plant_, "sphere2").AddModelsFromUrl(sphere);
 
     // Build everything.
     plant_->Finalize();
     diagram_ = builder.Build();
   }
 
-  const MultibodyPlant<double>& plant() const {
-    return *plant_;
-  }
+  const MultibodyPlant<double>& plant() const { return *plant_; }
 
   const SceneGraphInspector<double>& inspector() const {
     return scene_graph_->model_inspector();
@@ -60,7 +56,7 @@ class GeometryNamesTest : public ::testing::Test {
   const std::vector<GeometryId>& GetGeometryIds(
       std::string_view body_name,
       std::optional<std::string_view> model_name = {}) const {
-    const Body<double>* body{};
+    const RigidBody<double>* body{};
     if (model_name.has_value()) {
       ModelInstanceIndex index = plant_->GetModelInstanceByName(*model_name);
       body = &(plant_->GetBodyByName(body_name, index));

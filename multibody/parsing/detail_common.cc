@@ -63,6 +63,9 @@ geometry::ProximityProperties ParseProximityProperties(
   using geometry::internal::kComplianceType;
   using geometry::internal::kElastic;
   using geometry::internal::kHydroGroup;
+  using geometry::internal::kMargin;
+  using geometry::internal::kMaterialGroup;
+  using geometry::internal::kRelaxationTime;
   using geometry::internal::kRezHint;
 
   // Both being true is disallowed -- so assert is_rigid NAND is_compliant.
@@ -75,58 +78,75 @@ geometry::ProximityProperties ParseProximityProperties(
     properties.AddProperty(kHydroGroup, kComplianceType, HT::kSoft);
   }
 
-  std::optional<double> rez_hint = read_double("drake:mesh_resolution_hint");
-  if (rez_hint) {
-    properties.AddProperty(kHydroGroup, kRezHint, *rez_hint);
-  }
-
-  std::optional<double> hydroelastic_modulus =
-      read_double("drake:hydroelastic_modulus");
-  if (hydroelastic_modulus) {
-    if (is_rigid) {
-      diagnostic.Warning(fmt::format(
-          "Rigid geometries defined with the tag drake:rigid_hydroelastic"
-          " should not contain the tag drake:hydroelastic_modulus. The"
-          " specified value ({}) will be ignored.",
-          *hydroelastic_modulus));
-    } else {
-      properties.AddProperty(kHydroGroup, kElastic, *hydroelastic_modulus);
+  {
+    std::optional<double> rez_hint = read_double("drake:mesh_resolution_hint");
+    if (rez_hint) {
+      properties.AddProperty(kHydroGroup, kRezHint, *rez_hint);
     }
   }
 
-  std::optional<double> dissipation =
-      read_double("drake:hunt_crossley_dissipation");
-
-  std::optional<double> relaxation_time =
-      read_double("drake:relaxation_time");
-
-  std::optional<double> stiffness =
-      read_double("drake:point_contact_stiffness");
-
-  std::optional<double> mu_dynamic = read_double("drake:mu_dynamic");
-  std::optional<double> mu_static = read_double("drake:mu_static");
-  std::optional<CoulombFriction<double>> friction;
-  // Note: we rely on the constructor of CoulombFriction to detect negative
-  // values and bad relationship between static and dynamic coefficients.
-  if (mu_dynamic && mu_static) {
-    friction = CoulombFriction<double>(*mu_static, *mu_dynamic);
-  } else if (mu_dynamic) {
-    friction = CoulombFriction<double>(*mu_dynamic, *mu_dynamic);
-  } else if (mu_static) {
-    friction = CoulombFriction<double>(*mu_static, *mu_static);
+  {
+    std::optional<double> hydroelastic_modulus =
+        read_double("drake:hydroelastic_modulus");
+    if (hydroelastic_modulus) {
+      if (is_rigid) {
+        diagnostic.Warning(fmt::format(
+            "Rigid geometries defined with the tag drake:rigid_hydroelastic"
+            " should not contain the tag drake:hydroelastic_modulus. The"
+            " specified value ({}) will be ignored.",
+            *hydroelastic_modulus));
+      } else {
+        properties.AddProperty(kHydroGroup, kElastic, *hydroelastic_modulus);
+      }
+    }
   }
 
-  geometry::AddContactMaterial(dissipation, stiffness, friction, &properties);
-
-  if (relaxation_time.has_value()) {
-    if (*relaxation_time < 0) {
-      throw std::logic_error(
-          fmt::format("The dissipation time scale can't be negative; given {}",
-                      *dissipation));
+  {
+    std::optional<double> dissipation =
+        read_double("drake:hunt_crossley_dissipation");
+    std::optional<double> stiffness =
+        read_double("drake:point_contact_stiffness");
+    std::optional<double> mu_dynamic = read_double("drake:mu_dynamic");
+    std::optional<double> mu_static = read_double("drake:mu_static");
+    std::optional<CoulombFriction<double>> friction;
+    // Note: we rely on the constructor of CoulombFriction to detect negative
+    // values and bad relationship between static and dynamic coefficients.
+    if (mu_dynamic && mu_static) {
+      friction = CoulombFriction<double>(*mu_static, *mu_dynamic);
+    } else if (mu_dynamic) {
+      friction = CoulombFriction<double>(*mu_dynamic, *mu_dynamic);
+    } else if (mu_static) {
+      friction = CoulombFriction<double>(*mu_static, *mu_static);
     }
-    properties.AddProperty(geometry::internal::kMaterialGroup,
-                           geometry::internal::kRelaxationTime,
-                           *relaxation_time);
+
+    geometry::AddContactMaterial(dissipation, stiffness, friction, &properties);
+  }
+
+  {
+    std::optional<double> relaxation_time =
+        read_double("drake:relaxation_time");
+    if (relaxation_time.has_value()) {
+      if (*relaxation_time < 0) {
+        diagnostic.Error(
+            fmt::format("The relaxation time can't be negative; given {}",
+                        *relaxation_time));
+      } else {
+        properties.AddProperty(kMaterialGroup, kRelaxationTime,
+                               *relaxation_time);
+      }
+    }
+  }
+
+  {
+    std::optional<double> margin = read_double("drake:hydroelastic_margin");
+    if (margin.has_value()) {
+      if (*margin < 0) {
+        diagnostic.Error(fmt::format(
+            "The hydroelastic margin can't be negative; given {}", *margin));
+      } else {
+        properties.AddProperty(kHydroGroup, kMargin, *margin);
+      }
+    }
   }
 
   return properties;
@@ -157,11 +177,11 @@ const LinearBushingRollPitchYaw<double>* ParseLinearBushingRollPitchYaw(
 
 std::optional<MultibodyConstraintId> ParseBallConstraint(
     const std::function<Eigen::Vector3d(const char*)>& read_vector,
-    const std::function<const Body<double>*(const char*)>& read_body,
+    const std::function<const RigidBody<double>*(const char*)>& read_body,
     MultibodyPlant<double>* plant) {
-  const Body<double>* body_A = read_body("drake:ball_constraint_body_A");
+  const RigidBody<double>* body_A = read_body("drake:ball_constraint_body_A");
   if (!body_A) { return {}; }
-  const Body<double>* body_B = read_body("drake:ball_constraint_body_B");
+  const RigidBody<double>* body_B = read_body("drake:ball_constraint_body_B");
   if (!body_B) { return {}; }
 
   const Eigen::Vector3d p_AP = read_vector("drake:ball_constraint_p_AP");
@@ -170,6 +190,7 @@ std::optional<MultibodyConstraintId> ParseBallConstraint(
   return plant->AddBallConstraint(*body_A, p_AP, *body_B, p_BQ);
 }
 
+namespace {
 // See ParseCollisionFilterGroupCommon at header for documentation
 void CollectCollisionFilterGroup(
     const DiagnosticPolicy& diagnostic,
@@ -207,7 +228,19 @@ void CollectCollisionFilterGroup(
 
     bodies.insert(body_name);
   }
-  resolver->AddGroup(diagnostic, group_name, bodies, model_instance);
+  std::set<std::string> member_groups;
+  for (auto member_node = next_child_element(group_node, "drake:member_group");
+       std::holds_alternative<sdf::ElementPtr>(member_node)
+           ? std::get<sdf::ElementPtr>(member_node) != nullptr
+           : std::get<tinyxml2::XMLElement*>(member_node) != nullptr;
+       member_node = next_sibling_element(member_node, "drake:member_group")) {
+    const std::string member_group_name = read_tag_string(member_node, "name");
+    if (member_group_name.empty()) { continue; }
+
+    member_groups.insert(member_group_name);
+  }
+  resolver->AddGroup(diagnostic, group_name, bodies, member_groups,
+                     model_instance);
 
   for (auto ignore_node = next_child_element(
            group_node, "drake:ignored_collision_filter_group");
@@ -225,6 +258,7 @@ void CollectCollisionFilterGroup(
     resolver->AddPair(diagnostic, group_name, target_name, model_instance);
   }
 }
+}  // namespace
 
 void ParseCollisionFilterGroupCommon(
     const DiagnosticPolicy& diagnostic,

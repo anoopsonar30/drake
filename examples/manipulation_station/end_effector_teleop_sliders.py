@@ -21,8 +21,7 @@ from pydrake.systems.lcm import LcmPublisherSystem
 from pydrake.systems.primitives import FirstOrderLowPassFilter, VectorLogSink
 from pydrake.systems.sensors import ImageToLcmImageArrayT, PixelType
 
-from drake.examples.manipulation_station.schunk_wsg_buttons import \
-    SchunkWsgButtons
+from examples.manipulation_station.schunk_wsg_buttons import SchunkWsgButtons
 
 from drake import lcmt_image_array
 
@@ -215,8 +214,7 @@ def main():
             station.SetupManipulationClassStation(
                 schunk_model=schunk_model)
             station.AddManipulandFromFile(
-                "drake/examples/manipulation_station/models/"
-                + "061_foam_brick.sdf",
+                "drake_models/manipulation_station/061_foam_brick.sdf",
                 RigidTransform(RotationMatrix.Identity(), [0.6, 0, 0]))
         elif args.setup == 'clutter_clearing':
             station.SetupClutterClearingStation(
@@ -228,8 +226,7 @@ def main():
             station.SetupPlanarIiwaStation(
                 schunk_model=schunk_model)
             station.AddManipulandFromFile(
-                "drake/examples/manipulation_station/models/"
-                + "061_foam_brick.sdf",
+                "drake_models/manipulation_station/061_foam_brick.sdf",
                 RigidTransform(RotationMatrix.Identity(), [0.6, 0, 0]))
 
         station.Finalize()
